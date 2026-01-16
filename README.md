@@ -1,96 +1,175 @@
 # mOSdat
 
-**Multi-OS Desktop App Testing**
+### Multi-OS Desktop App Testing Framework
 
-[![Proxmox](https://img.shields.io/badge/Proxmox-VE%208.x-orange.svg)](https://www.proxmox.com/)
-[![Rocket.Chat](https://img.shields.io/badge/Rocket.Chat-Desktop-red.svg)](https://github.com/RocketChat/Rocket.Chat.Electron)
-
-Automated testing framework that spins up real VMs, deploys your desktop app, and validates it actually works - across multiple operating systems, display servers, and GPU configurations.
+> **Test desktop apps like users actually use them.**  
+> Real GPUs. Real display servers. Real operating systems. Automated.
 
 ---
 
-## Why?
-
-> "Works on my machine" isn't good enough.
-
-Desktop apps behave differently on Fedora vs Ubuntu, Wayland vs X11, with GPU vs without. Manual testing is slow and inconsistent. **mOSdat automates it.**
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Linux-blue?style=for-the-badge&logo=linux" alt="Linux">
+  <img src="https://img.shields.io/badge/Proxmox-VE%208.x-orange?style=for-the-badge&logo=proxmox" alt="Proxmox">
+  <img src="https://img.shields.io/badge/GPU-NVIDIA%20VFIO-76B900?style=for-the-badge&logo=nvidia" alt="NVIDIA">
+</p>
 
 ---
 
-## What It Does
+## The Problem
+
+You've built a desktop app. It works on your machine. But does it work on:
+
+- Fedora with Wayland?
+- Ubuntu with X11?
+- A system with a broken display server?
+- When the GPU driver behaves differently?
+- When Wayland claims to exist but doesn't really?
+
+**Manual testing across all these scenarios takes weeks.**  
+Setting up N machines with N configurations is a nightmare.  
+And containers? They don't have real GPUs or real display servers.
+
+---
+
+## The Solution
 
 ```
-Build app → Deploy to VM → Run test scenarios → Get results
-     ↓           ↓              ↓                  ↓
-  From Git    Proxmox API    Wayland/X11      Pass/Fail matrix
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              mOSdat                                     │
+│                                                                         │
+│   ┌─────────┐    ┌──────────────┐    ┌─────────────────────────────┐   │
+│   │  Your   │───▶│   Proxmox    │───▶│         Test VMs            │   │
+│   │  Code   │    │  Orchestrator│    │  ┌───────┐  ┌───────┐       │   │
+│   └─────────┘    └──────────────┘    │  │Fedora │  │Ubuntu │  ...  │   │
+│                         │            │  │+GPU   │  │+GPU   │       │   │
+│                         │            │  │+Wayland│ │+X11   │       │   │
+│                         ▼            │  └───────┘  └───────┘       │   │
+│                  ┌──────────────┐    └─────────────────────────────┘   │
+│                  │   Results    │                   │                  │
+│                  │    Report    │◀──────────────────┘                  │
+│                  └──────────────┘                                      │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**One command. Multiple OSes. Real results.**
+**One command. Multiple VMs. Real hardware. Automated results.**
 
-```bash
-./full-test.sh
+---
+
+## What Makes This Different
+
+### Real GPU Passthrough
+
+Not emulated. Not mocked. **Actual NVIDIA GPUs** passed through to VMs via VFIO.
+
+Your tests run on hardware that mirrors what your users actually have.
+
+### True Display Server Testing
+
+- **Native Wayland** — Full compositor, real protocols
+- **X11/XWayland** — The classic, still everywhere
+- **Broken Wayland** — Fake sockets, missing vars, the chaos users create
+
+### Zero Human Intervention
+
 ```
+git ref → build app → VM boots → app deploys → tests run → results collected
+```
+
+No clicking through installers. No manual verification. The entire pipeline is orchestrated through Proxmox's API.
+
+### Reproducible Environments
+
+Same VM. Same test sequence. Same results.  
+No more "it worked yesterday" or "works on my machine."
 
 ---
 
 ## Real Results
 
-Testing [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron) Wayland fix:
+We used mOSdat to validate a Wayland compatibility fix for [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron).
 
 | Scenario | Before Fix | After Fix |
 |:---------|:----------:|:---------:|
 | Real Wayland session | PASS | PASS |
 | Fake Wayland socket | SEGFAULT | **PASS** |
-| Missing display var | SEGFAULT | **PASS** |
+| Missing display variable | SEGFAULT | **PASS** |
 | X11 fallback | SEGFAULT | **PASS** |
 
-The fix works. We proved it. Automatically.
+**Three crash scenarios caught and verified fixed** — automatically, in minutes instead of days.
 
----
-
-## Features
-
-- **VM Orchestration** - Proxmox API controls VMs programmatically
-- **GPU Passthrough** - Test with real NVIDIA acceleration via VFIO
-- **Display Server Matrix** - Wayland, X11, headless scenarios
-- **Automated Pipeline** - Build from any git ref, deploy, test, report
-
----
-
-## Tested Platforms
-
-- Fedora 42 (GNOME/Wayland)
-- Ubuntu 22.04 (GNOME)
+See [Case Studies](docs/CASE-STUDIES.md) for details.
 
 ---
 
 ## Quick Start
 
 ```bash
+# Clone
+git clone https://github.com/jeanfbrito/mOSdat.git
+cd mOSdat
+
 # Configure
 cp shared/config.example.sh shared/config.local.sh
+# Edit with your Proxmox credentials
 
-# Run
+# Run full test suite on Fedora
 cd os/fedora-42
 ./full-test.sh
+
+# Or run individual steps
+./build.sh --ref main           # Build from git ref
+./deploy.sh                     # Deploy to VM
+./test.sh --test wayland-fake   # Run specific test
+./gpu-control.sh --status       # Check GPU passthrough
 ```
+
+---
+
+## Tested Platforms
+
+- Fedora 42 (GNOME/Wayland)
+- Ubuntu 22.04 LTS (GNOME)
 
 ---
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) - How it works
-- [Hardware](docs/HARDWARE.md) - Test environment specs
-- [Case Studies](docs/CASE-STUDIES.md) - Validated tests
-- [Proxmox Setup](docs/PROXMOX-SETUP.md) - VFIO/GPU passthrough
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
+| Document | Description |
+|:---------|:------------|
+| [Architecture](docs/ARCHITECTURE.md) | How the pieces fit together |
+| [Hardware](docs/HARDWARE.md) | Test environment specs |
+| [Proxmox Setup](docs/PROXMOX-SETUP.md) | VFIO and GPU passthrough |
+| [Case Studies](docs/CASE-STUDIES.md) | Real-world testing examples |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | When things go wrong |
+
+---
+
+## Why This Matters
+
+**Desktop app testing is stuck in 2010.**
+
+Web apps have Playwright, Cypress, BrowserStack. They run in CI, in containers, everywhere.
+
+Desktop apps? You're still spinning up VMs manually, clicking through installers, and hoping someone remembers to test on Fedora.
+
+**mOSdat brings desktop app testing into the modern era.**
+
+- Real hardware testing
+- Reproducible environments
+- Automated pipelines
+- Actual results you can trust
 
 ---
 
 ## Built With
 
-- [opencode](https://github.com/opencode-ai/opencode) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)
+- **[Proxmox VE](https://www.proxmox.com/)** — VM orchestration
+- **VFIO/IOMMU** — GPU passthrough
+- **[opencode](https://github.com/opencode-ai/opencode) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)** — AI-assisted development
 
 ---
 
-**Current target**: [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron)
+<p align="center">
+  <strong>Stop testing desktop apps like it's 2010.</strong><br>
+  <em>Automate everything. Verify on real hardware.</em>
+</p>
