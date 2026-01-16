@@ -120,21 +120,6 @@ See [Case Studies](docs/CASE-STUDIES.md) for details.
 
 ---
 
-## Why This Matters
-
-Web apps have Playwright, Cypress, BrowserStack. They run in CI, in containers, everywhere.
-
-Desktop apps? You're still spinning up VMs manually, clicking through installers, and hoping someone remembers to test on Fedora.
-
-mOSdat changes that:
-
-- Real hardware testing
-- Reproducible environments
-- Automated pipelines
-- Actual results you can trust
-
----
-
 ## Built With
 
 - **[Proxmox VE](https://www.proxmox.com/)** — VM orchestration
