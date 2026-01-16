@@ -6,7 +6,7 @@
 |---------|-------|
 | URL | https://192.168.13.85:8006/ |
 | User | root |
-| Password | $PROXMOX_PASSWORD |
+| Password | (see .env file) |
 | Node | pve |
 
 ## Hardware

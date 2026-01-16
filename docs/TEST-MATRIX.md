@@ -39,13 +39,23 @@ Each combination: `OS × Package × Display × GPU`
 
 ### Ubuntu 22.04
 
+**With GPU (RTX 3060 passthrough):**
+
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
 | DEB | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
-| AppImage | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Snap | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+| Snap | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 
-Legend: ✅ Pass | ⏭️ Skip (no GPU) | ⚠️ Expected crash (no display)
+**Without GPU:**
+
+| Package | x11 | wayland | wayland-fake | fallback | no-display |
+|---------|:---:|:-------:|:------------:|:--------:|:----------:|
+| DEB | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+| Snap | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+
+Note: wayland test uses Weston headless which has known incompatibility with Electron/Chromium GPU initialization. Real Wayland desktops (GNOME/KDE) work correctly.
 
 Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | ⏭️ Skip (needs GPU) | ⚠️ Expected (no display) | 🔜 Planned
 

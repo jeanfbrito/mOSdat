@@ -18,8 +18,9 @@ setup_xvfb() {
 
 setup_weston() {
     local socket="${1:-wayland-test}"
-    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+    chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
     weston --backend=headless-backend.so --socket="$socket" --width=1920 --height=1080 &>/dev/null &
     sleep 3
 }
