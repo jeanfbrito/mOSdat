@@ -1,69 +1,58 @@
-# Rocket.Chat Electron Linux Test Framework
+# mOSdat - Multi-OS Desktop App Testing
 
-[![Platform](https://img.shields.io/badge/Platform-Linux-blue.svg)](https://www.linux.org/)
 [![Proxmox](https://img.shields.io/badge/Proxmox-VE%208.x-orange.svg)](https://www.proxmox.com/)
-[![Rocket.Chat](https://img.shields.io/badge/Rocket.Chat-Electron-red.svg)](https://github.com/RocketChat/Rocket.Chat.Electron)
+[![Rocket.Chat](https://img.shields.io/badge/Rocket.Chat-Desktop-red.svg)](https://github.com/RocketChat/Rocket.Chat.Electron)
 
-A modular testing infrastructure for validating [Rocket.Chat Electron](https://github.com/RocketChat/Rocket.Chat.Electron) builds across multiple Linux distributions, with optional NVIDIA GPU passthrough.
+A Proxmox-based testing framework that validates desktop applications across multiple operating systems.
 
----
-
-## Purpose
-
-Test the **Wayland/X11 crash fix** ([PR #3171](https://github.com/RocketChat/Rocket.Chat.Electron/pull/3171)) that prevents `SEGFAULT` when `WAYLAND_DISPLAY` points to a non-existent socket.
-
-**The Problem**: Electron apps crash with SIGSEGV (exit 139) when Wayland is misconfigured.
-
-**The Solution**: A wrapper script detects invalid Wayland and forces X11 fallback.
+**Spin up VMs. Deploy your app. Verify it works.**
 
 ---
 
-## Test Results (2026-01-16)
+## Current Target: Rocket.Chat Desktop
 
-| Test Scenario | Old v4.11.0 | New v4.11.1 |
-|:--------------|:-----------:|:-----------:|
-| Real Wayland session | ✅ PASS | ✅ PASS |
-| Fake Wayland socket | ❌ SEGFAULT | ✅ PASS |
-| Missing WAYLAND_DISPLAY | ❌ SEGFAULT | ✅ PASS |
-| X11 session | ❌ SEGFAULT | ✅ PASS |
+This framework is currently configured to test [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron) (Electron-based) across Linux distributions.
 
-See [results/](results/) for detailed reports.
+---
+
+## Features
+
+- **VM Orchestration** - Control Proxmox VMs via API (start, stop, status)
+- **GPU Passthrough** - NVIDIA VFIO passthrough for GPU-accelerated testing
+- **Display Server Testing** - Wayland, X11, and headless scenarios
+- **Automated Pipeline** - Build, deploy, and test in one command
+
+---
+
+## Supported Platforms
+
+| OS | Status | Package Format | VM ID |
+|----|:------:|----------------|:-----:|
+| Fedora 42 | Tested | RPM | 100 |
+| Ubuntu 22.04 | Tested | DEB | 101 |
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Configure
+# 1. Configure credentials
 cp shared/config.example.sh shared/config.local.sh
-# Edit with your credentials
+# Edit with your Proxmox credentials
 
-# 2. Run tests
+# 2. Run full test suite
 cd os/fedora-42
 ./full-test.sh
 ```
 
 ---
 
-## Supported Platforms
-
-| OS | Status | Package | VM ID |
-|----|:------:|---------|:-----:|
-| Fedora 42 | ✅ | RPM | 100 |
-| Ubuntu 22.04 | ✅ | DEB | 101 |
-| Ubuntu 24.04 | 📋 | DEB | 102 |
-| Arch Linux | 📋 | AppImage | 103 |
-| Windows 10 | 📋 | NSIS | 104 |
-| Windows 11 | 📋 | NSIS | 105 |
-
----
-
 ## Directory Structure
 
 ```
-test-framework/
-├── shared/           # Config and API helpers
-├── os/<distro>/      # OS-specific scripts
+mOSdat/
+├── shared/           # Config and Proxmox API helpers
+├── os/<distro>/      # OS-specific scripts (build, deploy, test)
 ├── results/          # Test reports
 └── docs/             # Documentation
 ```
@@ -74,16 +63,17 @@ test-framework/
 
 | Document | Description |
 |----------|-------------|
-| [HARDWARE.md](docs/HARDWARE.md) | Machine specs (host, Proxmox, VMs) |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical design |
-| [PROXMOX-SETUP.md](docs/PROXMOX-SETUP.md) | VFIO/GPU setup |
+| [HARDWARE.md](docs/HARDWARE.md) | Machine specs (host, Proxmox, VMs) |
+| [PROXMOX-SETUP.md](docs/PROXMOX-SETUP.md) | VFIO/GPU passthrough setup |
+| [CASE-STUDIES.md](docs/CASE-STUDIES.md) | Validated tests and fixes |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues |
 
 ---
 
 ## Tools Used
 
-This framework was developed with assistance from:
+Developed with:
 
 - **[opencode](https://github.com/opencode-ai/opencode)** - AI-powered coding assistant CLI
 - **[oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)** - Enhanced agent orchestration plugin
@@ -92,6 +82,4 @@ This framework was developed with assistance from:
 
 ## Related
 
-- [Rocket.Chat Electron](https://github.com/RocketChat/Rocket.Chat.Electron)
-- [PR #3171](https://github.com/RocketChat/Rocket.Chat.Electron/pull/3171) - The fix
-- [Issue #3154](https://github.com/RocketChat/Rocket.Chat.Electron/issues/3154) - Original bug
+- [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron)
