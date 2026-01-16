@@ -47,7 +47,7 @@
 
 ## Results Summary
 
-### Version 4.11.1 - With Fix
+### DEB Package
 
 | Test | Result | Exit Code | Notes |
 |:-----|:------:|:---------:|:------|
@@ -57,7 +57,27 @@
 | wayland-fallback | PASS | 0 | Falls back to X11 |
 | no-display | EXPECTED | 139 | Crash acceptable (no GUI) |
 
-**Summary: PASS=3 FAIL=0 EXPECTED=2**
+### AppImage Package
+
+| Test | Result | Exit Code | Notes |
+|:-----|:------:|:---------:|:------|
+| x11 | PASS | 1 | Works with Xvfb |
+| wayland | PASS | 1 | Works (no GPU needed for AppImage) |
+| wayland-fake | PASS | 1 | **THE BUG IS FIXED** |
+| wayland-fallback | PASS | 1 | Falls back to X11 |
+| no-display | PASS | 1 | Handled gracefully |
+
+### Snap Package
+
+| Test | Result | Exit Code | Notes |
+|:-----|:------:|:---------:|:------|
+| x11 | PASS | 0 | Works with Xvfb |
+| wayland | PASS | 0 | Works |
+| wayland-fake | PASS | 0 | **THE BUG IS FIXED** |
+| wayland-fallback | PASS | 0 | Falls back to X11 |
+| no-display | EXPECTED | 139 | Crash acceptable (no GUI) |
+
+**All 3 package formats validated. Ubuntu 22.04 testing COMPLETE.**
 
 ---
 

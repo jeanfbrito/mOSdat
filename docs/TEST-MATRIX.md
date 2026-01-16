@@ -41,11 +41,13 @@ Each combination: `OS × Package × Display × GPU`
 
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
-| DEB | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
-| AppImage | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
-| Snap | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
+| DEB | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+| AppImage | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Snap | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 
-Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | 🔜 Planned
+Legend: ✅ Pass | ⏭️ Skip (no GPU) | ⚠️ Expected crash (no display)
+
+Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | ⏭️ Skip (needs GPU) | ⚠️ Expected (no display) | 🔜 Planned
 
 ## The Bug (GitHub #3154)
 

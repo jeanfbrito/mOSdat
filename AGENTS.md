@@ -4,6 +4,21 @@
 
 Test framework for Rocket.Chat Electron Linux builds, specifically the Wayland/X11 crash fix (PR #3171).
 
+## Completion Criteria (IMPORTANT)
+
+**An OS is considered tested when ALL package formats listed in [TEST-MATRIX.md](docs/TEST-MATRIX.md) have been validated.**
+
+| OS | Required Packages |
+|----|-------------------|
+| Ubuntu 22.04 | DEB, AppImage, Snap |
+| Ubuntu 24.04 | DEB, AppImage, Snap |
+| Fedora 42 | RPM, AppImage |
+| Arch Linux | AppImage |
+
+Each package format must pass all display scenario tests (x11, wayland-fake, wayland-fallback) before the OS is marked complete.
+
+**DO NOT mark an OS as "done" until all its packages are tested.**
+
 ## What It Does
 
 1. Builds Rocket.Chat Electron from any git ref
