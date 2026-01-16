@@ -101,30 +101,6 @@ See [Case Studies](docs/CASE-STUDIES.md) for details.
 
 ---
 
-## Quick Start
-
-```bash
-# Clone
-git clone https://github.com/jeanfbrito/mOSdat.git
-cd mOSdat
-
-# Configure
-cp shared/config.example.sh shared/config.local.sh
-# Edit with your Proxmox credentials
-
-# Run full test suite on Fedora
-cd os/fedora-42
-./full-test.sh
-
-# Or run individual steps
-./build.sh --ref main           # Build from git ref
-./deploy.sh                     # Deploy to VM
-./test.sh --test wayland-fake   # Run specific test
-./gpu-control.sh --status       # Check GPU passthrough
-```
-
----
-
 ## Tested Platforms
 
 - Fedora 42 (GNOME/Wayland)
