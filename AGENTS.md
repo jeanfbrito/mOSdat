@@ -59,6 +59,16 @@ See [docs/HARDWARE.md](docs/HARDWARE.md) for full specs.
 | `wayland-nodisp` | Missing WAYLAND_DISPLAY |
 | `x11` | X11 session |
 
+## VM Setup (Required Before Testing)
+
+Before testing a VM, ensure:
+
+1. **SSH key access**: `ssh-copy-id jean@<VM_IP>` (password: see .env)
+2. **Passwordless sudo**: `echo "jean ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/jean`
+3. **Test dependencies**: `Xvfb`, `weston` installed
+   - Fedora: `sudo dnf install -y xorg-x11-server-Xvfb weston`
+   - Ubuntu: `sudo apt install -y xvfb weston`
+
 ## Adding New OS
 
 1. Copy existing OS folder

@@ -32,10 +32,21 @@ Each combination: `OS × Package × Display × GPU`
 
 ### Fedora 42
 
+**With GPU (RTX 3060 passthrough):**
+
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
-| RPM | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
-| AppImage | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
+| RPM | ✅ | ✅ | ✅ | ✅ | ✅ |
+| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+
+**Without GPU:**
+
+| Package | x11 | wayland | wayland-fake | fallback | no-display |
+|---------|:---:|:-------:|:------------:|:--------:|:----------:|
+| RPM | ✅ | ✅ | ✅ | ✅ | ✅ |
+| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+
+Note: RPM tested with native GNOME Wayland. AppImage tested with Weston headless (has limitations).
 
 ### Ubuntu 22.04
 
