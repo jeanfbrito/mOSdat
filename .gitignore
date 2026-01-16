@@ -1,0 +1,37 @@
+# Build artifacts
+*.rpm
+*.deb
+*.AppImage
+*.exe
+*.msi
+*.dmg
+*.snap
+*.tar.gz
+
+# Logs
+*.log
+logs/
+
+# Sensitive files
+.env
+.env.local
+config.local.sh
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Temporary
+*.tmp
+*.temp
+/tmp/
