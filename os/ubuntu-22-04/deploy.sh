@@ -13,6 +13,6 @@ PACKAGE_NAME=$(basename "$PACKAGE_PATH")
 echo "Deploying $PACKAGE_NAME to Ubuntu 22.04 ($VM_IP)"
 
 scp -o StrictHostKeyChecking=no "$PACKAGE_PATH" "${VM_USER}@${VM_IP}:/tmp/"
-ssh -o StrictHostKeyChecking=no "${VM_USER}@${VM_IP}" "sudo apt install -y /tmp/${PACKAGE_NAME}"
+ssh -o StrictHostKeyChecking=no "${VM_USER}@${VM_IP}" "sudo apt install -y --allow-downgrades /tmp/${PACKAGE_NAME}"
 
 echo "Deployed: $PACKAGE_NAME"
