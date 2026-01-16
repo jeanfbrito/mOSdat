@@ -2,10 +2,7 @@
 
 ### Multi-OS Desktop App Testing Framework
 
-> **Test desktop apps like users actually use them.**  
-> Real GPUs. Real display servers. Real operating systems. Automated.
-
----
+Automated testing infrastructure using Proxmox VMs with GPU passthrough to validate desktop applications across multiple Linux distributions and display server configurations.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Linux-blue?style=for-the-badge&logo=linux" alt="Linux">
@@ -15,23 +12,11 @@
 
 ---
 
-## The Problem
+## Overview
 
-You've built a desktop app. It works on your machine. But does it work on:
+Testing desktop apps properly requires real environments — different distros, display servers, GPU configurations. Containers can't do this. Manual testing doesn't scale.
 
-- Fedora with Wayland?
-- Ubuntu with X11?
-- A system with a broken display server?
-- When the GPU driver behaves differently?
-- When Wayland claims to exist but doesn't really?
-
-**Manual testing across all these scenarios takes weeks.**  
-Setting up N machines with N configurations is a nightmare.  
-And containers? They don't have real GPUs or real display servers.
-
----
-
-## The Solution
+mOSdat uses Proxmox to orchestrate VMs with actual NVIDIA GPUs passed through via VFIO, enabling automated testing across real hardware configurations.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -51,42 +36,23 @@ And containers? They don't have real GPUs or real display servers.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**One command. Multiple VMs. Real hardware. Automated results.**
+---
+
+## Features
+
+**GPU Passthrough** — Real NVIDIA GPUs via VFIO, not emulated
+
+**Display Server Matrix** — Native Wayland, X11, XWayland, and misconfigured environments
+
+**Full Pipeline** — Build from git ref → deploy to VM → run tests → collect results
+
+**Reproducible** — Same VM snapshot, same test sequence, consistent results
 
 ---
 
-## What Makes This Different
+## Results
 
-### Real GPU Passthrough
-
-Not emulated. Not mocked. **Actual NVIDIA GPUs** passed through to VMs via VFIO.
-
-Your tests run on hardware that mirrors what your users actually have.
-
-### True Display Server Testing
-
-- **Native Wayland** — Full compositor, real protocols
-- **X11/XWayland** — The classic, still everywhere
-- **Broken Wayland** — Fake sockets, missing vars, the chaos users create
-
-### Zero Human Intervention
-
-```
-git ref → build app → VM boots → app deploys → tests run → results collected
-```
-
-No clicking through installers. No manual verification. The entire pipeline is orchestrated through Proxmox's API.
-
-### Reproducible Environments
-
-Same VM. Same test sequence. Same results.  
-No more "it worked yesterday" or "works on my machine."
-
----
-
-## Real Results
-
-We used mOSdat to validate a Wayland compatibility fix for [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron).
+Validated a Wayland compatibility fix for [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron):
 
 | Scenario | Before Fix | After Fix |
 |:---------|:----------:|:---------:|
@@ -94,8 +60,6 @@ We used mOSdat to validate a Wayland compatibility fix for [Rocket.Chat Desktop]
 | Fake Wayland socket | SEGFAULT | **PASS** |
 | Missing display variable | SEGFAULT | **PASS** |
 | X11 fallback | SEGFAULT | **PASS** |
-
-**Three crash scenarios caught and verified fixed** — automatically, in minutes instead of days.
 
 See [Case Studies](docs/CASE-STUDIES.md) for details.
 
@@ -112,18 +76,16 @@ See [Case Studies](docs/CASE-STUDIES.md) for details.
 
 | Document | Description |
 |:---------|:------------|
-| [Architecture](docs/ARCHITECTURE.md) | How the pieces fit together |
+| [Architecture](docs/ARCHITECTURE.md) | System design |
 | [Hardware](docs/HARDWARE.md) | Test environment specs |
 | [Proxmox Setup](docs/PROXMOX-SETUP.md) | VFIO and GPU passthrough |
-| [Case Studies](docs/CASE-STUDIES.md) | Real-world testing examples |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | When things go wrong |
+| [Case Studies](docs/CASE-STUDIES.md) | Test examples |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues |
 
 ---
 
 ## Built With
 
-- **[Proxmox VE](https://www.proxmox.com/)** — VM orchestration
-- **VFIO/IOMMU** — GPU passthrough
-- **[opencode](https://github.com/opencode-ai/opencode) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)** — AI-assisted development
-
-
+- [Proxmox VE](https://www.proxmox.com/) — VM orchestration
+- VFIO/IOMMU — GPU passthrough
+- [opencode](https://github.com/opencode-ai/opencode) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)
