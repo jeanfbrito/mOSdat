@@ -2,24 +2,50 @@
 
 ## 1. Wayland/X11 Crash Fix (January 2026)
 
-**Problem**: Electron apps crash with `SIGSEGV` (exit code 139) when `WAYLAND_DISPLAY` environment variable points to a non-existent socket.
+### The Problem
 
-**Related**:
+Electron apps crash with `SIGSEGV` (exit code 139) when `WAYLAND_DISPLAY` environment variable points to a non-existent socket.
+
+**Related:**
 - [PR #3171](https://github.com/RocketChat/Rocket.Chat.Electron/pull/3171) - The fix
-- [Issue #3154](https://github.com/RocketChat/Rocket.Chat.Electron/issues/3154) - Original bug report
+- [Issue #3154](https://github.com/RocketChat/Rocket.Chat.Electron/issues/3154) - Bug report
 
-**Solution**: A wrapper script that detects invalid Wayland configurations and forces X11 fallback before launching the Electron app.
+### Real User Scenarios That Trigger This
 
-### Test Matrix
+| Scenario | What Happens |
+|----------|--------------|
+| Compositor crash | GNOME Shell crashes, socket deleted, env vars remain |
+| Session mismatch | Logged into X11, but WAYLAND_DISPLAY leaked from previous session |
+| Misconfigured system | Partial Wayland install, vars set but nothing works |
+| Terminal from SSH | App launched while desktop session has different display |
 
-Tested on Fedora 42 (VM ID 100) with GNOME/Wayland:
+### The Fix
 
-| Test Scenario | Description | Old v4.11.0 | New v4.11.1 |
-|:--------------|:------------|:-----------:|:-----------:|
-| `wayland-real` | Valid Wayland session | PASS | PASS |
-| `wayland-fake` | Fake `WAYLAND_DISPLAY` pointing to non-existent socket | SEGFAULT (139) | PASS |
-| `wayland-nodisp` | `WAYLAND_DISPLAY` unset | SEGFAULT (139) | PASS |
-| `x11` | X11 session via XWayland | SEGFAULT (139) | PASS |
+Wrapper script (`rocketchat-desktop`) that:
+1. Checks if `WAYLAND_DISPLAY` is set
+2. Verifies the socket actually exists and is accessible
+3. If Wayland is broken, forces X11 fallback with `--ozone-platform=x11`
+4. Only then launches the actual Electron binary
+
+### Test Results
+
+#### Fedora 42 (Wayland Native)
+
+| Scenario | Old v4.11.0 | New v4.11.1 |
+|:---------|:-----------:|:-----------:|
+| Real Wayland | ✅ PASS | ✅ PASS |
+| Fake Wayland socket | ❌ SEGFAULT (139) | ✅ PASS |
+| Missing WAYLAND_DISPLAY | ❌ SEGFAULT (139) | ✅ PASS |
+| X11 fallback | ❌ SEGFAULT (139) | ✅ PASS |
+
+#### Ubuntu 22.04 (X11 Default)
+
+| Scenario | Old v4.11.0 | New v4.11.1 |
+|:---------|:-----------:|:-----------:|
+| Real X11 | ✅ PASS | ✅ PASS |
+| Fake Wayland socket | ✅ PASS* | ✅ PASS |
+
+*Ubuntu 22.04 defaults to X11, so the Wayland bug doesn't manifest in normal usage.
 
 ### Git References
 
@@ -30,6 +56,6 @@ Tested on Fedora 42 (VM ID 100) with GNOME/Wayland:
 
 ### Conclusion
 
-Fix validated. The wrapper script successfully detects invalid Wayland environments and forces X11 fallback, preventing the segmentation fault.
+Fix validated. The wrapper script successfully detects invalid Wayland environments and forces X11 fallback, preventing segmentation faults.
 
-See [results/2026-01-16_fedora42/REPORT.md](../results/2026-01-16_fedora42/REPORT.md) for the full test report.
+See [results/](../results/) for detailed test reports.
