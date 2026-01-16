@@ -143,9 +143,4 @@ Desktop apps? You're still spinning up VMs manually, clicking through installers
 - **VFIO/IOMMU** — GPU passthrough
 - **[opencode](https://github.com/opencode-ai/opencode) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)** — AI-assisted development
 
----
 
-<p align="center">
-  <strong>Stop testing desktop apps like it's 2010.</strong><br>
-  <em>Automate everything. Verify on real hardware.</em>
-</p>
