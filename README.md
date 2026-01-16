@@ -1,85 +1,96 @@
-# mOSdat - Multi-OS Desktop App Testing
+# mOSdat
+
+**Multi-OS Desktop App Testing**
 
 [![Proxmox](https://img.shields.io/badge/Proxmox-VE%208.x-orange.svg)](https://www.proxmox.com/)
 [![Rocket.Chat](https://img.shields.io/badge/Rocket.Chat-Desktop-red.svg)](https://github.com/RocketChat/Rocket.Chat.Electron)
 
-A Proxmox-based testing framework that validates desktop applications across multiple operating systems.
-
-**Spin up VMs. Deploy your app. Verify it works.**
+Automated testing framework that spins up real VMs, deploys your desktop app, and validates it actually works - across multiple operating systems, display servers, and GPU configurations.
 
 ---
 
-## Current Target: Rocket.Chat Desktop
+## Why?
 
-This framework is currently configured to test [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron) (Electron-based) across Linux distributions.
+> "Works on my machine" isn't good enough.
+
+Desktop apps behave differently on Fedora vs Ubuntu, Wayland vs X11, with GPU vs without. Manual testing is slow and inconsistent. **mOSdat automates it.**
+
+---
+
+## What It Does
+
+```
+Build app → Deploy to VM → Run test scenarios → Get results
+     ↓           ↓              ↓                  ↓
+  From Git    Proxmox API    Wayland/X11      Pass/Fail matrix
+```
+
+**One command. Multiple OSes. Real results.**
+
+```bash
+./full-test.sh
+```
+
+---
+
+## Real Results
+
+Testing [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron) Wayland fix:
+
+| Scenario | Before Fix | After Fix |
+|:---------|:----------:|:---------:|
+| Real Wayland session | PASS | PASS |
+| Fake Wayland socket | SEGFAULT | **PASS** |
+| Missing display var | SEGFAULT | **PASS** |
+| X11 fallback | SEGFAULT | **PASS** |
+
+The fix works. We proved it. Automatically.
 
 ---
 
 ## Features
 
-- **VM Orchestration** - Control Proxmox VMs via API (start, stop, status)
-- **GPU Passthrough** - NVIDIA VFIO passthrough for GPU-accelerated testing
-- **Display Server Testing** - Wayland, X11, and headless scenarios
-- **Automated Pipeline** - Build, deploy, and test in one command
+- **VM Orchestration** - Proxmox API controls VMs programmatically
+- **GPU Passthrough** - Test with real NVIDIA acceleration via VFIO
+- **Display Server Matrix** - Wayland, X11, headless scenarios
+- **Automated Pipeline** - Build from any git ref, deploy, test, report
 
 ---
 
-## Supported Platforms
+## Tested Platforms
 
-| OS | Status | Package Format | VM ID |
-|----|:------:|----------------|:-----:|
-| Fedora 42 | Tested | RPM | 100 |
-| Ubuntu 22.04 | Tested | DEB | 101 |
+- Fedora 42 (GNOME/Wayland)
+- Ubuntu 22.04 (GNOME)
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Configure credentials
+# Configure
 cp shared/config.example.sh shared/config.local.sh
-# Edit with your Proxmox credentials
 
-# 2. Run full test suite
+# Run
 cd os/fedora-42
 ./full-test.sh
 ```
 
 ---
 
-## Directory Structure
-
-```
-mOSdat/
-├── shared/           # Config and Proxmox API helpers
-├── os/<distro>/      # OS-specific scripts (build, deploy, test)
-├── results/          # Test reports
-└── docs/             # Documentation
-```
-
----
-
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical design |
-| [HARDWARE.md](docs/HARDWARE.md) | Machine specs (host, Proxmox, VMs) |
-| [PROXMOX-SETUP.md](docs/PROXMOX-SETUP.md) | VFIO/GPU passthrough setup |
-| [CASE-STUDIES.md](docs/CASE-STUDIES.md) | Validated tests and fixes |
-| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues |
+- [Architecture](docs/ARCHITECTURE.md) - How it works
+- [Hardware](docs/HARDWARE.md) - Test environment specs
+- [Case Studies](docs/CASE-STUDIES.md) - Validated tests
+- [Proxmox Setup](docs/PROXMOX-SETUP.md) - VFIO/GPU passthrough
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
 
 ---
 
-## Tools Used
+## Built With
 
-Developed with:
-
-- **[opencode](https://github.com/opencode-ai/opencode)** - AI-powered coding assistant CLI
-- **[oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)** - Enhanced agent orchestration plugin
+- [opencode](https://github.com/opencode-ai/opencode) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode)
 
 ---
 
-## Related
-
-- [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron)
+**Current target**: [Rocket.Chat Desktop](https://github.com/RocketChat/Rocket.Chat.Electron)
