@@ -122,13 +122,11 @@ See [Case Studies](docs/CASE-STUDIES.md) for details.
 
 ## Why This Matters
 
-**Desktop app testing is stuck in 2010.**
-
 Web apps have Playwright, Cypress, BrowserStack. They run in CI, in containers, everywhere.
 
 Desktop apps? You're still spinning up VMs manually, clicking through installers, and hoping someone remembers to test on Fedora.
 
-**mOSdat brings desktop app testing into the modern era.**
+mOSdat changes that:
 
 - Real hardware testing
 - Reproducible environments
