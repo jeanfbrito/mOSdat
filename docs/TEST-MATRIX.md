@@ -38,11 +38,11 @@ Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
 | Fedora 42 | Wayland (GNOME) | ✅ PASS | ✅ PASS | ✅ PASS | ✅ PASS |
 | Ubuntu 22.04 | X11 (GNOME) | ⏭️ SKIP | ✅ PASS | ✅ PASS | ✅ PASS |
 | Ubuntu 24.04 | Wayland (GNOME) | ✅ PASS | ✅ PASS | ✅ PASS | ✅ PASS |
-| openSUSE Leap | N/A | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+| openSUSE Leap | X11 (KDE Plasma) | ⏭️ SKIP | ✅ PASS | ✅ PASS | N/A |
 
 **Notes:**
 - Ubuntu 22.04 uses X11 by default, so gpu-wayland-real was skipped
-- openSUSE Leap VM has minimal installation (no DE) - needs KDE/SDDM installed
+- openSUSE Leap uses X11 (KDE Plasma with nouveau driver), gpu-wayland-real skipped
 - All tested VMs show GPU visible via `lspci | grep nvidia`
 
 ## Full Test Matrix
@@ -115,12 +115,19 @@ Note: Ubuntu 24.04 defaults to Wayland (GNOME 46). All GPU tests passed with rea
 
 **Unique Coverage:**
 - SUSE enterprise ecosystem (zypper package manager)
-- KDE Plasma desktop (KWin Wayland compositor)
+- KDE Plasma desktop (KWin compositor)
 - European enterprise market
 
-**With GPU (RTX 3060 passthrough):**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
 
-⚠️ **BLOCKED** - VM has minimal server installation, no desktop environment installed. Need to install KDE Plasma and SDDM.
+| Test | Result | Exit Code | Note |
+|------|--------|-----------|------|
+| gpu-wayland-real | ⏭️ SKIP | - | Session is X11 (nouveau driver) |
+| gpu-wayland-fake | ✅ PASS | 0 | App correctly fell back to X11 |
+| gpu-x11 | ✅ PASS | 0 | Normal X11 launch worked |
+| gpu-force-x11 | ✅ PASS | 0 | --ozone-platform=x11 worked |
+
+Note: KDE Plasma installed with nouveau driver. GPU detected but using software rendering (no NVIDIA proprietary driver). All crash fix tests passed.
 
 **Without GPU (Virtual displays):**
 
@@ -128,8 +135,6 @@ Note: Ubuntu 24.04 defaults to Wayland (GNOME 46). All GPU tests passed with rea
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
 | RPM | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 | AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
-
-Note: Virtual display tests pass. GPU passthrough tests require desktop environment installation.
 
 ### Manjaro Linux
 

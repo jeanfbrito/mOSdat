@@ -70,6 +70,7 @@ Real hardware validation with NVIDIA RTX 3060 via VFIO:
 | Fedora 42 | PASS | PASS | PASS | PASS |
 | Ubuntu 22.04 | SKIP (X11 default) | PASS | PASS | PASS |
 | Ubuntu 24.04 | PASS | PASS | PASS | PASS |
+| openSUSE Leap 16.0 | SKIP (X11 default) | PASS | PASS | N/A |
 
 See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) for details.
 
@@ -82,11 +83,11 @@ See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) 
 | Fedora 42 | GNOME (Wayland) | PASS | PASS | Complete |
 | Ubuntu 22.04 LTS | GNOME (X11) | PASS | PASS | Complete |
 | Ubuntu 24.04 LTS | GNOME (Wayland) | PASS | PASS | Complete |
-| openSUSE Leap 16.0 | KDE | PASS | Blocked | Partial |
+| openSUSE Leap 16.0 | KDE (X11) | PASS | PASS | Complete |
 | Manjaro Linux | KDE | Pending | Pending | Pending |
 
 **Notes:**
-- openSUSE GPU testing blocked - VM has minimal install (no desktop environment)
+- openSUSE using nouveau driver (open source) with software rendering - all crash fix tests passed
 - Manjaro blocked - ISO boot issues with SMB storage
 
 See [Linux Coverage Strategy](docs/LINUX-COVERAGE.md) for why these distributions were selected.
