@@ -61,19 +61,33 @@ Validated a Wayland compatibility fix for [Rocket.Chat Desktop](https://github.c
 | Missing display variable | SEGFAULT | **PASS** |
 | X11 fallback | SEGFAULT | **PASS** |
 
-See [Case Studies](docs/CASE-STUDIES.md) for details.
+### GPU Passthrough Test Results (2026-01-19)
+
+Real hardware validation with NVIDIA RTX 3060 via VFIO:
+
+| OS | gpu-wayland-real | gpu-wayland-fake | gpu-x11 | gpu-wayland-nodisp |
+|----|------------------|------------------|---------|-------------------|
+| Fedora 42 | PASS | PASS | PASS | PASS |
+| Ubuntu 22.04 | SKIP (X11 default) | PASS | PASS | PASS |
+| Ubuntu 24.04 | PASS | PASS | PASS | PASS |
+
+See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) for details.
 
 ---
 
 ## Tested Platforms
 
-| Distribution | Desktop | Status |
-|--------------|---------|--------|
-| Fedora 42 | GNOME | Complete |
-| Ubuntu 22.04 LTS | GNOME | Complete |
-| Ubuntu 24.04 LTS | GNOME | Complete |
-| openSUSE Leap 16.0 | KDE | Complete |
-| Manjaro Linux | KDE | Pending |
+| Distribution | Desktop | Without GPU | With GPU | Status |
+|--------------|---------|-------------|----------|--------|
+| Fedora 42 | GNOME (Wayland) | PASS | PASS | Complete |
+| Ubuntu 22.04 LTS | GNOME (X11) | PASS | PASS | Complete |
+| Ubuntu 24.04 LTS | GNOME (Wayland) | PASS | PASS | Complete |
+| openSUSE Leap 16.0 | KDE | PASS | Blocked | Partial |
+| Manjaro Linux | KDE | Pending | Pending | Pending |
+
+**Notes:**
+- openSUSE GPU testing blocked - VM has minimal install (no desktop environment)
+- Manjaro blocked - ISO boot issues with SMB storage
 
 See [Linux Coverage Strategy](docs/LINUX-COVERAGE.md) for why these distributions were selected.
 

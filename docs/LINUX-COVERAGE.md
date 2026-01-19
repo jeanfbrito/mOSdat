@@ -4,14 +4,18 @@ This document explains our testing strategy for achieving maximum enterprise Lin
 
 ## Executive Summary
 
-We test **4 distributions** to achieve **~95% enterprise Linux desktop coverage**:
+We test **5 distributions** to achieve **~95% enterprise Linux desktop coverage**:
 
 | Distribution | Version | Covers |
 |--------------|---------|--------|
 | Fedora | 42 | Red Hat family (RHEL, Rocky, Alma, CentOS) |
 | Ubuntu | 22.04, 24.04 | Debian family (Debian, Mint, Pop!_OS, Elementary) |
-| openSUSE Leap | 15.6 | SUSE family + KDE desktop |
-| Arch Linux | Rolling | Rolling releases (Manjaro) + bleeding-edge issues |
+| openSUSE Leap | 16.0 | SUSE family + KDE desktop |
+| Manjaro Linux | Rolling | Arch-based rolling releases + bleeding-edge issues |
+
+**Each distribution is tested in TWO configurations:**
+1. **Without GPU** - Virtual displays (Xvfb, Weston headless)
+2. **With GPU** - Real NVIDIA RTX 3060 via VFIO passthrough
 
 ## Enterprise Linux Market Analysis
 
@@ -81,17 +85,18 @@ Enterprise desktop Linux deployments typically use:
 
 ### Rolling Release Family
 
-**Tested:** Arch Linux
+**Tested:** Manjaro Linux
 
 **Covers by extension:**
 | Distribution | Why It's Covered |
 |--------------|------------------|
-| Manjaro | Arch-based |
+| Arch Linux | Manjaro's upstream |
 | EndeavourOS | Arch-based |
 | Garuda Linux | Arch-based |
 
 **Package Manager:** pacman
-**Package Format Tested:** AppImage (Arch has no native Rocket.Chat package)
+**Package Format Tested:** AppImage (no native Rocket.Chat package in AUR)
+**Desktop:** KDE Plasma (KWin Wayland compositor)
 
 ## Package Format Coverage
 
@@ -140,9 +145,9 @@ Testing both **Mutter (GNOME)** and **KWin (KDE)** ensures we cover the two domi
 
 **Reason:** Ubuntu is derived from Debian. While Debian has older packages, the DEB format and apt behavior are the same. Any DEB-related issues would appear on Ubuntu first.
 
-### Manjaro
+### Arch Linux
 
-**Reason:** Arch-based with same package ecosystem. Testing Arch covers Manjaro.
+**Reason:** Manjaro is Arch-based with same package ecosystem. Testing Manjaro covers Arch Linux.
 
 ### Gentoo / Slackware / Other Niche Distros
 
@@ -188,13 +193,63 @@ Testing both **Mutter (GNOME)** and **KWin (KDE)** ensures we cover the two domi
 
 ## Test Matrix Summary
 
-| OS | VMID | Desktop | Package Formats | Status |
-|----|------|---------|-----------------|--------|
-| Fedora 42 | 100 | GNOME | RPM, AppImage | Complete |
-| Ubuntu 22.04 | 101 | GNOME | DEB, AppImage, Snap | Complete |
-| Ubuntu 24.04 | 102 | GNOME | DEB, AppImage, Snap | Complete |
-| openSUSE Leap 16.0 | 106 | KDE | RPM, AppImage | Pending |
-| Arch Linux | 103 | GNOME | AppImage | Pending |
+| OS | VMID | Desktop | Package Formats | Without GPU | With GPU |
+|----|------|---------|-----------------|-------------|----------|
+| Fedora 42 | 100 | GNOME | RPM, AppImage | Complete | Complete |
+| Ubuntu 22.04 | 101 | GNOME | DEB, AppImage, Snap | Complete | Complete |
+| Ubuntu 24.04 | 102 | GNOME | DEB, AppImage, Snap | Complete | Complete |
+| openSUSE Leap 16.0 | 106 | KDE | RPM, AppImage | Complete | Blocked |
+| Manjaro Linux | 103 | KDE | AppImage | Pending | Pending |
+
+**Notes:**
+- openSUSE GPU testing blocked: VM has minimal server install, needs KDE desktop
+- Manjaro pending: ISO boot issues with SMB storage
+
+## GPU Passthrough Testing
+
+### Why GPU Testing Is Required
+
+Virtual displays (Xvfb, Weston headless) are useful for CI automation but have limitations:
+- No real GPU acceleration
+- Weston headless has known issues with Electron/Chromium
+- Cannot validate real compositor behavior (GNOME Mutter, KDE KWin)
+
+**Real GPU passthrough testing validates:**
+- Actual Wayland compositor interaction
+- GPU initialization and fallback behavior
+- XWayland fallback in real desktop sessions
+- Production-like environment
+
+### GPU Test Configuration
+
+| Component | Specification |
+|-----------|---------------|
+| GPU | NVIDIA GeForce RTX 3060 12GB |
+| PCI Address | 0000:01:00 |
+| Passthrough | VFIO/IOMMU |
+| Mode | Compute (VNC still works) |
+
+### GPU Test Results (2026-01-19)
+
+| OS | Session Type | gpu-wayland-real | gpu-wayland-fake | gpu-x11 | gpu-wayland-nodisp |
+|----|--------------|------------------|------------------|---------|-------------------|
+| Fedora 42 | Wayland (GNOME) | PASS | PASS | PASS | PASS |
+| Ubuntu 22.04 | X11 (GNOME) | SKIP | PASS | PASS | PASS |
+| Ubuntu 24.04 | Wayland (GNOME) | PASS | PASS | PASS | PASS |
+| openSUSE Leap | N/A (no DE) | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+
+### GPU Test Workflow
+
+```bash
+# Attach GPU to VM (VM must be stopped)
+./os/<os>/gpu-control.sh --attach
+
+# Run GPU tests (VM auto-starts with desktop session)
+ssh jean@<VM_IP> '/tmp/tests/run-gpu-tests.sh'
+
+# Detach GPU for next VM
+./os/<os>/gpu-control.sh --detach
+```
 
 ## Future Considerations
 
@@ -212,11 +267,15 @@ Some enterprises run older LTS versions (Ubuntu 20.04, RHEL 8). Consider testing
 
 ## Conclusion
 
-Our 4-distribution testing strategy provides comprehensive coverage of the enterprise Linux desktop market:
+Our 5-distribution testing strategy provides comprehensive coverage of the enterprise Linux desktop market:
 
-1. **Fedora** - Covers Red Hat ecosystem + GNOME/Mutter
-2. **Ubuntu** - Covers Debian ecosystem + Snap packages
-3. **openSUSE** - Covers SUSE ecosystem + KDE/KWin
-4. **Arch** - Covers rolling releases + catches bleeding-edge issues
+1. **Fedora 42** - Covers Red Hat ecosystem + GNOME/Mutter Wayland
+2. **Ubuntu 22.04/24.04** - Covers Debian ecosystem + Snap packages
+3. **openSUSE Leap 16.0** - Covers SUSE ecosystem + KDE/KWin
+4. **Manjaro Linux** - Covers Arch/rolling releases + catches bleeding-edge issues
+
+**Each distribution is tested with:**
+- Virtual displays (Xvfb, Weston) for CI/automation scenarios
+- Real GPU passthrough (NVIDIA RTX 3060) for production validation
 
 This approach maximizes coverage while minimizing maintenance overhead. Each distribution was selected because it represents a **unique combination** of package manager, desktop environment, and enterprise market segment.
