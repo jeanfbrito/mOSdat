@@ -7,7 +7,10 @@
 | Fedora 42 | - | ✅ | ✅ | - | 🔜 |
 | Ubuntu 22.04 | ✅ | - | ✅ | ✅ | 🔜 |
 | Ubuntu 24.04 | ✅ | - | ✅ | ✅ | 🔜 |
-| Arch Linux | - | - | ✅ | - | 🔜 |
+| openSUSE Leap 16.0 | - | ✅ | ✅ | - | 🔜 |
+| Manjaro Linux | - | - | 🔲 | - | 🔜 |
+
+See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 
 ## Display Scenarios
 
@@ -67,6 +70,49 @@ Note: RPM tested with native GNOME Wayland. AppImage tested with Weston headless
 | Snap | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 
 Note: wayland test uses Weston headless which has known incompatibility with Electron/Chromium GPU initialization. Real Wayland desktops (GNOME/KDE) work correctly.
+
+### Ubuntu 24.04
+
+**Without GPU:**
+
+| Package | x11 | wayland | wayland-fake | fallback | no-display |
+|---------|:---:|:-------:|:------------:|:--------:|:----------:|
+| DEB | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+| AppImage | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Snap | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+
+Note: Ubuntu 24.04 has GNOME 46 with improved Wayland support. AppImage and Snap work well with Weston headless.
+
+### openSUSE Leap 16.0
+
+**Unique Coverage:**
+- SUSE enterprise ecosystem (zypper package manager)
+- KDE Plasma desktop (KWin Wayland compositor)
+- European enterprise market
+
+**Without GPU:**
+
+| Package | x11 | wayland | wayland-fake | fallback | no-display |
+|---------|:---:|:-------:|:------------:|:--------:|:----------:|
+| RPM | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
+
+Note: wayland test uses Weston headless which has known incompatibility with Electron/Chromium GPU initialization. Real KDE Plasma Wayland sessions work correctly.
+
+### Manjaro Linux
+
+🔲 Not yet tested - VM needs installation via VNC.
+
+**Unique Coverage:**
+- Arch-based rolling release distribution
+- KDE Plasma desktop (KWin Wayland compositor)
+- Catches bleeding-edge compatibility issues
+- Developer workstation use case
+- Covers Arch Linux ecosystem (pacman, AUR)
+
+| Package | x11 | wayland | wayland-fake | fallback | no-display |
+|---------|:---:|:-------:|:------------:|:--------:|:----------:|
+| AppImage | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
 
 Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | ⏭️ Skip (needs GPU) | ⚠️ Expected (no display) | 🔜 Planned
 

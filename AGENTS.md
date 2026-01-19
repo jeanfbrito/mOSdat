@@ -13,7 +13,8 @@ Test framework for Rocket.Chat Electron Linux builds, specifically the Wayland/X
 | Ubuntu 22.04 | DEB, AppImage, Snap |
 | Ubuntu 24.04 | DEB, AppImage, Snap |
 | Fedora 42 | RPM, AppImage |
-| Arch Linux | AppImage |
+| openSUSE Leap 16.0 | RPM, AppImage |
+| Manjaro Linux | AppImage |
 
 Each package format must pass all display scenario tests (x11, wayland-fake, wayland-fallback) before the OS is marked complete.
 
@@ -68,6 +69,35 @@ Before testing a VM, ensure:
 3. **Test dependencies**: `Xvfb`, `weston` installed
    - Fedora: `sudo dnf install -y xorg-x11-server-Xvfb weston`
    - Ubuntu: `sudo apt install -y xvfb weston`
+   - openSUSE: `sudo zypper install -y xvfb weston`
+   - Manjaro/Arch: `sudo pacman -S xorg-server-xvfb weston`
+
+## ISO Storage Management
+
+ISOs are stored on a CIFS/SMB share. Proxmox only sees ISOs in `template/iso/` subfolder.
+
+| Setting | Value |
+|---------|-------|
+| Server | 192.168.13.11 |
+| Share | isos |
+| Username | guest (no password) |
+| Required path | `template/iso/` |
+
+**To list ISOs:**
+```bash
+docker run --rm alpine sh -c "apk add --no-cache samba-client >/dev/null 2>&1 && smbclient //192.168.13.11/isos -N -c 'cd template/iso; ls'"
+```
+
+**To move ISO to correct location:**
+```bash
+docker run --rm alpine sh -c "apk add --no-cache samba-client >/dev/null 2>&1 && smbclient //192.168.13.11/isos -N -c 'rename \"filename.iso\" \"template/iso/filename.iso\"'"
+```
+
+**Check Proxmox sees it:**
+```bash
+TICKET=$(curl -k -s -d "username=root@pam&password=cb6wist3" "https://192.168.13.85:8006/api2/json/access/ticket" | jq -r '.data.ticket')
+curl -k -s -b "PVEAuthCookie=$TICKET" "https://192.168.13.85:8006/api2/json/nodes/pve/storage/mushu-isos/content" | jq -r '.data[] | .volid'
+```
 
 ## Adding New OS
 

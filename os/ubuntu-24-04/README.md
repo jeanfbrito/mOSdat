@@ -9,42 +9,65 @@
 | OS | Ubuntu 24.04.3 LTS |
 | Desktop | GNOME 46 / Wayland |
 | User | jean |
-| Password | cb6wist3 |
+| IP | 192.168.13.82 |
+| RAM | 8 GB |
+| CPU | 8 cores |
+| Disk | 64 GB |
 
-## Status: TEMPLATE - NOT YET CONFIGURED
+## Status: CONFIGURED AND TESTED
 
-This VM needs to be installed and configured before running tests.
+All three package formats (DEB, AppImage, Snap) have been tested and pass the Wayland fix validation.
 
-## Prerequisites
+## Test Results (2026-01-19)
 
-Same as Ubuntu 22.04, with these differences:
+| Package | x11 | wayland | wayland-fake | fallback | no-display |
+|---------|:---:|:-------:|:------------:|:--------:|:----------:|
+| DEB | PASS | SKIP | PASS | PASS | EXPECTED |
+| AppImage | PASS | PASS | PASS | PASS | PASS |
+| Snap | PASS | PASS | PASS | PASS | EXPECTED |
 
-- GNOME 46 (newer Wayland implementation)
-- May have different default Wayland behavior
-- Uses same GDM3 configuration path
-
-### Installation Steps
-
-1. Boot VM from Ubuntu 24.04 ISO via Proxmox noVNC
-2. Install with user `jean`, password `cb6wist3`
-3. Enable auto-login in GDM3
-4. Install qemu-guest-agent
-5. Enable SSH
-
-```bash
-sudo apt update
-sudo apt install -y qemu-guest-agent openssh-server
-sudo systemctl enable --now qemu-guest-agent ssh
-
-sudo nano /etc/gdm3/custom.conf
-# Add: AutomaticLoginEnable=true and AutomaticLogin=jean
-```
+Legend: PASS = Works | SKIP = Weston limitation | EXPECTED = Acceptable crash (no display)
 
 ## Scripts
 
-Copy and modify from `ubuntu-22-04/` - main difference is VM ID (102).
+| Script | Purpose |
+|--------|---------|
+| `build.sh` | Build Rocket.Chat from current git checkout |
+| `deploy.sh` | Transfer and install DEB on VM |
+| `test.sh` | Run Wayland/X11 crash tests |
+| `gpu-control.sh` | Attach/detach GPU from VM |
+| `full-test.sh` | Run complete test matrix |
+
+## Usage
+
+### Quick Test
 
 ```bash
-cp -r ../ubuntu-22-04/*.sh .
-# Edit config.sh to change VMID to 102
+./build.sh
+./deploy.sh
+./test.sh
 ```
+
+### Test Specific Package
+
+```bash
+# DEB (default)
+./deploy.sh /path/to/rocketchat-*.deb
+./test.sh
+
+# AppImage
+scp /path/to/*.AppImage jean@192.168.13.82:/tmp/
+ssh jean@192.168.13.82 "APP_PATH=/tmp/*.AppImage /tmp/tests/run-all.sh"
+
+# Snap
+scp /path/to/*.snap jean@192.168.13.82:/tmp/
+ssh jean@192.168.13.82 "sudo snap install --dangerous /tmp/*.snap"
+ssh jean@192.168.13.82 "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh"
+```
+
+## Ubuntu 24.04 Specific Notes
+
+- Uses GNOME 46 with improved Wayland support
+- GDM3 config path: `/etc/gdm3/custom.conf`
+- Default session is Wayland (unlike 22.04 which defaulted to X11)
+- Snap packages work well with Wayland on 24.04

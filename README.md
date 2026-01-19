@@ -67,8 +67,15 @@ See [Case Studies](docs/CASE-STUDIES.md) for details.
 
 ## Tested Platforms
 
-- Fedora 42 (GNOME/Wayland)
-- Ubuntu 22.04 LTS (GNOME)
+| Distribution | Desktop | Status |
+|--------------|---------|--------|
+| Fedora 42 | GNOME | Complete |
+| Ubuntu 22.04 LTS | GNOME | Complete |
+| Ubuntu 24.04 LTS | GNOME | Complete |
+| openSUSE Leap 16.0 | KDE | Complete |
+| Manjaro Linux | KDE | Pending |
+
+See [Linux Coverage Strategy](docs/LINUX-COVERAGE.md) for why these distributions were selected.
 
 ---
 
@@ -78,6 +85,8 @@ See [Case Studies](docs/CASE-STUDIES.md) for details.
 |:---------|:------------|
 | [Architecture](docs/ARCHITECTURE.md) | System design |
 | [Hardware](docs/HARDWARE.md) | Test environment specs |
+| [Linux Coverage](docs/LINUX-COVERAGE.md) | Distribution selection strategy |
+| [Test Matrix](docs/TEST-MATRIX.md) | Test results by OS |
 | [Proxmox Setup](docs/PROXMOX-SETUP.md) | VFIO and GPU passthrough |
 | [Case Studies](docs/CASE-STUDIES.md) | Test examples |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues |
