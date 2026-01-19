@@ -26,8 +26,24 @@ See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 
 | Config | Description |
 |--------|-------------|
-| With GPU | NVIDIA via VFIO passthrough |
-| Without GPU | Software rendering only |
+| With GPU | NVIDIA RTX 3060 via VFIO passthrough |
+| Without GPU | Software rendering (Xvfb/Weston headless) |
+
+### GPU Passthrough Test Results (2026-01-19)
+
+Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
+
+| OS | Session Type | gpu-wayland-real | gpu-wayland-fake | gpu-x11 | gpu-wayland-nodisp |
+|----|--------------|------------------|------------------|---------|-------------------|
+| Fedora 42 | Wayland (GNOME) | ✅ PASS | ✅ PASS | ✅ PASS | ✅ PASS |
+| Ubuntu 22.04 | X11 (GNOME) | ⏭️ SKIP | ✅ PASS | ✅ PASS | ✅ PASS |
+| Ubuntu 24.04 | Wayland (GNOME) | ✅ PASS | ✅ PASS | ✅ PASS | ✅ PASS |
+| openSUSE Leap | N/A | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
+
+**Notes:**
+- Ubuntu 22.04 uses X11 by default, so gpu-wayland-real was skipped
+- openSUSE Leap VM has minimal installation (no DE) - needs KDE/SDDM installed
+- All tested VMs show GPU visible via `lspci | grep nvidia`
 
 ## Full Test Matrix
 
@@ -35,25 +51,36 @@ Each combination: `OS × Package × Display × GPU`
 
 ### Fedora 42
 
-**With GPU (RTX 3060 passthrough):**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+
+| Test | Result | Exit Code |
+|------|--------|-----------|
+| gpu-wayland-real | ✅ PASS | 0 |
+| gpu-wayland-fake | ✅ PASS | 0 |
+| gpu-x11-xwayland | ✅ PASS | 0 |
+| gpu-wayland-nodisp | ✅ PASS | 0 |
+
+**Without GPU (Virtual displays):**
 
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
 | RPM | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 
-**Without GPU:**
-
-| Package | x11 | wayland | wayland-fake | fallback | no-display |
-|---------|:---:|:-------:|:------------:|:--------:|:----------:|
-| RPM | ✅ | ✅ | ✅ | ✅ | ✅ |
-| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
-
-Note: RPM tested with native GNOME Wayland. AppImage tested with Weston headless (has limitations).
+Note: GPU tests run on real GNOME Wayland session with XWayland fallback available.
 
 ### Ubuntu 22.04
 
-**With GPU (RTX 3060 passthrough):**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+
+| Test | Result | Exit Code | Note |
+|------|--------|-----------|------|
+| gpu-wayland-real | ⏭️ SKIP | - | Ubuntu 22.04 uses X11 by default |
+| gpu-wayland-fake | ✅ PASS | 0 | |
+| gpu-x11 | ✅ PASS | 0 | |
+| gpu-wayland-nodisp | ✅ PASS | 0 | |
+
+**Without GPU (Virtual displays):**
 
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
@@ -61,19 +88,20 @@ Note: RPM tested with native GNOME Wayland. AppImage tested with Weston headless
 | AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 | Snap | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 
-**Without GPU:**
-
-| Package | x11 | wayland | wayland-fake | fallback | no-display |
-|---------|:---:|:-------:|:------------:|:--------:|:----------:|
-| DEB | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
-| AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
-| Snap | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
-
-Note: wayland test uses Weston headless which has known incompatibility with Electron/Chromium GPU initialization. Real Wayland desktops (GNOME/KDE) work correctly.
+Note: Ubuntu 22.04 defaults to X11 (GNOME on Xorg), not Wayland.
 
 ### Ubuntu 24.04
 
-**Without GPU:**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+
+| Test | Result | Exit Code |
+|------|--------|-----------|
+| gpu-wayland-real | ✅ PASS | timeout (expected) |
+| gpu-wayland-fake | ✅ PASS | timeout (expected) |
+| gpu-x11 | ✅ PASS | timeout (expected) |
+| gpu-wayland-nodisp | ✅ PASS | timeout (expected) |
+
+**Without GPU (Virtual displays):**
 
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
@@ -81,7 +109,7 @@ Note: wayland test uses Weston headless which has known incompatibility with Ele
 | AppImage | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Snap | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 
-Note: Ubuntu 24.04 has GNOME 46 with improved Wayland support. AppImage and Snap work well with Weston headless.
+Note: Ubuntu 24.04 defaults to Wayland (GNOME 46). All GPU tests passed with real Wayland session.
 
 ### openSUSE Leap 16.0
 
@@ -90,14 +118,18 @@ Note: Ubuntu 24.04 has GNOME 46 with improved Wayland support. AppImage and Snap
 - KDE Plasma desktop (KWin Wayland compositor)
 - European enterprise market
 
-**Without GPU:**
+**With GPU (RTX 3060 passthrough):**
+
+⚠️ **BLOCKED** - VM has minimal server installation, no desktop environment installed. Need to install KDE Plasma and SDDM.
+
+**Without GPU (Virtual displays):**
 
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
 | RPM | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 | AppImage | ✅ | ⏭️ | ✅ | ✅ | ⚠️ |
 
-Note: wayland test uses Weston headless which has known incompatibility with Electron/Chromium GPU initialization. Real KDE Plasma Wayland sessions work correctly.
+Note: Virtual display tests pass. GPU passthrough tests require desktop environment installation.
 
 ### Manjaro Linux
 
