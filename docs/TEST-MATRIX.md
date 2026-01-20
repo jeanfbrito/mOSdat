@@ -8,7 +8,7 @@
 | Ubuntu 22.04 | ✅ | - | ✅ | ✅ | 🔜 |
 | Ubuntu 24.04 | ✅ | - | ✅ | ✅ | 🔜 |
 | openSUSE Leap 16.0 | - | ✅ | ✅ | - | 🔜 |
-| Manjaro Linux | - | - | ✅ | - | 🔜 |
+| Manjaro Linux 26.0.1 | - | - | ✅ | - | 🔜 |
 
 See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 
@@ -39,7 +39,7 @@ Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
 | Ubuntu 22.04 | X11 (GNOME) | ⏭️ SKIP | ✅ PASS | ✅ PASS | ✅ PASS |
 | Ubuntu 24.04 | Wayland (GNOME) | ✅ PASS | ✅ PASS | ✅ PASS | ✅ PASS |
 | openSUSE Leap | X11 (KDE Plasma) | ⏭️ SKIP | ✅ PASS | ✅ PASS | N/A |
-| Manjaro Linux | Wayland (KDE) | ✅ PASS | ✅ PASS | ✅ PASS | N/A |
+| Manjaro Linux 26.0.1 | Wayland (KDE) | ✅ PASS | ✅ PASS | ✅ PASS | N/A |
 
 **Notes:**
 - Ubuntu 22.04 uses X11 by default, so gpu-wayland-real was skipped
@@ -53,7 +53,7 @@ Each combination: `OS × Package × Display × GPU`
 
 ### Fedora 42
 
-**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-20:**
 
 | Test | Result | Exit Code |
 |------|--------|-----------|
@@ -73,7 +73,7 @@ Note: GPU tests run on real GNOME Wayland session with XWayland fallback availab
 
 ### Ubuntu 22.04
 
-**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-20:**
 
 | Test | Result | Exit Code | Note |
 |------|--------|-----------|------|
@@ -94,7 +94,7 @@ Note: Ubuntu 22.04 defaults to X11 (GNOME on Xorg), not Wayland.
 
 ### Ubuntu 24.04
 
-**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-20:**
 
 | Test | Result | Exit Code |
 |------|--------|-----------|
@@ -120,7 +120,7 @@ Note: Ubuntu 24.04 defaults to Wayland (GNOME 46). All GPU tests passed with rea
 - KDE Plasma desktop (KWin compositor)
 - European enterprise market
 
-**With GPU (RTX 3060 passthrough) - Tested 2026-01-19:**
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-20:**
 
 | Test | Result | Exit Code | Note |
 |------|--------|-----------|------|

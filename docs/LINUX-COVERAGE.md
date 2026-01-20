@@ -11,7 +11,7 @@ We test **5 distributions** to achieve **~95% enterprise Linux desktop coverage*
 | Fedora | 42 | Red Hat family (RHEL, Rocky, Alma, CentOS) |
 | Ubuntu | 22.04, 24.04 | Debian family (Debian, Mint, Pop!_OS, Elementary) |
 | openSUSE Leap | 16.0 | SUSE family + KDE desktop |
-| Manjaro Linux | Rolling | Arch-based rolling releases + bleeding-edge issues |
+| Manjaro Linux | 26.0.1 | Arch-based rolling releases + bleeding-edge issues |
 
 **Each distribution is tested in TWO configurations:**
 1. **Without GPU** - Virtual displays (Xvfb, Weston headless)
@@ -85,7 +85,7 @@ Enterprise desktop Linux deployments typically use:
 
 ### Rolling Release Family
 
-**Tested:** Manjaro Linux
+**Tested:** Manjaro Linux 26.0.1
 
 **Covers by extension:**
 | Distribution | Why It's Covered |
@@ -198,12 +198,10 @@ Testing both **Mutter (GNOME)** and **KWin (KDE)** ensures we cover the two domi
 | Fedora 42 | 100 | GNOME | RPM, AppImage | Complete | Complete |
 | Ubuntu 22.04 | 101 | GNOME | DEB, AppImage, Snap | Complete | Complete |
 | Ubuntu 24.04 | 102 | GNOME | DEB, AppImage, Snap | Complete | Complete |
-| openSUSE Leap 16.0 | 106 | KDE | RPM, AppImage | Complete | Blocked |
-| Manjaro Linux | 103 | KDE | AppImage | Pending | Pending |
+| openSUSE Leap 16.0 | 106 | KDE | RPM, AppImage | Complete | Complete |
+| Manjaro Linux 26.0.1 | 103 | KDE | AppImage | Complete | Complete |
 
-**Notes:**
-- openSUSE GPU testing blocked: VM has minimal server install, needs KDE desktop
-- Manjaro pending: ISO boot issues with SMB storage
+**All 5 target distributions fully tested (2026-01-20).**
 
 ## GPU Passthrough Testing
 
@@ -229,14 +227,15 @@ Virtual displays (Xvfb, Weston headless) are useful for CI automation but have l
 | Passthrough | VFIO/IOMMU |
 | Mode | Compute (VNC still works) |
 
-### GPU Test Results (2026-01-19)
+### GPU Test Results (2026-01-20)
 
 | OS | Session Type | gpu-wayland-real | gpu-wayland-fake | gpu-x11 | gpu-wayland-nodisp |
 |----|--------------|------------------|------------------|---------|-------------------|
 | Fedora 42 | Wayland (GNOME) | PASS | PASS | PASS | PASS |
 | Ubuntu 22.04 | X11 (GNOME) | SKIP | PASS | PASS | PASS |
 | Ubuntu 24.04 | Wayland (GNOME) | PASS | PASS | PASS | PASS |
-| openSUSE Leap | N/A (no DE) | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| openSUSE Leap 16.0 | X11 (KDE) | SKIP | PASS | PASS | N/A |
+| Manjaro Linux 26.0.1 | Wayland (KDE) | PASS | PASS | PASS | N/A |
 
 ### GPU Test Workflow
 
@@ -272,7 +271,7 @@ Our 5-distribution testing strategy provides comprehensive coverage of the enter
 1. **Fedora 42** - Covers Red Hat ecosystem + GNOME/Mutter Wayland
 2. **Ubuntu 22.04/24.04** - Covers Debian ecosystem + Snap packages
 3. **openSUSE Leap 16.0** - Covers SUSE ecosystem + KDE/KWin
-4. **Manjaro Linux** - Covers Arch/rolling releases + catches bleeding-edge issues
+4. **Manjaro Linux 26.0.1** - Covers Arch/rolling releases + catches bleeding-edge issues
 
 **Each distribution is tested with:**
 - Virtual displays (Xvfb, Weston) for CI/automation scenarios
