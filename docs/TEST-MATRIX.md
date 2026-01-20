@@ -8,7 +8,7 @@
 | Ubuntu 22.04 | ✅ | - | ✅ | ✅ | 🔜 |
 | Ubuntu 24.04 | ✅ | - | ✅ | ✅ | 🔜 |
 | openSUSE Leap 16.0 | - | ✅ | ✅ | - | 🔜 |
-| Manjaro Linux | - | - | 🔲 | - | 🔜 |
+| Manjaro Linux | - | - | ✅ | - | 🔜 |
 
 See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 
@@ -29,7 +29,7 @@ See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 | With GPU | NVIDIA RTX 3060 via VFIO passthrough |
 | Without GPU | Software rendering (Xvfb/Weston headless) |
 
-### GPU Passthrough Test Results (2026-01-19)
+### GPU Passthrough Test Results
 
 Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
 
@@ -39,10 +39,12 @@ Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
 | Ubuntu 22.04 | X11 (GNOME) | ⏭️ SKIP | ✅ PASS | ✅ PASS | ✅ PASS |
 | Ubuntu 24.04 | Wayland (GNOME) | ✅ PASS | ✅ PASS | ✅ PASS | ✅ PASS |
 | openSUSE Leap | X11 (KDE Plasma) | ⏭️ SKIP | ✅ PASS | ✅ PASS | N/A |
+| Manjaro Linux | Wayland (KDE) | ✅ PASS | ✅ PASS | ✅ PASS | N/A |
 
 **Notes:**
 - Ubuntu 22.04 uses X11 by default, so gpu-wayland-real was skipped
 - openSUSE Leap uses X11 (KDE Plasma with nouveau driver), gpu-wayland-real skipped
+- Manjaro uses KDE Plasma on Wayland - all tests passed
 - All tested VMs show GPU visible via `lspci | grep nvidia`
 
 ## Full Test Matrix
@@ -138,8 +140,6 @@ Note: KDE Plasma installed with nouveau driver. GPU detected but using software 
 
 ### Manjaro Linux
 
-🔲 Not yet tested - VM needs installation via VNC.
-
 **Unique Coverage:**
 - Arch-based rolling release distribution
 - KDE Plasma desktop (KWin Wayland compositor)
@@ -147,9 +147,19 @@ Note: KDE Plasma installed with nouveau driver. GPU detected but using software 
 - Developer workstation use case
 - Covers Arch Linux ecosystem (pacman, AUR)
 
+**With GPU (RTX 3060 passthrough) - Tested 2026-01-20:**
+
+| Test | Result | Exit Code | Note |
+|------|--------|-----------|------|
+| gpu-wayland-real | ✅ PASS | 0 | Real KDE Wayland session |
+| gpu-wayland-fake | ✅ PASS | 0 | App fell back to X11 correctly |
+| gpu-x11 | ✅ PASS | 0 | Force X11 mode worked |
+
+**Without GPU (Virtual displays) - Tested 2026-01-20:**
+
 | Package | x11 | wayland | wayland-fake | fallback | no-display |
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
-| AppImage | 🔲 | 🔲 | 🔲 | 🔲 | 🔲 |
+| AppImage | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | ⏭️ Skip (needs GPU) | ⚠️ Expected (no display) | 🔜 Planned
 

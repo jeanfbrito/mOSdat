@@ -71,6 +71,7 @@ Real hardware validation with NVIDIA RTX 3060 via VFIO:
 | Ubuntu 22.04 | SKIP (X11 default) | PASS | PASS | PASS |
 | Ubuntu 24.04 | PASS | PASS | PASS | PASS |
 | openSUSE Leap 16.0 | SKIP (X11 default) | PASS | PASS | N/A |
+| Manjaro Linux | PASS | PASS | PASS | N/A |
 
 See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) for details.
 
@@ -84,11 +85,12 @@ See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) 
 | Ubuntu 22.04 LTS | GNOME (X11) | PASS | PASS | Complete |
 | Ubuntu 24.04 LTS | GNOME (Wayland) | PASS | PASS | Complete |
 | openSUSE Leap 16.0 | KDE (X11) | PASS | PASS | Complete |
-| Manjaro Linux | KDE | Pending | Pending | Pending |
+| Manjaro Linux | KDE (Wayland) | PASS | PASS | Complete |
 
 **Notes:**
-- openSUSE using nouveau driver (open source) with software rendering - all crash fix tests passed
-- Manjaro blocked - ISO boot issues with SMB storage
+- All 5 target distributions fully tested with real GPU passthrough
+- openSUSE using nouveau driver (open source) with software rendering
+- Manjaro running latest kernel (6.18) with KDE Plasma on Wayland
 
 See [Linux Coverage Strategy](docs/LINUX-COVERAGE.md) for why these distributions were selected.
 

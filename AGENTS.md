@@ -1,5 +1,27 @@
 # AI Agent Instructions
 
+## TOP RULE: NEVER BLOCK ON WAITS
+
+**NEVER use long `sleep` commands or blocking waits while the user sits idle.**
+
+When waiting for VMs, builds, or any async operation:
+1. Fire background agents to monitor state
+2. Continue with useful work in parallel
+3. Check results when needed, don't block
+
+```bash
+# WRONG - blocks user
+sleep 45 && check_status
+
+# RIGHT - use background monitoring
+background_task(agent="explore", prompt="Monitor VM 103 until IP appears...")
+# Continue other work immediately
+```
+
+**Time is precious. Blocking waits waste user time.**
+
+---
+
 ## Project Overview
 
 Test framework for Rocket.Chat Electron Linux builds, specifically the Wayland/X11 crash fix (PR #3171).
