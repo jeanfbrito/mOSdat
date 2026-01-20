@@ -61,7 +61,7 @@ Validated a Wayland compatibility fix for [Rocket.Chat Desktop](https://github.c
 | Missing display variable | SEGFAULT | **PASS** |
 | X11 fallback | SEGFAULT | **PASS** |
 
-### GPU Passthrough Test Results (2026-01-19)
+### GPU Passthrough Test Results (2026-01-20)
 
 Real hardware validation with NVIDIA RTX 3060 via VFIO:
 
@@ -71,7 +71,7 @@ Real hardware validation with NVIDIA RTX 3060 via VFIO:
 | Ubuntu 22.04 | SKIP (X11 default) | PASS | PASS | PASS |
 | Ubuntu 24.04 | PASS | PASS | PASS | PASS |
 | openSUSE Leap 16.0 | SKIP (X11 default) | PASS | PASS | N/A |
-| Manjaro Linux | PASS | PASS | PASS | N/A |
+| Manjaro Linux 26.0.1 | PASS | PASS | PASS | N/A |
 
 See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) for details.
 
@@ -85,7 +85,7 @@ See [Test Matrix](docs/TEST-MATRIX.md) and [Case Studies](docs/CASE-STUDIES.md) 
 | Ubuntu 22.04 LTS | GNOME (X11) | PASS | PASS | Complete |
 | Ubuntu 24.04 LTS | GNOME (Wayland) | PASS | PASS | Complete |
 | openSUSE Leap 16.0 | KDE (X11) | PASS | PASS | Complete |
-| Manjaro Linux | KDE (Wayland) | PASS | PASS | Complete |
+| Manjaro Linux 26.0.1 | KDE (Wayland) | PASS | PASS | Complete |
 
 **Notes:**
 - All 5 target distributions fully tested with real GPU passthrough
