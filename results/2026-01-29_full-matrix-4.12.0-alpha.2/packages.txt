@@ -1,0 +1,4 @@
+/home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-4.12.0-alpha.2-linux-amd64.deb
+/home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-4.12.0-alpha.2-linux-amd64.snap
+/home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
+/home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-4.12.0-alpha.2-linux-x86_64.rpm

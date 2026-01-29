@@ -100,14 +100,13 @@ The hypervisor running test VMs.
 
 All VMs run on the Proxmox server.
 
-| VM ID | OS | vCPU | RAM | Disk | Status |
-|:-----:|-----|:----:|:---:|:----:|--------|
-| 100 | Fedora 42 | 8 | 8 GB | 64 GB | ✅ Complete |
-| 101 | Ubuntu 22.04 | 8 | 8 GB | 64 GB | ✅ Complete |
-| 102 | Ubuntu 24.04 | 8 | 8 GB | 64 GB | 📋 Template |
-| 103 | Arch Linux | 8 | 8 GB | 64 GB | 📋 Template |
-| 104 | Windows 10 | 8 | 8 GB | 64 GB | 📋 Template |
-| 105 | Windows 11 | 8 | 8 GB | 64 GB | 📋 Template |
+| VM ID | OS | vCPU | RAM | IP Address | Desktop | Status |
+|:-----:|-----|:----:|:---:|:----------:|---------|--------|
+| 100 | Fedora 42 | 8 | 8 GB | 192.168.13.80 | GNOME Wayland | ✅ Complete |
+| 101 | Ubuntu 22.04 | 8 | 8 GB | 192.168.13.81 | GNOME X11 | ✅ Complete |
+| 102 | Ubuntu 24.04 | 8 | 8 GB | 192.168.13.82 | GNOME Wayland | ✅ Complete |
+| 103 | Manjaro Linux | 8 | 8 GB | 192.168.13.83 | KDE Wayland | ✅ Complete |
+| 106 | openSUSE Leap 16.0 | 8 | 8 GB | 192.168.13.84 | KDE X11 | ✅ Complete |
 
 ### VM Configuration
 
@@ -124,9 +123,45 @@ All Linux VMs share these settings:
 
 ### VM Requirements
 
-- QEMU Guest Agent installed
+- QEMU Guest Agent installed and running
 - SSH server enabled
 - Auto-login configured (for Wayland session)
+- Passwordless sudo for test user
+
+### VM Software Prerequisites
+
+Before testing, install these packages on each VM:
+
+| Package | Fedora | Ubuntu | openSUSE | Manjaro |
+|---------|--------|--------|----------|---------|
+| QEMU Guest Agent | `qemu-guest-agent` | `qemu-guest-agent` | `qemu-guest-agent` | `qemu-guest-agent` |
+| Xvfb | `xorg-x11-server-Xvfb` | `xvfb` | `xorg-x11-server-Xvfb` | `xorg-server-xvfb` |
+| Weston | `weston` | `weston` | `weston` | `weston` |
+| SSH Server | `openssh-server` | `openssh-server` | `openssh` | `openssh` |
+
+**One-liner per distro:**
+```bash
+# Fedora
+sudo dnf install -y qemu-guest-agent xorg-x11-server-Xvfb weston openssh-server && \
+  sudo systemctl enable --now qemu-guest-agent sshd
+
+# Ubuntu
+sudo apt install -y qemu-guest-agent xvfb weston openssh-server && \
+  sudo systemctl enable --now qemu-guest-agent ssh
+
+# openSUSE
+sudo zypper install -y qemu-guest-agent xorg-x11-server-Xvfb weston openssh && \
+  sudo systemctl enable --now qemu-guest-agent sshd
+
+# Manjaro/Arch
+sudo pacman -S --noconfirm qemu-guest-agent xorg-server-xvfb weston openssh && \
+  sudo systemctl enable --now qemu-guest-agent sshd
+```
+
+**Passwordless sudo (required for package installation):**
+```bash
+echo "jean ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/jean
+```
 
 ---
 

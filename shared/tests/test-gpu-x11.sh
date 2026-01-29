@@ -47,9 +47,16 @@ else
 fi
 
 echo "Environment:"
-echo "  DISPLAY=$DISPLAY"
+echo "  DISPLAY=${DISPLAY:-unset}"
 echo "  XAUTHORITY=${XAUTHORITY:-unset}"
-echo "  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+echo "  XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-unset}"
+
+# Verify DISPLAY is set before continuing
+if [[ -z "${DISPLAY:-}" ]]; then
+    echo "ERROR: DISPLAY not set - cannot run X11 test"
+    echo "RESULT:gpu-x11:FAIL:NO_DISPLAY"
+    exit 1
+fi
 
 # Force X11 mode
 unset WAYLAND_DISPLAY

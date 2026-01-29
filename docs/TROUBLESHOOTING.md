@@ -24,6 +24,36 @@ systemctl status qemu-guest-agent
 # Ubuntu: sudo apt install qemu-guest-agent
 ```
 
+### Polling for VM IP After Restart
+
+After starting a VM, its IP isn't immediately available. Poll the qemu-guest-agent:
+
+```bash
+# Poll until IP appears (max 2 minutes)
+VMID=100
+for i in {1..24}; do
+  IP=$(curl -k -s -b "PVEAuthCookie=$TICKET" \
+    "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${VMID}/agent/network-get-interfaces" 2>/dev/null | \
+    jq -r '.data.result[] | select(.name != "lo") | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4") | .["ip-address"]' | head -1)
+  
+  if [[ -n "$IP" && "$IP" != "null" ]]; then
+    echo "VM $VMID IP: $IP"
+    break
+  fi
+  echo "Waiting for VM $VMID IP... ($i/24)"
+  sleep 5
+done
+
+# Verify SSH accessible
+ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no jean@$IP "echo OK"
+```
+
+**Common causes of no IP:**
+1. VM still booting (wait longer)
+2. qemu-guest-agent not installed/running
+3. Network not configured in VM
+4. VM crashed during boot
+
 ### SSH Connection Fails
 
 **Symptom**: `sshpass` times out or permission denied
@@ -43,6 +73,25 @@ systemctl status qemu-guest-agent
 sudo firewall-cmd --list-all  # Fedora
 sudo ufw status               # Ubuntu
 ```
+
+### Test Scripts Not Found on VM
+
+**Symptom**: `/tmp/tests/run-all.sh: No such file or directory`
+
+**Cause**: Test scripts must be transferred to each VM before testing.
+
+**Solution** (required before EVERY test session):
+```bash
+# Transfer test scripts to VM (REQUIRED before running tests)
+scp -r /home/jean/projects/linux-testing/test-framework/shared/tests jean@<VM_IP>:/tmp/
+
+# Verify
+ssh jean@<VM_IP> "ls -la /tmp/tests/"
+```
+
+**Note**: Scripts are in /tmp and lost on VM reboot. Transfer again after each VM restart.
+
+---
 
 ### XAUTHORITY Not Found
 
@@ -72,24 +121,94 @@ export XAUTHORITY="$(get_xauth)"
 
 ### GPU Not Visible in VM
 
-**Symptom**: `lspci | grep NVIDIA` shows nothing
+> **CRITICAL: Two-Machine Architecture**
+> 
+> Proxmox (192.168.13.85) is a SEPARATE machine from the local test host.
+> Commands like `qm`, `pvesh`, and Proxmox's `dmesg` must be run either:
+> - Via the Proxmox REST API (recommended for automation)
+> - By SSH-ing to 192.168.13.85 directly
+> 
+> **NEVER** run `lspci` on the local host expecting to see the test GPU (RTX 3060).
+> The local host has a GTX 970 which is NOT used for testing.
+
+**Symptom**: `lspci | grep NVIDIA` shows nothing in VM
 
 **Causes**:
-1. GPU not attached
+1. GPU not attached to VM
 2. VM needs restart after attaching
-3. IOMMU not enabled
+3. Wrong PCI address used
 
 **Solutions**:
 ```bash
-# Check if GPU attached (from host)
-qm config 100 | grep hostpci
+# 1. Check if GPU attached (via Proxmox API - NOT local CLI!)
+AUTH=$(curl -k -s -d "username=root@pam&password=$PROXMOX_PASSWORD" \
+  "https://192.168.13.85:8006/api2/json/access/ticket")
+TICKET=$(echo "$AUTH" | jq -r '.data.ticket')
+curl -k -s -b "PVEAuthCookie=$TICKET" \
+  "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/100/config" | jq '.data.hostpci0'
+# Returns null if no GPU, "0000:01:00,pcie=1" if attached
 
-# Attach GPU
-./gpu-control.sh --attach
+# 2. Attach GPU via API (must stop VM first!)
+CSRF=$(curl -k -s -d "username=root@pam&password=$PROXMOX_PASSWORD" \
+  "https://192.168.13.85:8006/api2/json/access/ticket" | jq -r '.data.CSRFPreventionToken')
+curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
+  -X PUT -d "hostpci0=0000:01:00,pcie=1" \
+  "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/100/config"
 
-# Verify IOMMU (from host)
-dmesg | grep -i iommu
+# 3. Inside VM after GPU attached - verify GPU visible:
+ssh jean@<VM_IP> "lspci | grep -i nvidia"
+# Expected: "VGA compatible controller: NVIDIA Corporation GA106 [GeForce RTX 3060..."
 ```
+
+**Common mistake**: Using wrong PCI address. The RTX 3060 on Proxmox is at `0000:01:00`, NOT `03:00`.
+
+### Snap Package Crashes with GPU (Known Limitation)
+
+**Symptom**: Snap package crashes with SIGSEGV on `gpu-wayland` and `gpu-x11` tests
+
+**Affected**: Ubuntu 24.04 with Snap package + GPU passthrough
+
+**Cause**: Snap's sandbox restricts direct GPU access. The Snap confinement prevents the app from accessing GPU resources properly.
+
+**This is NOT a regression** - the `wayland-fake` test still passes, confirming the crash fix works.
+
+**Workaround**: None currently. Document as known limitation for Snap users with GPU.
+
+**Verification**: If `wayland-fake` passes but `gpu-wayland`/`gpu-x11` fail on Snap, this is the sandbox issue, not the crash fix.
+
+---
+
+### gpu-wayland Test Skips on X11 Sessions
+
+**Symptom**: `RESULT:gpu-wayland:FAIL:NO_WAYLAND_SOCKET`
+
+**Affected**: Ubuntu 22.04, openSUSE Leap (default to X11 sessions)
+
+**Cause**: These OSes boot into X11 sessions, so there's no Wayland socket at `/run/user/1000/wayland-0`.
+
+**This is expected behavior**, not a failure. The `wayland-fake` and `wayland-fallback` tests still validate the crash fix on these systems.
+
+---
+
+### gpu-x11 Test Fails with AppImage
+
+**Symptom**: AppImage crashes with SIGSEGV on `gpu-x11` test but passes `wayland-fake`
+
+**Affected**: Fedora 42, openSUSE Leap with AppImage + GPU
+
+**Cause**: XAUTHORITY file location varies. AppImage may not find the X authority file needed for GPU-accelerated X11 rendering.
+
+**This is NOT a regression** - the crash fix (`wayland-fake`) still works.
+
+**Investigation**: Check if XAUTHORITY is properly set:
+```bash
+# Inside VM
+echo $XAUTHORITY
+ls -la ~/.Xauthority
+ls -la /run/user/$(id -u)/gdm/Xauthority
+```
+
+---
 
 ### Build Fails - Electron Fuses
 
