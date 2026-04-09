@@ -1,0 +1,54 @@
+# mosdat config template for any Electron app
+# Copy this file and customize for your app
+
+[app]
+name = "my-electron-app"
+version = "1.0.0"
+binary = "/opt/my-app/my-app"
+args = ["--no-sandbox"]
+timeout = 10
+
+[app.exit_codes]
+pass = [0, 124]     # 0 = clean exit, 124 = timeout (didn't crash)
+fail = [139, 134]   # 139 = SIGSEGV, 134 = SIGABRT
+
+# Uncomment to enable building from source:
+# [build]
+# repo_path = "/path/to/your/repo"
+# commands = ["npm install", "npm run build", "npx electron-builder --linux deb"]
+# dist_dir = "dist"
+
+[proxmox]
+host = "192.168.1.100"
+port = 8006
+user = "root@pam"
+node = "pve"
+gpu_pci_address = "0000:01:00"
+
+[defaults]
+user = "testuser"
+
+[[vm]]
+name = "ubuntu2404"
+vmid = 100
+ip = "192.168.1.50"
+desktop = "GNOME Wayland"
+
+[[vm.package]]
+format = "deb"
+install = "sudo apt install -y /tmp/{file}"
+uninstall = "sudo apt remove -y {app_name} 2>/dev/null || true"
+file_glob = "my-electron-app-*.deb"
+
+[[vm.package]]
+format = "appimage"
+install = "chmod +x /tmp/{file}"
+uninstall = "rm -f /tmp/{file}"
+app_path = "/tmp/{file}"
+file_glob = "my-electron-app-*.AppImage"
+
+# Optional: define which tests matter most
+[report]
+title = "My Electron App - Test Report"
+critical_tests = ["wayland-fake"]
+critical_description = "Validates Wayland fallback behavior."

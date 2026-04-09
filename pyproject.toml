@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mosdat"
+version = "0.2.0"
+description = "Multi-OS Desktop App Testing with GPU passthrough"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "python-dotenv>=1.0",
+    "requests>=2.28",
+]
+
+[project.scripts]
+mosdat = "automation.main:main"
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest"]

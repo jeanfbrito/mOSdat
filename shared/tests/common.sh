@@ -1,11 +1,18 @@
 #!/bin/bash
 # Shared test functions - sourced by individual test scripts
 
-APP_PATH="${APP_PATH:-/opt/Rocket.Chat/rocketchat-desktop}"
+if [ -z "$APP_PATH" ]; then
+    echo "ERROR: APP_PATH environment variable is required."
+    echo "Set it to the application binary path (e.g., APP_PATH=/opt/MyApp/myapp)"
+    exit 1
+fi
+
+APP_ARGS="${APP_ARGS:-}"
+PROCESS_NAME="${PROCESS_NAME:-$(basename "$APP_PATH")}"
 TIMEOUT="${TEST_TIMEOUT:-10}"
 
 cleanup() {
-    pkill -f "rocketchat-desktop" 2>/dev/null || true
+    pkill -f "$PROCESS_NAME" 2>/dev/null || true
     pkill -f "Xvfb" 2>/dev/null || true
     pkill -f "weston" 2>/dev/null || true
     sleep 1
@@ -27,14 +34,15 @@ setup_weston() {
 
 run_app() {
     local exit_code=0
-    timeout "$TIMEOUT" "$APP_PATH" --no-sandbox >/dev/null 2>&1 || exit_code=$?
+    # shellcheck disable=SC2086
+    timeout "$TIMEOUT" "$APP_PATH" $APP_ARGS >/dev/null 2>&1 || exit_code=$?
     echo "$exit_code"
 }
 
 report_result() {
     local name="$1"
     local exit_code="$2"
-    
+
     # Segfault=139, Abort=134
     if [[ $exit_code -eq 139 ]] || [[ $exit_code -eq 134 ]]; then
         echo "RESULT:$name:FAIL:CRASH:$exit_code"

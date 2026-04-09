@@ -1,0 +1,150 @@
+# mosdat config for Rocket.Chat Electron
+# Passwords: set MOSDAT_PROXMOX_PASSWORD and MOSDAT_VM_PASSWORD env vars (or use .env)
+
+[app]
+name = "rocketchat"
+version = "4.12.0-alpha.2"
+binary = "/opt/Rocket.Chat/rocketchat-desktop"
+args = ["--no-sandbox"]
+process_name = "rocketchat-desktop"
+timeout = 10
+
+[app.exit_codes]
+pass = [0, 124]
+fail = [139, 134]
+
+[build]
+repo_path = "/home/jean/projects/linux-testing/Rocket.Chat.Electron"
+commands = [
+    "yarn install",
+    "yarn build",
+    "yarn electron-builder --publish never --linux rpm deb AppImage snap",
+]
+dist_dir = "dist"
+checkout = true
+
+[proxmox]
+host = "192.168.13.85"
+port = 8006
+user = "root@pam"
+node = "pve"
+gpu_pci_address = "0000:01:00"
+
+[defaults]
+user = "jean"
+
+# --- VMs ---
+
+[[vm]]
+name = "fedora42"
+vmid = 100
+ip = "192.168.13.80"
+desktop = "GNOME Wayland"
+
+[[vm.package]]
+format = "rpm"
+install = "sudo dnf install -y /tmp/{file}"
+uninstall = "sudo dnf remove -y {app_name} 2>/dev/null || true"
+file_glob = "rocketchat-*.rpm"
+
+[[vm.package]]
+format = "appimage"
+install = "chmod +x /tmp/{file}"
+uninstall = "rm -f /tmp/{file}"
+app_path = "/tmp/{file}"
+file_glob = "rocketchat-*-linux-x86_64.AppImage"
+
+[[vm]]
+name = "ubuntu2204"
+vmid = 101
+ip = "192.168.13.81"
+desktop = "GNOME X11"
+
+[[vm.package]]
+format = "deb"
+install = "sudo apt install -y /tmp/{file}"
+uninstall = "sudo apt remove -y {app_name} 2>/dev/null || true"
+file_glob = "rocketchat-*.deb"
+
+[[vm.package]]
+format = "appimage"
+install = "chmod +x /tmp/{file}"
+uninstall = "rm -f /tmp/{file}"
+app_path = "/tmp/{file}"
+file_glob = "rocketchat-*-linux-x86_64.AppImage"
+
+[[vm.package]]
+format = "snap"
+install = "sudo snap install --dangerous /tmp/{file}"
+uninstall = "sudo snap remove rocketchat-desktop 2>/dev/null || true"
+app_path = "/snap/bin/rocketchat-desktop"
+file_glob = "rocketchat-*.snap"
+
+[[vm]]
+name = "ubuntu2404"
+vmid = 102
+ip = "192.168.13.82"
+desktop = "GNOME Wayland"
+
+[[vm.package]]
+format = "deb"
+install = "sudo apt install -y /tmp/{file}"
+uninstall = "sudo apt remove -y {app_name} 2>/dev/null || true"
+file_glob = "rocketchat-*.deb"
+
+[[vm.package]]
+format = "appimage"
+install = "chmod +x /tmp/{file}"
+uninstall = "rm -f /tmp/{file}"
+app_path = "/tmp/{file}"
+file_glob = "rocketchat-*-linux-x86_64.AppImage"
+
+[[vm.package]]
+format = "snap"
+install = "sudo snap install --dangerous /tmp/{file}"
+uninstall = "sudo snap remove rocketchat-desktop 2>/dev/null || true"
+app_path = "/snap/bin/rocketchat-desktop"
+file_glob = "rocketchat-*.snap"
+
+[[vm]]
+name = "manjaro"
+vmid = 103
+ip = "192.168.13.83"
+desktop = "KDE Wayland"
+
+[[vm.package]]
+format = "appimage"
+install = "chmod +x /tmp/{file}"
+uninstall = "rm -f /tmp/{file}"
+app_path = "/tmp/{file}"
+file_glob = "rocketchat-*-linux-x86_64.AppImage"
+
+[[vm]]
+name = "opensuse"
+vmid = 106
+ip = "192.168.13.84"
+desktop = "KDE X11"
+
+[[vm.package]]
+format = "rpm"
+install = "sudo zypper install -y --allow-unsigned-rpm /tmp/{file}"
+uninstall = "sudo zypper remove -y {app_name} 2>/dev/null || true"
+file_glob = "rocketchat-*.rpm"
+
+[[vm.package]]
+format = "appimage"
+install = "chmod +x /tmp/{file}"
+uninstall = "rm -f /tmp/{file}"
+app_path = "/tmp/{file}"
+file_glob = "rocketchat-*-linux-x86_64.AppImage"
+
+# --- Report ---
+
+[report]
+title = "Rocket.Chat Electron - mOSdat Test Report"
+critical_tests = ["wayland-fake"]
+critical_description = "The wayland-fake test validates the Wayland crash fix (GitHub #3154). This test MUST pass on all configurations."
+
+[report.known_issues]
+"snap+gpu" = "Snap sandbox blocks GPU access"
+"rpm+gpu-x11" = "RPM sandbox XAUTHORITY issue"
