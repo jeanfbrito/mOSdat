@@ -138,6 +138,34 @@ uninstall = "rm -f /tmp/{file}"
 app_path = "/tmp/{file}"
 file_glob = "rocketchat-*-linux-x86_64.AppImage"
 
+# --- Windows VMs ---
+
+[[vm]]
+name = "windows10"
+vmid = 104
+ip = "192.168.13.90"
+desktop = "Windows 10"
+os_type = "windows"
+
+[[vm.package]]
+format = "exe"
+install = "Start-Process -Wait -FilePath 'C:\\tmp\\{file}' -ArgumentList '/S'"
+uninstall = "Start-Process -Wait -FilePath 'C:\\Program Files\\Rocket.Chat\\Uninstall Rocket.Chat.exe' -ArgumentList '/S'"
+file_glob = "rocketchat-*.exe"
+
+[[vm]]
+name = "windows11"
+vmid = 105
+ip = "192.168.13.91"
+desktop = "Windows 11"
+os_type = "windows"
+
+[[vm.package]]
+format = "exe"
+install = "Start-Process -Wait -FilePath 'C:\\tmp\\{file}' -ArgumentList '/S'"
+uninstall = "Start-Process -Wait -FilePath 'C:\\Program Files\\Rocket.Chat\\Uninstall Rocket.Chat.exe' -ArgumentList '/S'"
+file_glob = "rocketchat-*.exe"
+
 # --- Report ---
 
 [report]

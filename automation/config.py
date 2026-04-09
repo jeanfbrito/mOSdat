@@ -72,6 +72,11 @@ class VMConfig:
     desktop: str
     user: str = ""
     password: str = ""
+    os_type: str = "linux"
+
+    @property
+    def is_windows(self) -> bool:
+        return self.os_type == "windows"
 
 
 @dataclass
@@ -122,6 +127,10 @@ class ProjectConfig:
     @property
     def tests_path(self) -> Path:
         return self.framework_path / "shared" / "tests"
+
+    @property
+    def tests_windows_path(self) -> Path:
+        return self.framework_path / "shared" / "tests-windows"
 
     @property
     def state_file(self) -> Path:
@@ -213,6 +222,7 @@ def load_config(config_path: Path) -> ProjectConfig:
             packages=packages,
             user=vm_raw.get("user", default_user),
             password=vm_raw.get("password", default_password),
+            os_type=vm_raw.get("os_type", "linux"),
         ))
 
     # Test scenarios (optional — auto-discover if absent)
