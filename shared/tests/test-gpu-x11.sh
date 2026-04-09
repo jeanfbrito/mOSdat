@@ -63,12 +63,12 @@ unset WAYLAND_DISPLAY
 export XDG_SESSION_TYPE=x11
 
 # Kill any existing instances
-pkill -f "rocketchat-desktop" 2>/dev/null || true
+pkill -f "$PROCESS_NAME" 2>/dev/null || true
 sleep 1
 
 # Run the app with real X11
 echo "Starting app with real X11 session..."
 code=0
-timeout "$TIMEOUT" "$APP_PATH" --no-sandbox >/dev/null 2>&1 || code=$?
+timeout "$TIMEOUT" "$APP_PATH" $APP_ARGS >/dev/null 2>&1 || code=$?
 
 report_result "gpu-x11" "$code"
