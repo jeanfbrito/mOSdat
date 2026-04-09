@@ -23,7 +23,7 @@ class TestRunner:
     def __init__(self, config: ProjectConfig):
         self.config = config
         self.api = ProxmoxAPI(config.proxmox)
-        self.gpu = GPUManager(self.api, config.proxmox)
+        self.gpu = GPUManager(self.api, config.proxmox, config.vms)
         self.state_manager = StateManager(config.state_file, config.version)
         self._pkg_filenames: dict[str, str] = {}
 

@@ -1,7 +1,7 @@
 import time
 from typing import Optional
 
-from .config import ProxmoxConfig, VMConfig, ALL_VMS
+from .config import ProxmoxConfig, VMConfig
 from .proxmox import ProxmoxAPI
 from .ssh import SSHClient, wait_for_ssh
 
@@ -11,12 +11,13 @@ class GPUError(Exception):
 
 
 class GPUManager:
-    def __init__(self, api: ProxmoxAPI, config: ProxmoxConfig):
+    def __init__(self, api: ProxmoxAPI, config: ProxmoxConfig, vms: list[VMConfig] | None = None):
         self.api = api
         self.config = config
+        self.vms = vms or []
 
     def find_current_owner(self) -> Optional[int]:
-        for vm in ALL_VMS:
+        for vm in self.vms:
             if self.api.has_gpu_attached(vm.vmid):
                 return vm.vmid
         return None

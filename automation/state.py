@@ -95,10 +95,11 @@ class State:
             return False
         return self.results[key].status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED)
 
-    def get_pending_tests(self, gpu: bool) -> list[tuple[str, str]]:
-        from .config import ALL_VMS
+    def get_pending_tests(self, gpu: bool, vms: list | None = None) -> list[tuple[str, str]]:
         pending = []
-        for vm in ALL_VMS:
+        if vms is None:
+            return pending
+        for vm in vms:
             for pkg in vm.packages:
                 if not self.is_test_completed(vm.name, pkg.format, gpu):
                     pending.append((vm.name, pkg.format))
