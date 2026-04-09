@@ -35,3 +35,4 @@ node_modules/
 *.tmp
 *.temp
 /tmp/
+__pycache__/
