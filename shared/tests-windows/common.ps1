@@ -2,8 +2,8 @@
 $ErrorActionPreference = "Stop"
 
 if (-not $env:APP_PATH) {
-    Write-Host "ERROR: APP_PATH environment variable is required."
-    Write-Host "Set it to the application executable path (e.g., APP_PATH='C:\Program Files\Rocket.Chat\Rocket.Chat.exe')"
+    [Console]::WriteLine("ERROR: APP_PATH environment variable is required.")
+    [Console]::WriteLine("Set it to the application executable path (e.g., APP_PATH='C:\Program Files\Rocket.Chat\Rocket.Chat.exe')")
     exit 1
 }
 
@@ -21,18 +21,39 @@ function Run-App {
     $exitCode = 0
     try {
         Cleanup
-        $proc = Start-Process -FilePath $AppPath -ArgumentList $AppArgs -PassThru -ErrorAction Stop
-        $exited = $proc.WaitForExit($Timeout * 1000)
-        if (-not $exited) {
-            # Timeout - app ran without crashing = PASS
-            $proc | Stop-Process -Force -ErrorAction SilentlyContinue
-            $exitCode = 124  # Match Linux timeout convention
+        $startParams = @{
+            FilePath    = $AppPath
+            PassThru    = $true
+            ErrorAction = "Stop"
+        }
+        if ($AppArgs.Count -gt 0) {
+            $startParams["ArgumentList"] = $AppArgs
+        }
+        $proc = Start-Process @startParams
+
+        # Wait up to 5s for the process (or a child with same name) to appear
+        $running = $false
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Milliseconds 500
+            if (-not $proc.HasExited) { $running = $true; break }
+            if (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue) { $running = $true; break }
+        }
+        if (-not $running) {
+            [Console]::WriteLine("ERROR: Process did not appear within 5s")
+            $exitCode = -1
         } else {
-            $exitCode = $proc.ExitCode
+            $exited = $proc.WaitForExit(($Timeout - 5) * 1000)
+            if (-not $exited) {
+                # Timeout - app ran without crashing = PASS
+                $proc | Stop-Process -Force -ErrorAction SilentlyContinue
+                $exitCode = 124  # Match Linux timeout convention
+            } else {
+                $exitCode = $proc.ExitCode
+            }
         }
     } catch {
-        Write-Host "ERROR: Failed to start app: $_"
-        $exitCode = 1
+        [Console]::WriteLine("ERROR: Failed to start app: $_")
+        $exitCode = -1  # Treat launch failure as crash
     } finally {
         Cleanup
     }
@@ -50,13 +71,13 @@ function Report-Result {
     $isCrash = ($ExitCode -lt -1) -or ($ExitCode -eq -1073741819) -or ($ExitCode -eq -1073740791)
 
     if ($isCrash) {
-        Write-Host "RESULT:${Name}:FAIL:CRASH:$ExitCode"
+        [Console]::WriteLine("RESULT:${Name}:FAIL:CRASH:$ExitCode")
         return 1
     } elseif ($ExitCode -eq 124) {
-        Write-Host "RESULT:${Name}:PASS:TIMEOUT:$ExitCode"
+        [Console]::WriteLine("RESULT:${Name}:PASS:TIMEOUT:$ExitCode")
         return 0
     } else {
-        Write-Host "RESULT:${Name}:PASS:$ExitCode"
+        [Console]::WriteLine("RESULT:${Name}:PASS:$ExitCode")
         return 0
     }
 }
