@@ -1,0 +1,55 @@
+{
+  "version": "4.12.0-alpha.2",
+  "phase": "done",
+  "current_vm": null,
+  "current_package": null,
+  "gpu_attached_to": null,
+  "results": {
+    "fedora42-rpm-no-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "rpm",
+      "gpu": false,
+      "status": "failed",
+      "exit_code": null,
+      "log_file": null,
+      "started_at": null,
+      "finished_at": "2026-04-09T12:45:37.693728",
+      "error_message": "HTTPSConnectionPool(host='192.168.13.85', port=8006): Max retries exceeded with url: /api2/json/access/ticket (Caused by NewConnectionError(\"HTTPSConnection(host='192.168.13.85', port=8006): Failed to establish a new connection: [Errno 113] No route to host\"))"
+    },
+    "fedora42-appimage-no-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "failed",
+      "exit_code": null,
+      "log_file": null,
+      "started_at": null,
+      "finished_at": "2026-04-09T12:45:37.693764",
+      "error_message": "HTTPSConnectionPool(host='192.168.13.85', port=8006): Max retries exceeded with url: /api2/json/access/ticket (Caused by NewConnectionError(\"HTTPSConnection(host='192.168.13.85', port=8006): Failed to establish a new connection: [Errno 113] No route to host\"))"
+    },
+    "fedora42-rpm-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "rpm",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": null,
+      "log_file": null,
+      "started_at": null,
+      "finished_at": "2026-04-09T12:45:40.765637",
+      "error_message": "HTTPSConnectionPool(host='192.168.13.85', port=8006): Max retries exceeded with url: /api2/json/access/ticket (Caused by NewConnectionError(\"HTTPSConnection(host='192.168.13.85', port=8006): Failed to establish a new connection: [Errno 113] No route to host\"))"
+    },
+    "fedora42-appimage-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": null,
+      "log_file": null,
+      "started_at": null,
+      "finished_at": "2026-04-09T12:45:40.765664",
+      "error_message": "HTTPSConnectionPool(host='192.168.13.85', port=8006): Max retries exceeded with url: /api2/json/access/ticket (Caused by NewConnectionError(\"HTTPSConnection(host='192.168.13.85', port=8006): Failed to establish a new connection: [Errno 113] No route to host\"))"
+    }
+  },
+  "started_at": "2026-04-09T12:45:34.625066",
+  "last_updated": "2026-04-09T13:18:26.801548"
+}

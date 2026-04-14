@@ -1,0 +1,55 @@
+{
+  "version": "4.12.0-alpha.2",
+  "phase": "done",
+  "current_vm": "fedora42",
+  "current_package": "appimage",
+  "gpu_attached_to": null,
+  "results": {
+    "fedora42-rpm-no-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "rpm",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "results/2026-04-09_fedora42-test/fedora42-rpm-no-gpu.log",
+      "started_at": "2026-04-09T13:18:47.940621",
+      "finished_at": "2026-04-09T13:19:23.394376",
+      "error_message": null
+    },
+    "fedora42-appimage-no-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "results/2026-04-09_fedora42-test/fedora42-appimage-no-gpu.log",
+      "started_at": "2026-04-09T13:19:23.395047",
+      "finished_at": "2026-04-09T13:19:50.215949",
+      "error_message": null
+    },
+    "fedora42-rpm-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "rpm",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "results/2026-04-09_fedora42-test/fedora42-rpm-gpu.log",
+      "started_at": "2026-04-09T13:20:16.197605",
+      "finished_at": "2026-04-09T13:20:31.123918",
+      "error_message": null
+    },
+    "fedora42-appimage-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "results/2026-04-09_fedora42-test/fedora42-appimage-gpu.log",
+      "started_at": "2026-04-09T13:20:31.124729",
+      "finished_at": "2026-04-09T13:20:39.561681",
+      "error_message": null
+    }
+  },
+  "started_at": "2026-04-09T13:18:35.656296",
+  "last_updated": "2026-04-09T13:20:43.094695"
+}

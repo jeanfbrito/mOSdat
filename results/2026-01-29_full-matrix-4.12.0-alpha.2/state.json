@@ -1,0 +1,253 @@
+{
+  "version": "4.12.0-alpha.2",
+  "phase": "done",
+  "current_vm": "opensuse",
+  "current_package": "appimage",
+  "gpu_attached_to": null,
+  "results": {
+    "fedora42-rpm-no-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "rpm",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/fedora42-rpm-no-gpu.log",
+      "started_at": "2026-01-29T13:04:55.817200",
+      "finished_at": "2026-01-29T13:05:20.156957",
+      "error_message": null
+    },
+    "fedora42-appimage-no-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/fedora42-appimage-no-gpu.log",
+      "started_at": "2026-01-29T13:05:20.157624",
+      "finished_at": "2026-01-29T13:05:46.752688",
+      "error_message": null
+    },
+    "ubuntu2204-deb-no-gpu": {
+      "vm_name": "ubuntu2204",
+      "package_format": "deb",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2204-deb-no-gpu.log",
+      "started_at": "2026-01-29T13:05:48.106276",
+      "finished_at": "2026-01-29T13:06:12.553422",
+      "error_message": null
+    },
+    "ubuntu2204-appimage-no-gpu": {
+      "vm_name": "ubuntu2204",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2204-appimage-no-gpu.log",
+      "started_at": "2026-01-29T13:06:12.554202",
+      "finished_at": "2026-01-29T13:06:30.739851",
+      "error_message": null
+    },
+    "ubuntu2204-snap-no-gpu": {
+      "vm_name": "ubuntu2204",
+      "package_format": "snap",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2204-snap-no-gpu.log",
+      "started_at": "2026-01-29T13:06:30.740653",
+      "finished_at": "2026-01-29T13:06:57.972732",
+      "error_message": null
+    },
+    "ubuntu2404-deb-no-gpu": {
+      "vm_name": "ubuntu2404",
+      "package_format": "deb",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2404-deb-no-gpu.log",
+      "started_at": "2026-01-29T13:06:59.325281",
+      "finished_at": "2026-01-29T13:07:23.807839",
+      "error_message": null
+    },
+    "ubuntu2404-appimage-no-gpu": {
+      "vm_name": "ubuntu2404",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2404-appimage-no-gpu.log",
+      "started_at": "2026-01-29T13:07:23.809333",
+      "finished_at": "2026-01-29T13:07:42.016053",
+      "error_message": null
+    },
+    "ubuntu2404-snap-no-gpu": {
+      "vm_name": "ubuntu2404",
+      "package_format": "snap",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2404-snap-no-gpu.log",
+      "started_at": "2026-01-29T13:07:42.017027",
+      "finished_at": "2026-01-29T13:08:09.487249",
+      "error_message": null
+    },
+    "manjaro-appimage-no-gpu": {
+      "vm_name": "manjaro",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/manjaro-appimage-no-gpu.log",
+      "started_at": "2026-01-29T13:08:10.571155",
+      "finished_at": "2026-01-29T13:09:52.622253",
+      "error_message": null
+    },
+    "opensuse-rpm-no-gpu": {
+      "vm_name": "opensuse",
+      "package_format": "rpm",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/opensuse-rpm-no-gpu.log",
+      "started_at": "2026-01-29T13:09:53.835969",
+      "finished_at": "2026-01-29T13:10:20.395629",
+      "error_message": null
+    },
+    "opensuse-appimage-no-gpu": {
+      "vm_name": "opensuse",
+      "package_format": "appimage",
+      "gpu": false,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/opensuse-appimage-no-gpu.log",
+      "started_at": "2026-01-29T13:10:20.396957",
+      "finished_at": "2026-01-29T13:10:49.061424",
+      "error_message": null
+    },
+    "fedora42-rpm-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "rpm",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/fedora42-rpm-gpu.log",
+      "started_at": "2026-01-29T13:11:06.865114",
+      "finished_at": "2026-01-29T13:11:20.003727",
+      "error_message": null
+    },
+    "fedora42-appimage-gpu": {
+      "vm_name": "fedora42",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/fedora42-appimage-gpu.log",
+      "started_at": "2026-01-29T13:11:20.005055",
+      "finished_at": "2026-01-29T13:11:28.326254",
+      "error_message": null
+    },
+    "ubuntu2204-deb-gpu": {
+      "vm_name": "ubuntu2204",
+      "package_format": "deb",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2204-deb-gpu.log",
+      "started_at": "2026-01-29T13:11:52.436020",
+      "finished_at": "2026-01-29T13:12:00.943752",
+      "error_message": null
+    },
+    "ubuntu2204-appimage-gpu": {
+      "vm_name": "ubuntu2204",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2204-appimage-gpu.log",
+      "started_at": "2026-01-29T13:12:00.945143",
+      "finished_at": "2026-01-29T13:12:07.420110",
+      "error_message": null
+    },
+    "ubuntu2204-snap-gpu": {
+      "vm_name": "ubuntu2204",
+      "package_format": "snap",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2204-snap-gpu.log",
+      "started_at": "2026-01-29T13:12:07.421710",
+      "finished_at": "2026-01-29T13:12:19.269278",
+      "error_message": null
+    },
+    "ubuntu2404-deb-gpu": {
+      "vm_name": "ubuntu2404",
+      "package_format": "deb",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2404-deb-gpu.log",
+      "started_at": "2026-01-29T13:12:43.366563",
+      "finished_at": "2026-01-29T13:12:51.838622",
+      "error_message": null
+    },
+    "ubuntu2404-appimage-gpu": {
+      "vm_name": "ubuntu2404",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2404-appimage-gpu.log",
+      "started_at": "2026-01-29T13:12:51.840197",
+      "finished_at": "2026-01-29T13:12:59.317315",
+      "error_message": null
+    },
+    "ubuntu2404-snap-gpu": {
+      "vm_name": "ubuntu2404",
+      "package_format": "snap",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/ubuntu2404-snap-gpu.log",
+      "started_at": "2026-01-29T13:12:59.318903",
+      "finished_at": "2026-01-29T13:13:12.921927",
+      "error_message": null
+    },
+    "manjaro-appimage-gpu": {
+      "vm_name": "manjaro",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "passed",
+      "exit_code": 0,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/manjaro-appimage-gpu.log",
+      "started_at": "2026-01-29T13:13:42.593374",
+      "finished_at": "2026-01-29T13:13:51.023128",
+      "error_message": null
+    },
+    "opensuse-rpm-gpu": {
+      "vm_name": "opensuse",
+      "package_format": "rpm",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/opensuse-rpm-gpu.log",
+      "started_at": "2026-01-29T13:14:27.901137",
+      "finished_at": "2026-01-29T13:14:38.435208",
+      "error_message": null
+    },
+    "opensuse-appimage-gpu": {
+      "vm_name": "opensuse",
+      "package_format": "appimage",
+      "gpu": true,
+      "status": "failed",
+      "exit_code": 1,
+      "log_file": "/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2/opensuse-appimage-gpu.log",
+      "started_at": "2026-01-29T13:14:38.436953",
+      "finished_at": "2026-01-29T13:14:45.791293",
+      "error_message": null
+    }
+  },
+  "started_at": "2026-01-29T13:04:54.943052",
+  "last_updated": "2026-01-29T13:14:49.338737"
+}
