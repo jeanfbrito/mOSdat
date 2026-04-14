@@ -10,7 +10,9 @@
 | User | jean |
 | Password | cb6wist3 |
 
-## Status: TEMPLATE - NOT YET CONFIGURED
+## Status: PROVISIONED
+
+VM is running at 192.168.13.87 (VMID 104).
 
 Windows testing is fundamentally different from Linux Wayland testing.
 

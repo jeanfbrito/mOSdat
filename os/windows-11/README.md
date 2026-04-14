@@ -10,9 +10,9 @@
 | User | jean |
 | Password | cb6wist3 |
 
-## Status: TEMPLATE - NEEDS ISO
+## Status: PROVISIONED
 
-Windows 11 ISO needs to be downloaded and added to Proxmox storage.
+VM is running at 192.168.13.86 (VMID 105).
 
 ## Windows 11 Requirements
 
