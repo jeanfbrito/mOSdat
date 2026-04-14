@@ -18,3 +18,6 @@ mosdat = "automation.main:main"
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["automation"]

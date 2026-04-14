@@ -25,10 +25,12 @@ class VMOperations:
         else:
             app_path = app.binary
 
+        process_name = package.process_name or app.process_name
+
         if self.vm.is_windows:
             parts = [
                 f"$env:APP_PATH='{app_path}';",
-                f"$env:PROCESS_NAME='{app.process_name}';",
+                f"$env:PROCESS_NAME='{process_name}';",
                 f"$env:TEST_TIMEOUT='{app.timeout}';",
             ]
             if app.args:
@@ -37,7 +39,7 @@ class VMOperations:
         else:
             parts = [
                 f"APP_PATH={app_path}",
-                f"PROCESS_NAME={app.process_name}",
+                f"PROCESS_NAME={process_name}",
                 f"TEST_TIMEOUT={app.timeout}",
             ]
             if app.args:
@@ -71,9 +73,9 @@ class VMOperations:
         log_fn(f"Transferring test scripts to {self.vm.name}...")
 
         if self.vm.is_windows:
-            self.ssh.run(f"if (Test-Path {self._tests_dir}) {{ Remove-Item -Recurse -Force {self._tests_dir} }}")
-            self.ssh.run(f"New-Item -ItemType Directory -Force -Path {self._tests_dir}")
-            result = self.ssh.scp_dir_to(self.config.tests_windows_path, f"{self._tmp_dir}\\")
+            self.ssh.run(f"if (Test-Path '{self._tests_dir}') {{ Remove-Item -Recurse -Force '{self._tests_dir}' }}")
+            # scp -r src dest: when dest doesn't exist, creates dest with contents of src
+            result = self.ssh.scp_dir_to(self.config.tests_windows_path, f"{self._tmp_dir}\\tests")
             if not result.success:
                 raise VMError(f"Failed to transfer tests: {result.stderr}")
             return True
@@ -123,7 +125,10 @@ class VMOperations:
         env = self._app_env(package, pkg_filename)
 
         if self.vm.is_windows:
-            cmd = f"powershell.exe -ExecutionPolicy Bypass -Command \"{env} & '{self._tests_dir}\\run-all.ps1'\""
+            import base64
+            ps_script = f"$ProgressPreference='SilentlyContinue'; {env} & '{self._tests_dir}\\run-all.ps1'"
+            encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+            cmd = f"powershell.exe -ExecutionPolicy Bypass -EncodedCommand {encoded}"
         else:
             script = "/tmp/tests/run-gpu-tests.sh" if gpu else "/tmp/tests/run-all.sh"
             cmd = f"{env} {script}"

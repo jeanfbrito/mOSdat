@@ -55,6 +55,7 @@ class Package:
     install_cmd: str
     uninstall_cmd: str = ""
     app_path: Optional[str] = None
+    process_name: Optional[str] = None
     file_glob: str = ""
 
     def get_file_glob(self, app_name: str, version: str) -> str:
@@ -205,6 +206,7 @@ def load_config(config_path: Path) -> ProjectConfig:
                 install_cmd=pkg_raw["install"],
                 uninstall_cmd=pkg_raw.get("uninstall", ""),
                 app_path=pkg_raw.get("app_path"),
+                process_name=pkg_raw.get("process_name"),
                 file_glob=pkg_raw.get("file_glob", ""),
             )
             # Resolve {app_name} templates
