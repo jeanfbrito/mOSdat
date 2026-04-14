@@ -137,3 +137,20 @@ class ProxmoxAPI:
 
     def detach_gpu(self, vmid: int) -> None:
         self.set_vm_config(vmid, delete="hostpci0")
+
+    def screenshot(self, vmid: int) -> bytes:
+        """Capture a PNG screenshot of the VM display via the Proxmox API.
+
+        Returns raw PNG bytes.  Works on any guest OS regardless of session
+        type — no guest-side scripts required.
+        """
+        self._ensure_auth()
+        url = f"{self.config.base_url}/nodes/{self.config.node}/qemu/{vmid}/screenshot"
+        response = self._session.get(
+            url,
+            headers={"CSRFPreventionToken": self._csrf_token or ""},
+            cookies={"PVEAuthCookie": self._ticket or ""},
+        )
+        if response.status_code >= 400:
+            raise ProxmoxAPIError(f"Screenshot API error {response.status_code}: {response.text[:200]}")
+        return response.content

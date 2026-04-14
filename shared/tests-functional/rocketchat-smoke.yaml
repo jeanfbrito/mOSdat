@@ -1,0 +1,45 @@
+name: "Rocket.Chat smoke test"
+# Tests: launch app, connect to workspace, login, send a message, verify it appears
+# Credentials and workspace come from [functional] section in the TOML config
+# {app_path} is injected per-VM from the installed package's app_path
+
+steps:
+  - launch: "{app_path}"
+    wait: 10
+    focus: "Rocket.Chat"
+    verify: "the Rocket.Chat application window is open and visible"
+    verify_timeout: 20
+    retries: 2
+
+  - localize: "the server address or workspace URL input field"
+    then_key_pre: "ctrl+a"
+    then_type: "{workspace_url}"
+    then_key: "enter"
+    verify: "a login form with username or email and password fields is visible"
+    verify_timeout: 25
+    retries: 3
+
+  - localize: "the username or email input field in the login form"
+    then_type: "{test_user}"
+    retries: 3
+
+  - localize: "the password input field in the login form"
+    then_type: "{test_password}"
+    retries: 3
+
+  - localize: "the Login or Sign In submit button"
+    verify: "a chat sidebar with channels or rooms is visible on the left side"
+    verify_timeout: 30
+    retries: 3
+
+  - localize: "the General channel in the left sidebar"
+    verify: "the General channel message history is open"
+    verify_timeout: 10
+    retries: 3
+
+  - localize: "the message input box or composer at the bottom of the chat"
+    then_type: "mosdat functional test {timestamp}"
+    then_key: "enter"
+    verify: "a message containing 'mosdat functional test' appears in the chat history"
+    verify_timeout: 10
+    retries: 3

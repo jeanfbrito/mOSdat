@@ -85,6 +85,14 @@ class SSHClient:
         except subprocess.TimeoutExpired:
             return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
 
+    def scp_from(self, remote_path: str, local_path: Path) -> SSHResult:
+        scp_cmd = ["scp"] + self._base_opts + [f"{self.user}@{self.host}:{remote_path}", str(local_path)]
+        try:
+            result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+            return SSHResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        except subprocess.TimeoutExpired:
+            return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
+
     def scp_dir_to(self, local_path: Path, remote_path: str) -> SSHResult:
         scp_cmd = ["scp", "-r"] + self._base_opts + [str(local_path), f"{self.user}@{self.host}:{remote_path}"]
         try:

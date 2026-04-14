@@ -88,6 +88,21 @@ class TestScenario:
 
 
 @dataclass
+class Holo2Config:
+    base_url: str = "http://192.168.13.62:5001/v1"
+    model: str = "holo2-4b"
+
+
+@dataclass
+class FunctionalConfig:
+    enabled: bool = False
+    workspace_url: str = ""
+    test_user: str = ""
+    test_password: str = ""
+    tests_dir: Optional[Path] = None   # directory containing YAML test files
+
+
+@dataclass
 class ReportConfig:
     title: str = "mOSdat Test Report"
     critical_tests: list[str] = field(default_factory=list)
@@ -103,6 +118,8 @@ class ProjectConfig:
     tests: list[TestScenario]
     report: ReportConfig
     build: Optional[BuildConfig] = None
+    holo2: Holo2Config = field(default_factory=Holo2Config)
+    functional: FunctionalConfig = field(default_factory=FunctionalConfig)
     framework_path: Path = field(default_factory=lambda: Path(__file__).parent.parent)
     results_dir: Path = field(default_factory=Path)
     skip_build: bool = False
@@ -254,6 +271,25 @@ def load_config(config_path: Path) -> ProjectConfig:
         known_issues=known_issues,
     )
 
+    # Holo2 config
+    h2_raw = raw.get("holo2", {})
+    holo2 = Holo2Config(
+        base_url=h2_raw.get("base_url", "http://192.168.13.62:5001/v1"),
+        model=h2_raw.get("model", "holo2-4b"),
+    )
+
+    # Functional test config
+    fn_raw = raw.get("functional", {})
+    framework_path = Path(__file__).parent.parent
+    default_tests_dir = framework_path / "shared" / "tests-functional"
+    functional = FunctionalConfig(
+        enabled=fn_raw.get("enabled", False),
+        workspace_url=fn_raw.get("workspace_url", ""),
+        test_user=fn_raw.get("test_user", os.getenv("MOSDAT_TEST_USER", "")),
+        test_password=fn_raw.get("test_password", os.getenv("MOSDAT_TEST_PASSWORD", "")),
+        tests_dir=Path(fn_raw["tests_dir"]) if "tests_dir" in fn_raw else default_tests_dir,
+    )
+
     return ProjectConfig(
         app=app,
         proxmox=proxmox,
@@ -261,4 +297,6 @@ def load_config(config_path: Path) -> ProjectConfig:
         vms=vms,
         tests=tests,
         report=report,
+        holo2=holo2,
+        functional=functional,
     )

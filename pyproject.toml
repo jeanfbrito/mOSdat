@@ -18,6 +18,7 @@ mosdat = "automation.main:main"
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest"]
+functional = ["pillow>=10.0", "openai>=1.0", "pyyaml>=6.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["automation"]
