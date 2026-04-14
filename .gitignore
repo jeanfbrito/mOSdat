@@ -36,3 +36,6 @@ node_modules/
 *.temp
 /tmp/
 __pycache__/
+
+# Automation state
+.sisyphus/
