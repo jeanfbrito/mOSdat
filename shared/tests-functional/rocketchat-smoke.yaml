@@ -1,21 +1,47 @@
 name: "Rocket.Chat smoke test"
-# Tests: launch app, connect to workspace, login, send a message, verify it appears
-# Credentials and workspace come from [functional] section in the TOML config
-# {app_path} is injected per-VM from the installed package's app_path
+# Tests: clean install state, launch app, add workspace, login, send message, verify it appears.
+# Credentials and workspace come from [functional] section in the TOML config.
+# {app_path} is injected per-VM from the installed package's app_path.
 
 steps:
+  # ── Pre-test cleanup: guarantee a clean-slate Rocket.Chat ───────────────
+  # Kill any running Rocket.Chat, wait for the process to settle, then wipe
+  # its Electron userData so the "add server" flow appears on next launch.
+  - shell: |
+      taskkill /F /IM Rocket.Chat.exe 2>$null | Out-Null
+      # Also kill stale browser/widget windows left over from earlier runs —
+      # they float on top of Rocket.Chat and steal clicks.
+      taskkill /F /IM msedge.exe 2>$null | Out-Null
+      taskkill /F /IM Widgets.exe 2>$null | Out-Null
+      Start-Sleep -Seconds 2
+      # Wipe the entire Electron userData dir — config.json/servers.json alone
+      # leave Session Storage, Local Storage, IndexedDB, and Cookies behind,
+      # and the app auto-resumes the previous workspace login on next launch.
+      Remove-Item -Recurse -Force "$env:APPDATA\Rocket.Chat" -ErrorAction SilentlyContinue
+      Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Rocket.Chat\User Data" -ErrorAction SilentlyContinue
+      Write-Output 'cleanup:ok'
+
   - launch: "{app_path}"
     wait: 10
     focus: "Rocket.Chat"
-    verify: "the Rocket.Chat application window is open and visible"
+    # Strict verify: RC must actually be the foreground app, not just "open".
+    # "Open" is true even when RC is buried behind Edge or a Microsoft popup.
+    verify: "the Rocket.Chat application is the foreground window taking most of the screen, with the red rocket.chat logo clearly visible in the center of the window"
     verify_timeout: 20
     retries: 2
 
-  - localize: "the server address or workspace URL input field"
-    then_key_pre: "ctrl+a"
+  # ── With a wiped config, Rocket.Chat opens directly to the server URL
+  #    form (rocket.chat logo + "Enter your server URL" input + Connect).
+  #    Each localize click implicitly brings Rocket.Chat to the foreground,
+  #    so per-step focus: calls aren't needed.
+  - localize: "the Enter your server URL input text field below the rocket.chat logo"
     then_type: "{workspace_url}"
     then_key: "enter"
-    verify: "a login form with username or email and password fields is visible"
+    # Strict verify: login page is unique because it has BOTH an email/username
+    # field AND a labeled Password field — URL page has neither. This catches
+    # "page didn't transition yet" so we don't move on prematurely.
+    verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
+    verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
     verify_timeout: 25
     retries: 3
 
@@ -25,21 +51,27 @@ steps:
 
   - localize: "the password input field in the login form"
     then_type: "{test_password}"
-    retries: 3
-
-  - localize: "the Login or Sign In submit button"
-    verify: "a chat sidebar with channels or rooms is visible on the left side"
+    then_key: "enter"
+    # Strict verify: after login, the sidebar and a main chat area are visible
+    # AND the Password field is gone. "Password field still visible" means
+    # login didn't succeed — error or credentials rejected.
+    verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+    verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
     verify_timeout: 30
     retries: 3
 
   - localize: "the General channel in the left sidebar"
-    verify: "the General channel message history is open"
-    verify_timeout: 10
+    # Wait for the channel to actually finish loading — not just be "selected".
+    # Grey shimmer skeleton bars mean messages are still streaming in; posting
+    # while loading causes the new message to land after the verify window.
+    verify: "the General channel has finished loading and shows real text content or real messages, with no grey skeleton or shimmer loading placeholders"
+    verify_timeout: 30
     retries: 3
 
   - localize: "the message input box or composer at the bottom of the chat"
     then_type: "mosdat functional test {timestamp}"
     then_key: "enter"
     verify: "a message containing 'mosdat functional test' appears in the chat history"
-    verify_timeout: 10
+    verify_not: "the message composer still shows 'mosdat functional test' as unsent, or an error is visible"
+    verify_timeout: 30
     retries: 3
