@@ -90,7 +90,8 @@ class TestScenario:
 @dataclass
 class Holo2Config:
     base_url: str = "http://192.168.13.62:5001/v1"
-    model: str = "holo2-4b"
+    model: str = "qwen3-vl-abliterated"  # handles both localize (bbox) and verify honestly
+    verify_model: str = ""  # general VLM for yes/no state checks; empty → reuse `model`
 
 
 @dataclass

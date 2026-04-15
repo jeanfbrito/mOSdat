@@ -80,6 +80,7 @@ def cmd_functional(args) -> int:
     holo2 = Holo2Client(
         base_url=config.holo2.base_url,
         model=args.model or config.holo2.model,
+        verify_model=args.verify_model or config.holo2.verify_model or None,
     )
 
     name, steps, vars_ = load_test_yaml(test_file)
@@ -91,6 +92,11 @@ def cmd_functional(args) -> int:
     vars_.setdefault("test_password", config.functional.test_password)
     vars_["timestamp"] = dt.now().strftime("%Y%m%d_%H%M%S")
 
+    if not config.proxmox.password:
+        print("[mOSdat] ERROR: Proxmox password required for VNC screenshots. Set MOSDAT_PROXMOX_PASSWORD or [proxmox].password in config.")
+        return 1
+    from .proxmox import ProxmoxAPI
+    proxmox = ProxmoxAPI(config.proxmox)
 
     overall = True
     for vm in vms:
@@ -103,18 +109,8 @@ def cmd_functional(args) -> int:
             screenshot_dir = config.framework_path / "results" / f"{ts}_functional" / vm.name
 
         from .ssh import SSHClient
-        from .proxmox import ProxmoxAPI
+        from .vnc_client import VncClient
         ssh = SSHClient(vm.ip, vm.user)
-        proxmox = ProxmoxAPI(config.proxmox) if config.proxmox.password else None
-        screenshotter = Screenshotter(ssh, vm.is_windows, proxmox=proxmox, vmid=vm.vmid)
-        injector = InputInjector(ssh, vm.is_windows)
-        runner = FunctionalRunner(
-            holo2=holo2,
-            screenshotter=screenshotter,
-            injector=injector,
-            screenshot_dir=screenshot_dir,
-            log_fn=lambda msg: print(f"[mOSdat] {msg}"),
-        )
 
         # Inject per-VM app_path (first package with a non-empty app_path)
         vm_vars = dict(vars_)
@@ -123,7 +119,17 @@ def cmd_functional(args) -> int:
                 vm_vars.setdefault("app_path", pkg.app_path)
                 break
 
-        passed, log = runner.run_test(steps, name, vars=vm_vars)
+        with VncClient(proxmox, vmid=vm.vmid) as vnc:
+            screenshotter = Screenshotter(vnc)
+            injector = InputInjector(vnc, ssh, vm.is_windows)
+            runner = FunctionalRunner(
+                holo2=holo2,
+                screenshotter=screenshotter,
+                injector=injector,
+                screenshot_dir=screenshot_dir,
+                log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+            )
+            passed, log = runner.run_test(steps, name, vars=vm_vars)
         status = "PASS" if passed else "FAIL"
         print(f"[mOSdat]   Result: {status}")
         if not passed:
@@ -221,7 +227,10 @@ def main() -> int:
     fn_p.add_argument("--test", default="rocketchat-smoke", metavar="NAME",
                       help="Test file name without .yaml (default: rocketchat-smoke)")
     fn_p.add_argument("--model", metavar="MODEL",
-                      help="Override Holo2 model (e.g. holo3-35b-a3b)")
+                      help="Override VLM for element localization (default: holo2-4b)")
+    fn_p.add_argument("--verify-model", dest="verify_model", metavar="MODEL",
+                      help="Override VLM for yes/no state verification (default: same as --model; "
+                           "recommend qwen3-vl-abliterated — localization models hallucinate on yes/no)")
     fn_p.add_argument("--save-screenshots", action="store_true",
                       help="Save screenshots on failure to results dir")
     fn_p.add_argument("--screenshots", type=Path, metavar="DIR",

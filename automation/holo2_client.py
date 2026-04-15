@@ -53,16 +53,40 @@ def _parse_coords(raw: str) -> dict:
     import re as _re
     json_str = _re.sub(r':\s*"[:\s]*(\d+)"', r': \1', json_str)
     coords = json.loads(json_str)
-    x, y = int(coords["x"]), int(coords["y"])
+
+    def _to_scalar(v):
+        """Coerce a coord to a single integer. qwen3-vl returns bboxes as
+        lists like [x1, x2]; Holo2 returns a single int. Take the midpoint."""
+        if isinstance(v, (list, tuple)):
+            flat = []
+            for item in v:
+                if isinstance(item, (list, tuple)):
+                    flat.extend(int(float(i)) for i in item)
+                else:
+                    flat.append(int(float(item)))
+            if not flat:
+                raise Holo2Error(f"Empty coordinate list: {v!r}")
+            return sum(flat) // len(flat)
+        return int(float(v))
+
+    x = _to_scalar(coords["x"])
+    y = _to_scalar(coords["y"])
     if not (0 <= x <= 1000 and 0 <= y <= 1000):
         raise Holo2Error(f"Coordinates out of range: x={x}, y={y}")
     return {"x": x, "y": y}
 
 
 class Holo2Client:
-    def __init__(self, base_url: str, model: str = "holo2-4b"):
+    def __init__(self, base_url: str, model: str = "holo2-4b", verify_model: str | None = None):
+        """Args:
+            model: VLM for element localization (expects coordinate output).
+            verify_model: VLM for yes/no state verification. Defaults to `model`.
+                Use a general-purpose VLM here (e.g. qwen3-vl-abliterated) —
+                localization-specialized models hallucinate on yes/no prompts.
+        """
         self.client = OpenAI(base_url=base_url, api_key="unused")
         self.model = model
+        self.verify_model = verify_model or model
 
     def localize(
         self,
@@ -82,7 +106,13 @@ class Holo2Client:
         """
         b64 = _encode_image(screenshot)
         last_err: Exception = Holo2Error("no attempts made")
-        for attempt in range(3):
+        # Some VLMs (gemma, sometimes Holo2 after a swap) return empty strings
+        # intermittently. Retry more aggressively with small prompt tweaks to
+        # bust any server-side KV cache.
+        suffixes = ["", " .", "\n\nRespond only with the JSON."]
+        max_attempts = 6
+        for attempt in range(max_attempts):
+            suffix = suffixes[attempt % len(suffixes)]
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model,
@@ -90,7 +120,7 @@ class Holo2Client:
                         "role": "user",
                         "content": [
                             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                            {"type": "text", "text": f"{_LOCALIZE_PROMPT}\n{target}"},
+                            {"type": "text", "text": f"{_LOCALIZE_PROMPT}\n{target}{suffix}"},
                         ],
                     }],
                     max_tokens=256,
@@ -104,9 +134,9 @@ class Holo2Client:
                 return pixel_x, pixel_y
             except Exception as e:
                 last_err = e
-                if attempt < 2:
+                if attempt < max_attempts - 1:
                     import time as _t
-                    _t.sleep(2)
+                    _t.sleep(0.5 if isinstance(e, Holo2Error) and "No JSON" in str(e) else 2)
         raise last_err
 
     def verify(self, screenshot: Image.Image, question: str) -> bool:
@@ -121,7 +151,7 @@ class Holo2Client:
         """
         b64 = _encode_image(screenshot)
         resp = self.client.chat.completions.create(
-            model=self.model,
+            model=self.verify_model,
             messages=[{
                 "role": "user",
                 "content": [
@@ -129,10 +159,20 @@ class Holo2Client:
                     {"type": "text", "text": f"{_VERIFY_PROMPT}{question}"},
                 ],
             }],
-            max_tokens=64,
+            # Larger VLMs (holo3, qwen3-vl) emit a thinking block before the
+            # final yes/no. 64 tokens truncates mid-think → empty answer.
+            max_tokens=1024,
+            timeout=180,
         )
-        raw = resp.choices[0].message.content
-        # Strip think tags then check for yes/no
+        raw = resp.choices[0].message.content or ""
         if "</think>" in raw:
             raw = raw[raw.rfind("</think>") + len("</think>"):]
-        return "yes" in raw.lower()
+        low = raw.lower().strip()
+        # Prefer decisive yes-over-no when both appear (common when the model
+        # reasons "... is not X ... yes, Y is visible"): look at whichever
+        # word appears closer to the end.
+        last_yes = low.rfind("yes")
+        last_no = low.rfind("no")
+        if last_yes == -1 and last_no == -1:
+            return False
+        return last_yes > last_no

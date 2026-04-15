@@ -19,12 +19,15 @@ class FunctionalStep:
     then_type: Optional[str] = None        # text to type after clicking
     then_key: Optional[str] = None         # key to press after typing (enter/tab/etc.)
     then_key_pre: Optional[str] = None    # key to press BEFORE typing (e.g. ctrl+a to clear field)
-    verify: Optional[str] = None           # yes/no question to confirm the outcome
+    verify: Optional[str] = None           # yes/no question that must be TRUE (post-step)
+    verify_not: Optional[str] = None       # yes/no question that must be FALSE (catches error banners, hallucinated success)
+    verify_input: Optional[str] = None     # yes/no check that fires AFTER then_type and BEFORE then_key — blocks Enter until typing actually landed in the right field
     verify_timeout: int = 10               # seconds to wait for the expected state
     retries: int = 3                       # attempts before the step is marked failed
     launch: Optional[str] = None           # executable path/command to launch before localizing
     wait: int = 0                          # seconds to wait after launch before proceeding
     focus: Optional[str] = None           # window title to bring to front after launch+wait
+    shell: Optional[str] = None            # arbitrary shell/PowerShell command to run on the VM (one-shot)
 
 
 class StepFailed(Exception):
@@ -60,7 +63,12 @@ class FunctionalRunner:
 
         Raises StepFailed if all retries are exhausted.
         """
-        label = step.localize[:60] if step.localize else (step.launch or "")[:60]
+        label = step.localize[:60] if step.localize else (step.launch or step.shell or "")[:60]
+
+        # Shell is a one-shot action — do it before the retry loop
+        if step.shell:
+            self.log(f"  Step {step_num}: shell '{step.shell[:80]}'")
+            self.injector.shell(step.shell)
 
         # Launch is a one-shot action — do it before the retry loop
         if step.launch:
@@ -69,14 +77,28 @@ class FunctionalRunner:
             if step.wait:
                 self.log(f"    → waiting {step.wait}s for app to start…")
                 time.sleep(step.wait)
-            if step.focus:
-                self.log(f"    → focus '{step.focus}'")
-                self.injector.focus_app(step.focus)
+
+        # Focus can run with or without a launch — used to re-assert that the
+        # target window is in the foreground before any input/localize, so
+        # notifications or background windows can't hijack keystrokes.
+        if step.focus:
+            self.log(f"    → focus '{step.focus}'")
+            self.injector.focus_app(step.focus)
+            time.sleep(0.4)
 
         for attempt in range(1, step.retries + 1):
             retry_label = f" (attempt {attempt}/{step.retries})" if attempt > 1 else ""
 
             try:
+                # On retries, FIRST check if the expected state is already
+                # present — the previous attempt's action may have succeeded
+                # but the page transition was slower than verify_timeout.
+                # Re-executing blindly double-types and breaks the field.
+                if attempt > 1 and step.verify:
+                    if self._wait_for_state(step.verify, 3, step_num, must_be_false=step.verify_not):
+                        self.log(f"    ✓ already verified (state settled between attempts)")
+                        return
+
                 if step.localize:
                     self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
                     screenshot, screen_size = self.screenshotter.capture()
@@ -95,6 +117,23 @@ class FunctionalRunner:
                         self.injector.type_text(step.then_type)
                         time.sleep(0.2)
 
+                    # Gate the submit key on a VLM check that the typed text
+                    # actually landed in the intended field. Catches clicks
+                    # that missed the target and typing that went to a
+                    # different window / Windows Search / taskbar.
+                    if step.verify_input:
+                        self.log(f"    → verify input '{step.verify_input[:60]}'")
+                        if not self._wait_for_state(step.verify_input, min(step.verify_timeout, 10), step_num):
+                            screenshot, _ = self.screenshotter.capture()
+                            self._save_screenshot(screenshot, f"step{step_num}_input_fail_attempt{attempt}")
+                            if attempt < step.retries:
+                                self.log(f"    ✗ input not verified, retrying...")
+                                continue
+                            raise StepFailed(
+                                f"Step {step_num}: verify_input '{step.verify_input}' never became true"
+                            )
+                        self.log(f"    ✓ input verified")
+
                     if step.then_key:
                         self.log(f"    → key '{step.then_key}'")
                         self.injector.key(step.then_key)
@@ -103,7 +142,7 @@ class FunctionalRunner:
                 if step.verify:
                     if not step.localize:
                         self.log(f"  Step {step_num}: verify '{step.verify[:60]}'{retry_label}")
-                    verified = self._wait_for_state(step.verify, step.verify_timeout, step_num)
+                    verified = self._wait_for_state(step.verify, step.verify_timeout, step_num, must_be_false=step.verify_not)
                     if verified:
                         self.log(f"    ✓ verified: {step.verify[:60]}")
                         return
@@ -127,16 +166,24 @@ class FunctionalRunner:
                 else:
                     raise StepFailed(f"Step {step_num}: {e}") from e
 
-    def _wait_for_state(self, question: str, timeout: int, step_num: int) -> bool:
-        """Poll until Holo2 confirms the expected state or timeout expires."""
+    def _wait_for_state(self, question: str, timeout: int, step_num: int, must_be_false: Optional[str] = None) -> bool:
+        """Poll until Holo2 confirms the expected state or timeout expires.
+
+        Passes when `question` is True AND (if given) `must_be_false` is False.
+        The negative check catches error banners that a hallucinating VLM
+        might otherwise let through on the positive question.
+        """
         deadline = time.time() + timeout
         interval = min(2, timeout // 3) or 1
         while time.time() < deadline:
             time.sleep(interval)
             try:
                 screenshot, _ = self.screenshotter.capture()
-                if self.holo2.verify(screenshot, question):
-                    return True
+                if not self.holo2.verify(screenshot, question):
+                    continue
+                if must_be_false and self.holo2.verify(screenshot, must_be_false):
+                    continue
+                return True
             except Exception:
                 pass
         return False
@@ -190,11 +237,14 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             then_key=s.then_key,
             then_key_pre=s.then_key_pre,
             verify=_sub(s.verify, vars) if s.verify else None,
+            verify_not=_sub(s.verify_not, vars) if s.verify_not else None,
+            verify_input=_sub(s.verify_input, vars) if s.verify_input else None,
             verify_timeout=s.verify_timeout,
             retries=s.retries,
             launch=_sub(s.launch, vars) if s.launch else None,
             wait=s.wait,
             focus=s.focus,
+            shell=_sub(s.shell, vars) if s.shell else None,
         ))
     return resolved
 
@@ -227,10 +277,13 @@ def load_test_yaml(path: Path) -> tuple[str, list[FunctionalStep], dict]:
             then_key=raw.get("then_key") or raw.get("key"),
             then_key_pre=raw.get("then_key_pre") or raw.get("key_pre"),
             verify=raw.get("verify"),
+            verify_not=raw.get("verify_not"),
+            verify_input=raw.get("verify_input"),
             verify_timeout=int(raw.get("verify_timeout", 10)),
             retries=int(raw.get("retries", 3)),
             launch=raw.get("launch"),
             wait=int(raw.get("wait", 0)),
             focus=raw.get("focus"),
+            shell=raw.get("shell"),
         ))
     return name, steps, vars
