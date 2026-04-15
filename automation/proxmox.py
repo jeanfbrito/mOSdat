@@ -138,19 +138,29 @@ class ProxmoxAPI:
     def detach_gpu(self, vmid: int) -> None:
         self.set_vm_config(vmid, delete="hostpci0")
 
-    def screenshot(self, vmid: int) -> bytes:
-        """Capture a PNG screenshot of the VM display via the Proxmox API.
+    def vncproxy(self, vmid: int) -> dict:
+        """Open a WebSocket VNC proxy for a QEMU VM.
 
-        Returns raw PNG bytes.  Works on any guest OS regardless of session
-        type — no guest-side scripts required.
+        Calls POST /nodes/{node}/qemu/{vmid}/vncproxy?websocket=1 and returns
+        the response data: {"ticket": str, "port": int, "user": str, "upid": str}.
+
+        The returned ticket is the vncticket (used as the VNC password during
+        RFB authentication *and* as a query parameter on the vncwebsocket URL).
         """
         self._ensure_auth()
-        url = f"{self.config.base_url}/nodes/{self.config.node}/qemu/{vmid}/screenshot"
-        response = self._session.get(
+        url = f"{self.config.base_url}/nodes/{self.config.node}/qemu/{vmid}/vncproxy"
+        response = self._session.post(
             url,
+            params={"websocket": 1},
             headers={"CSRFPreventionToken": self._csrf_token or ""},
             cookies={"PVEAuthCookie": self._ticket or ""},
         )
         if response.status_code >= 400:
-            raise ProxmoxAPIError(f"Screenshot API error {response.status_code}: {response.text[:200]}")
-        return response.content
+            raise ProxmoxAPIError(f"vncproxy API error {response.status_code}: {response.text[:200]}")
+        return response.json().get("data", {})
+
+    @property
+    def auth_ticket(self) -> str:
+        """The PVEAuthCookie value — required for the vncwebsocket handshake."""
+        self._ensure_auth()
+        return self._ticket or ""

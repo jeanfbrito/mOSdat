@@ -1,73 +1,15 @@
-"""SSH-based mouse and keyboard input injection for Windows and Linux VMs."""
+"""Input injection for functional tests.
+
+Mouse and keyboard events are delivered through the VNC/RFB channel
+(no guest-side tools, works during boot and at the login screen).
+`launch` and `focus_app` still use SSH because RFB can't spawn processes
+or reorder window stacks.
+"""
 
 import base64
-import time
 
 from .ssh import SSHClient
-
-# Windows key name → SendKeys notation
-_WIN_KEY_MAP = {
-    "enter":     "{ENTER}",
-    "return":    "{ENTER}",
-    "tab":       "{TAB}",
-    "escape":    "{ESC}",
-    "esc":       "{ESC}",
-    "backspace": "{BACKSPACE}",
-    "delete":    "{DELETE}",
-    "home":      "{HOME}",
-    "end":       "{END}",
-    "pgup":      "{PGUP}",
-    "pgdn":      "{PGDN}",
-    "up":        "{UP}",
-    "down":      "{DOWN}",
-    "left":      "{LEFT}",
-    "right":     "{RIGHT}",
-    "ctrl+a":    "^a",
-    "ctrl+c":    "^c",
-    "ctrl+v":    "^v",
-    "ctrl+z":    "^z",
-    "ctrl+w":    "^w",
-    "alt+f4":    "%{F4}",
-}
-
-# Linux key name → xdotool notation
-_LINUX_KEY_MAP = {
-    "enter":     "Return",
-    "return":    "Return",
-    "tab":       "Tab",
-    "escape":    "Escape",
-    "esc":       "Escape",
-    "backspace": "BackSpace",
-    "delete":    "Delete",
-    "home":      "Home",
-    "end":       "End",
-    "pgup":      "Prior",
-    "pgdn":      "Next",
-    "up":        "Up",
-    "down":      "Down",
-    "left":      "Left",
-    "right":     "Right",
-    "ctrl+a":    "ctrl+a",
-    "ctrl+c":    "ctrl+c",
-    "ctrl+v":    "ctrl+v",
-    "ctrl+z":    "ctrl+z",
-    "ctrl+w":    "ctrl+w",
-    "alt+f4":    "alt+F4",
-}
-
-# SendKeys special characters that must be escaped with braces
-_SENDKEYS_SPECIAL = set("^%~+(){}[]")
-
-
-def _escape_sendkeys(text: str) -> str:
-    """Escape special characters for PowerShell SendKeys."""
-    result = []
-    for ch in text:
-        if ch in _SENDKEYS_SPECIAL:
-            result.append(f"{{{ch}}}")
-        else:
-            result.append(ch)
-    return "".join(result)
+from .vnc_client import VncClient
 
 
 def _ps_encoded(script: str) -> str:
@@ -75,81 +17,34 @@ def _ps_encoded(script: str) -> str:
     return f"$ProgressPreference='SilentlyContinue'; powershell.exe -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
 
-# Win32 mouse/keyboard PowerShell helper (compiled once per session via Add-Type)
-_WIN32_CLICK_PS = """
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class WinInput {{
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint f,uint x,uint y,uint d,int e);
-    public const uint LEFTDOWN = 0x02;
-    public const uint LEFTUP   = 0x04;
-    public static void Click(int x, int y) {{
-        SetCursorPos(x, y);
-        System.Threading.Thread.Sleep(80);
-        mouse_event(LEFTDOWN,0,0,0,0);
-        System.Threading.Thread.Sleep(30);
-        mouse_event(LEFTUP,0,0,0,0);
-    }}
-}}
-"@ -ErrorAction SilentlyContinue
-[WinInput]::Click({x}, {y})
-Start-Sleep -Milliseconds 100
-Write-Output "click:ok"
-"""
-
-_WIN32_TYPE_PS = """
-Add-Type -AssemblyName System.Windows.Forms
-Start-Sleep -Milliseconds 150
-[System.Windows.Forms.SendKeys]::SendWait('{keys}')
-Start-Sleep -Milliseconds 100
-Write-Output "type:ok"
-"""
-
-_WIN32_KEY_PS = """
-Add-Type -AssemblyName System.Windows.Forms
-Start-Sleep -Milliseconds 100
-[System.Windows.Forms.SendKeys]::SendWait('{keys}')
-Start-Sleep -Milliseconds 100
-Write-Output "key:ok"
-"""
-
-
 class InputInjector:
-    def __init__(self, ssh: SSHClient, is_windows: bool):
+    def __init__(self, vnc: VncClient, ssh: SSHClient, is_windows: bool):
+        self.vnc = vnc
         self.ssh = ssh
         self.is_windows = is_windows
 
+    # ---- RFB-backed input ----
+
     def click(self, x: int, y: int) -> None:
-        """Click at pixel coordinates (x, y)."""
-        if self.is_windows:
-            ps = _WIN32_CLICK_PS.format(x=x, y=y)
-            self.ssh.run(_ps_encoded(ps), timeout=10)
-        else:
-            self.ssh.run(f"DISPLAY=:0 xdotool mousemove {x} {y} click 1", timeout=10)
+        self.vnc.click(x, y)
 
     def type_text(self, text: str) -> None:
-        """Type a string of text into the focused element."""
-        if self.is_windows:
-            escaped = _escape_sendkeys(text)
-            ps = _WIN32_TYPE_PS.format(keys=escaped)
-            self.ssh.run(_ps_encoded(ps), timeout=15)
-        else:
-            # xdotool type with a small delay between characters for reliability
-            safe = text.replace("'", "'\\''")
-            self.ssh.run(f"DISPLAY=:0 xdotool type --delay 50 '{safe}'", timeout=15)
+        self.vnc.type_text(text)
 
     def key(self, key: str) -> None:
-        """Press a named key (enter, tab, escape, ctrl+v, etc.)."""
-        key_lower = key.lower()
+        self.vnc.key(key)
+
+    def shell(self, cmd: str, timeout: int = 60) -> None:
+        """Run an arbitrary shell command on the VM.
+
+        On Windows the command is executed as a PowerShell script via
+        base64-encoded -EncodedCommand (so quotes, newlines, and $env: all work).
+        On Linux the command is passed through to the SSH default shell.
+        """
         if self.is_windows:
-            sendkeys = _WIN_KEY_MAP.get(key_lower, f"{{{key_lower}}}")
-            ps = _WIN32_KEY_PS.format(keys=sendkeys)
-            self.ssh.run(_ps_encoded(ps), timeout=10)
+            self.ssh.run(_ps_encoded(cmd), timeout=timeout)
         else:
-            xdotool_key = _LINUX_KEY_MAP.get(key_lower, key_lower)
-            self.ssh.run(f"DISPLAY=:0 xdotool key {xdotool_key}", timeout=10)
+            self.ssh.run(cmd, timeout=timeout)
 
     def focus_app(self, window_title: str) -> None:
         """Bring a named window to the foreground in the interactive desktop session.
