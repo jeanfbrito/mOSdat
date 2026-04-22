@@ -31,32 +31,42 @@ def _encode_image(img: Image.Image) -> str:
 
 
 def _parse_coords(raw: str) -> dict:
-    """Extract JSON coordinates from model response.
+    """Extract click coords from model response.
+
+    Returns {"x": int, "y": int, "space": "norm01k"|"pixel"}.
+      - "norm01k": values on 0-1000 normalized grid (Holo2, qwen3-vl).
+      - "pixel": values in screenshot pixel space (qwen3.6 bbox_2d).
 
     Handles:
     - </think> prefix from chain-of-thought models
+    - ```json fenced blocks
+    - {"x":<int|list>, "y":<int|list>} (point/bbox-as-xy)
+    - [{"bbox_2d":[x1,y1,x2,y2], "label":...}] (qwen3.6 native format)
     - Malformed values like {"x":":<number>","y":<number>} (extra colon/quote)
-    - Values outside 0-1000 range (raises so the caller can retry)
     """
     if not raw:
         raise Holo2Error(f"No JSON found in response: {raw[:200]!r}")
     # Strip thinking block
     if "</think>" in raw:
         raw = raw[raw.rfind("</think>") + len("</think>"):]
-    # Find JSON object
-    start = raw.rfind("{")
-    end = raw.rfind("}") + 1
-    if start == -1 or end == 0:
-        raise Holo2Error(f"No JSON found in response: {raw[:200]!r}")
-    json_str = raw[start:end]
-    # Fix malformed values: "x":":<number>" or "x":":number" → "x":<number>
     import re as _re
-    json_str = _re.sub(r':\s*"[:\s]*(\d+)"', r': \1', json_str)
-    coords = json.loads(json_str)
+
+    text = raw.strip()
+    # Find JSON (object or array). Prefer the last fenced/standalone block.
+    candidates = []
+    for m in _re.finditer(r"\[[\s\S]*\]|\{[\s\S]*\}", text):
+        candidates.append(m.group(0))
+    if not candidates:
+        raise Holo2Error(f"No JSON found in response: {raw[:200]!r}")
+    # Fix malformed values like "x":":<number>" → "x":<number>
+    json_str = _re.sub(r':\s*"[:\s]*(\d+)"', r': \1', candidates[-1])
+    obj = json.loads(json_str)
+    if isinstance(obj, list):
+        if not obj:
+            raise Holo2Error(f"Empty list: {raw[:200]!r}")
+        obj = obj[0]
 
     def _to_scalar(v):
-        """Coerce a coord to a single integer. qwen3-vl returns bboxes as
-        lists like [x1, x2]; Holo2 returns a single int. Take the midpoint."""
         if isinstance(v, (list, tuple)):
             flat = []
             for item in v:
@@ -69,11 +79,25 @@ def _parse_coords(raw: str) -> dict:
             return sum(flat) // len(flat)
         return int(float(v))
 
-    x = _to_scalar(coords["x"])
-    y = _to_scalar(coords["y"])
-    if not (0 <= x <= 1000 and 0 <= y <= 1000):
-        raise Holo2Error(f"Coordinates out of range: x={x}, y={y}")
-    return {"x": x, "y": y}
+    # qwen3.6 bbox_2d: [x1,y1,x2,y2] on 0-1000 normalized grid.
+    if isinstance(obj, dict) and "bbox_2d" in obj:
+        bb = obj["bbox_2d"]
+        if not (isinstance(bb, (list, tuple)) and len(bb) >= 4):
+            raise Holo2Error(f"Malformed bbox_2d: {bb!r}")
+        x1, y1, x2, y2 = (int(float(bb[i])) for i in range(4))
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        space = "pixel" if (cx > 1000 or cy > 1000) else "norm01k"
+        return {"x": cx, "y": cy, "space": space}
+
+    # Point format.
+    if not (isinstance(obj, dict) and "x" in obj and "y" in obj):
+        raise Holo2Error(f"Unrecognized coord format: {obj!r}")
+    x = _to_scalar(obj["x"])
+    y = _to_scalar(obj["y"])
+    # Auto-detect space: values >1000 cannot be normalized.
+    if x > 1000 or y > 1000:
+        return {"x": x, "y": y, "space": "pixel"}
+    return {"x": x, "y": y, "space": "norm01k"}
 
 
 class Holo2Client:
@@ -129,6 +153,8 @@ class Holo2Client:
                 raw = resp.choices[0].message.content or ""
                 coords = _parse_coords(raw)
                 w, h = screen_size
+                if coords.get("space") == "pixel":
+                    return coords["x"], coords["y"]
                 pixel_x = int(coords["x"] / 1000 * w)
                 pixel_y = int(coords["y"] / 1000 * h)
                 return pixel_x, pixel_y

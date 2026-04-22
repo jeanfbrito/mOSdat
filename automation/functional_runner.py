@@ -113,9 +113,27 @@ class FunctionalRunner:
                         time.sleep(0.15)
 
                     if step.then_type:
-                        self.log(f"    → type '{step.then_type[:40]}'")
-                        self.injector.type_text(step.then_type)
-                        time.sleep(0.2)
+                        # On retries, check visually whether the input already
+                        # holds the target text — the previous attempt may have
+                        # typed successfully but the downstream transition
+                        # failed (e.g. server error). Re-typing blindly
+                        # double-fills the field or misfires into a new widget.
+                        already_typed = False
+                        if attempt > 1:
+                            try:
+                                screenshot_chk, _ = self.screenshotter.capture()
+                                already_typed = self.holo2.verify(
+                                    screenshot_chk,
+                                    f"the text '{step.then_type}' is already visible in an input field on screen",
+                                )
+                            except Exception:
+                                already_typed = False
+                        if already_typed:
+                            self.log(f"    → skip type (already present): '{step.then_type[:40]}'")
+                        else:
+                            self.log(f"    → type '{step.then_type[:40]}'")
+                            self.injector.type_text(step.then_type)
+                            time.sleep(0.2)
 
                     # Gate the submit key on a VLM check that the typed text
                     # actually landed in the intended field. Catches clicks
