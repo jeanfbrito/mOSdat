@@ -23,7 +23,16 @@ steps:
       pkill -f update-notifier 2>/dev/null || true
       sleep 2
       # Wipe Electron userData so the "add server" flow appears on launch.
-      rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat Electron"
+      # Cover release, dev build, and older Electron-suffixed names.
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.config/Rocket.Chat Electron"
+      # Snap confines its own userData under ~/snap/rocketchat-desktop/<rev>/.config/;
+      # GNOME's launcher prefers the snap over the deb when both are installed,
+      # so its session survives wiping the deb's dir alone.
+      for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
+        [ -e "$d" ] && rm -rf "$d"
+      done
       echo cleanup:ok
 
   # Reset desktop to a known state. A prior test or an SSH launch attempt
