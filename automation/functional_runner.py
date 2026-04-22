@@ -78,6 +78,30 @@ class FunctionalRunner:
                 self.log(f"    → waiting {step.wait}s for app to start…")
                 time.sleep(step.wait)
 
+        # Standalone key/type steps (no localize). Used to drive the desktop
+        # launcher on Linux: `key_pre: super` → `type: "<app name>"` →
+        # `key: enter`. Generic across GNOME / KDE / XFCE since Super opens
+        # their launcher and Enter activates the first result.
+        #
+        # The 1.5s pause after key_pre covers the time the Activities /
+        # Kickoff / whisker menu takes to fully paint before typing lands.
+        if not step.localize and not step.launch and not step.shell:
+            if step.then_key_pre:
+                self.log(f"  Step {step_num}: key '{step.then_key_pre}'")
+                self.injector.key(step.then_key_pre)
+                time.sleep(1.5)
+            if step.then_type:
+                self.log(f"  Step {step_num}: type '{step.then_type[:40]}'")
+                self.injector.type_text(step.then_type)
+                time.sleep(0.8)
+            if step.then_key:
+                self.log(f"  Step {step_num}: key '{step.then_key}'")
+                self.injector.key(step.then_key)
+                time.sleep(0.3)
+            if step.wait:
+                self.log(f"    → waiting {step.wait}s")
+                time.sleep(step.wait)
+
         # Focus can run with or without a launch — used to re-assert that the
         # target window is in the foreground before any input/localize, so
         # notifications or background windows can't hijack keystrokes.

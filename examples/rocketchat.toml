@@ -64,6 +64,7 @@ desktop = "GNOME X11"
 format = "deb"
 install = "sudo apt install -y /tmp/{file}"
 uninstall = "sudo apt remove -y {app_name} 2>/dev/null || true"
+app_path = "/opt/Rocket.Chat/rocketchat-desktop"
 file_glob = "rocketchat-*.deb"
 
 [[vm.package]]
@@ -90,6 +91,7 @@ desktop = "GNOME Wayland"
 format = "deb"
 install = "sudo apt install -y /tmp/{file}"
 uninstall = "sudo apt remove -y {app_name} 2>/dev/null || true"
+app_path = "/opt/Rocket.Chat/rocketchat-desktop"
 file_glob = "rocketchat-*.deb"
 
 [[vm.package]]
