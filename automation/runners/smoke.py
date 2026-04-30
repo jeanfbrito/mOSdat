@@ -4,11 +4,11 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
-from .config import ProjectConfig, VMConfig, Package
-from .gpu import GPUManager
-from .proxmox import ProxmoxAPI
-from .state import StateManager, TestStatus, Phase, CompletionError, validate_completion
-from .vm import VMOperations
+from ..config import ProjectConfig, VMConfig, Package
+from ..proxmox.gpu import GPUManager
+from ..proxmox.api import ProxmoxAPI
+from ..state import StateManager, TestStatus, Phase, CompletionError, validate_completion
+from ..proxmox.vm import VMOperations
 
 
 LogFn = Callable[[str], None]
@@ -263,7 +263,7 @@ class TestRunner:
             self.state.phase = Phase.REPORT
             self.state_manager.save()
 
-            from .report import generate_report
+            from ..reporting.report import generate_report
             generate_report(self.state, self.config)
 
             missing = validate_completion(
@@ -327,7 +327,7 @@ class TestRunner:
                         log(f"\n--- {vm.name} / {pkg.format} ---")
                         try:
                             # SCP the package directly
-                            from .ssh import SSHClient
+                            from ..transport.ssh import SSHClient
                             ssh = SSHClient(vm.ip, vm.user)
                             ssh.scp_to(package_path, "/tmp/")
 

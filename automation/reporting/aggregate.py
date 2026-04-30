@@ -2,9 +2,9 @@
 """Aggregate test results across multiple runs into results/INDEX.md.
 
 Usage:
-    python -m automation.aggregate [--results-dir DIR] [--output FILE]
+    python -m automation.reporting.aggregate [--results-dir DIR] [--output FILE]
     # or directly:
-    python mOSdat/automation/aggregate.py
+    python mOSdat/automation/reporting/aggregate.py
 """
 
 from __future__ import annotations

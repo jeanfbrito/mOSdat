@@ -6,7 +6,7 @@ the caller; Screenshotter just forwards `capture()` to it.
 
 from PIL import Image
 
-from .vnc_client import VncClient, VncClientError
+from ..transport.vnc import VncClient, VncClientError
 
 
 class ScreenshotError(Exception):

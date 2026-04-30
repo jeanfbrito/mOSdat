@@ -8,9 +8,9 @@ from typing import Callable, Optional
 
 from PIL import Image
 
-from .vlm_client import VLMClient
-from .input_injector import InputInjector
-from .screenshot import Screenshotter
+from ..vlm.client import VLMClient
+from ..vlm.input import InputInjector
+from ..vlm.screenshot import Screenshotter
 
 
 @dataclass

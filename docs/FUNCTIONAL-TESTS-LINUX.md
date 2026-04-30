@@ -64,14 +64,14 @@ rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat Electron"
   fully paint before typing lands. 0.8 s after `type` lets GNOME's
   search ranker settle before `Enter`.
 
-(`automation/functional_runner.py`, in the "standalone key/type steps"
+(`automation/runners/functional.py`, in the "standalone key/type steps"
 branch.)
 
 ## qwen3.6 parser learnings
 
 Switching the VLM from `qwen3-vl-abliterated` to
 `qwen3.6-35b-a3b-uncensored-vl` required two changes to
-`automation/vlm_client.py`:
+`automation/vlm/client.py`:
 
 1. `qwen3.6` wraps its answer in a list:
    `[{"bbox_2d": [x1, y1, x2, y2], "label": "…"}]`. Parser now unwraps

@@ -8,7 +8,7 @@ from typing import Any, Optional
 import requests
 import urllib3
 
-from .config import ProxmoxConfig
+from ..config import ProxmoxConfig
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 

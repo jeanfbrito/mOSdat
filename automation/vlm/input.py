@@ -8,8 +8,8 @@ or reorder window stacks.
 
 import base64
 
-from .ssh import SSHClient
-from .vnc_client import VncClient
+from ..transport.ssh import SSHClient
+from ..transport.vnc import VncClient
 
 
 def _ps_encoded(script: str) -> str:

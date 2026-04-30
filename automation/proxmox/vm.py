@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import Optional
 
-from .config import VMConfig, Package, ProjectConfig
-from .proxmox import ProxmoxAPI
-from .ssh import SSHClient, wait_for_ssh
+from ..config import VMConfig, Package, ProjectConfig
+from .api import ProxmoxAPI
+from ..transport.ssh import SSHClient, wait_for_ssh
 
 
 class VMError(Exception):

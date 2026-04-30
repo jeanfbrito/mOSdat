@@ -3,8 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
-from .config import ProjectConfig
-from .state import State, TestStatus
+from ..config import ProjectConfig
+from ..state import State, TestStatus
 
 
 def generate_report(state: State, config: ProjectConfig) -> None:

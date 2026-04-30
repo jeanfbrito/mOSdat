@@ -32,7 +32,7 @@ from PIL import Image
 from websockets.sync.client import connect
 
 if TYPE_CHECKING:
-    from .proxmox import ProxmoxAPI
+    from ..proxmox.api import ProxmoxAPI
 
 
 class VncClientError(Exception):

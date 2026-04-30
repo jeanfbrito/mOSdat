@@ -15,7 +15,7 @@ def cmd_run(args) -> int:
     if args.results_dir:
         config.results_dir = args.results_dir
 
-    from .runner import TestRunner
+    from .runners.smoke import TestRunner
     runner = TestRunner(config)
 
     try:
@@ -40,7 +40,7 @@ def cmd_test(args) -> int:
 
     config.vms = [config.vm_by_name[name] for name in vm_names]
 
-    from .runner import TestRunner
+    from .runners.smoke import TestRunner
     runner = TestRunner(config)
 
     try:
@@ -73,10 +73,10 @@ def cmd_functional(args) -> int:
         print(f"[mOSdat] ERROR: Test file not found: {test_file}")
         return 1
 
-    from .vlm_client import VLMClient
-    from .screenshot import Screenshotter
-    from .input_injector import InputInjector
-    from .functional_runner import FunctionalRunner, load_test_yaml
+    from .vlm.client import VLMClient
+    from .vlm.screenshot import Screenshotter
+    from .vlm.input import InputInjector
+    from .runners.functional import FunctionalRunner, load_test_yaml
 
     vlm = VLMClient(
         base_url=config.vlm.base_url,
@@ -96,7 +96,7 @@ def cmd_functional(args) -> int:
     if not config.proxmox.password:
         print("[mOSdat] ERROR: Proxmox password required for VNC screenshots. Set MOSDAT_PROXMOX_PASSWORD or [proxmox].password in config.")
         return 1
-    from .proxmox import ProxmoxAPI
+    from .proxmox.api import ProxmoxAPI
     proxmox = ProxmoxAPI(config.proxmox)
 
     overall = True
@@ -109,8 +109,8 @@ def cmd_functional(args) -> int:
             ts = dt.now().strftime("%Y-%m-%d")
             screenshot_dir = config.framework_path / "results" / f"{ts}_functional" / vm.name
 
-        from .ssh import SSHClient
-        from .vnc_client import VncClient
+        from .transport.ssh import SSHClient
+        from .transport.vnc import VncClient
         ssh = SSHClient(vm.ip, vm.user)
 
         # Inject per-VM app_path (first package with a non-empty app_path)
@@ -192,7 +192,7 @@ def cmd_report(args) -> int:
 
     state_manager = StateManager(state_file, config.app.version)
     with state_manager:
-        from .report import generate_report
+        from .reporting.report import generate_report
         generate_report(state_manager.state, config)
     return 0
 

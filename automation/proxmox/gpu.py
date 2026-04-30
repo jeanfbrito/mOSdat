@@ -5,9 +5,9 @@ import time
 from contextlib import contextmanager
 from typing import Optional
 
-from .config import ProxmoxConfig, VMConfig
-from .proxmox import ProxmoxAPI
-from .ssh import SSHClient, wait_for_ssh
+from ..config import ProxmoxConfig, VMConfig
+from .api import ProxmoxAPI
+from ..transport.ssh import SSHClient, wait_for_ssh
 
 logger = logging.getLogger(__name__)
 
