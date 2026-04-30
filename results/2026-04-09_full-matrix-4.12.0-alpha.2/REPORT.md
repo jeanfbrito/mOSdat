@@ -3,7 +3,7 @@
 **App**: rocketchat
 **Version**: 4.12.0-alpha.2
 **Date**: 2026-04-09 13:18:26
-**Results Directory**: `/home/jean/projects/linux-testing/test-framework/results/2026-04-09_full-matrix-4.12.0-alpha.2`
+**Results Directory**: `/home/jean/projects/linux-testing/mOSdat/results/2026-04-09_full-matrix-4.12.0-alpha.2`
 
 ## Summary
 

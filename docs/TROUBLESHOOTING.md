@@ -83,7 +83,7 @@ sudo ufw status               # Ubuntu
 **Solution** (required before EVERY test session):
 ```bash
 # Transfer test scripts to VM (REQUIRED before running tests)
-scp -r /home/jean/projects/linux-testing/test-framework/shared/tests jean@<VM_IP>:/tmp/
+scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@<VM_IP>:/tmp/
 
 # Verify
 ssh jean@<VM_IP> "ls -la /tmp/tests/"
@@ -310,8 +310,8 @@ timeout 10 /opt/Rocket.Chat/rocketchat-desktop 2>&1 | grep -i "wayland\|x11\|ozo
 
 | What | Where |
 |------|-------|
-| Build logs | `test-framework/logs/` |
-| Test results | `test-framework/results/<timestamp>/` |
+| Build logs | `mOSdat/logs/` |
+| Test results | `mOSdat/results/<timestamp>/` |
 | Electron logs | `~/.config/Rocket.Chat/logs/` |
 | System journal | `journalctl -f` |
 | Xorg logs | `/var/log/Xorg.0.log` |

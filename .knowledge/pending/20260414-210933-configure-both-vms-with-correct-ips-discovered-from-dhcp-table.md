@@ -15,4 +15,4 @@ Summary:
    - Fix any issues along the way to make Windows testing work the same way as Linux
 
 2. Key Technical Concepts:
-   - **mosdat**: Python-based multi-OS desktop app testing framework (`test-framework/`) with Proxmox API integration
+   - **mosdat**: Python-based multi-OS desktop app testing framework (`mOSdat/`) with Proxmox API integration

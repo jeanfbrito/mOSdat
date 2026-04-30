@@ -1,7 +1,7 @@
 """Unit tests for FunctionalRunner if_visible step support.
 
-Run with:  python -m pytest test-framework/automation/test_if_visible.py -v
-or standalone: python test-framework/automation/test_if_visible.py
+Run with:  python -m pytest mOSdat/automation/test_if_visible.py -v
+or standalone: python mOSdat/automation/test_if_visible.py
 """
 
 import sys

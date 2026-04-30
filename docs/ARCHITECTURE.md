@@ -115,7 +115,7 @@ hostpci0=0000:01:00,pcie=1,x-vga=1
 ## File Organization
 
 ```
-test-framework/
+mOSdat/
 ├── shared/              # Cross-OS utilities
 │   ├── config.sh        # Credentials, paths
 │   └── proxmox-api.sh   # API helper functions

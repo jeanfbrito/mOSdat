@@ -4,7 +4,7 @@
 Usage:
     python -m test_framework.tools.aggregate_results [--results-dir DIR] [--output FILE]
     # or directly:
-    python test-framework/tools/aggregate_results.py
+    python mOSdat/tools/aggregate_results.py
 """
 
 from __future__ import annotations

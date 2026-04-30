@@ -124,7 +124,7 @@ An OS is **NOT DONE** until:
 ```
 Host (Ubuntu 24.04)          Proxmox (192.168.13.85)
 ┌─────────────────┐          ┌─────────────────────┐
-│ test-framework/ │  ──API── │ VMs (Fedora/Ubuntu) │
+│ mOSdat/ │  ──API── │ VMs (Fedora/Ubuntu) │
 │ build/deploy/   │  ──SSH── │ + RTX 3060 GPU      │
 └─────────────────┘          └─────────────────────┘
 ```
@@ -274,7 +274,7 @@ Wave 9: Generate report
 
 ```bash
 # Full test matrix for a release
-cd /home/jean/projects/linux-testing/test-framework
+cd /home/jean/projects/linux-testing/mOSdat
 
 # 1. Build all packages
 cd /home/jean/projects/linux-testing/Rocket.Chat.Electron
@@ -413,7 +413,7 @@ export PROXMOX_HOST=192.168.13.85
 export PROXMOX_USER=root@pam
 export PROXMOX_PASSWORD=cb6wist3
 export REPO_PATH=/home/jean/projects/linux-testing/Rocket.Chat.Electron
-export FRAMEWORK_PATH=/home/jean/projects/linux-testing/test-framework
+export FRAMEWORK_PATH=/home/jean/projects/linux-testing/mOSdat
 export VM_USER=jean
 export VM_PASSWORD=cb6wist3
 ```
@@ -557,10 +557,10 @@ Examples:
 **Fedora 42 (RPM + AppImage):**
 ```bash
 VM_IP=192.168.13.80
-RESULTS=/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
 # Transfer tests
-scp -r /home/jean/projects/linux-testing/test-framework/shared/tests jean@${VM_IP}:/tmp/
+scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
 
 # Deploy and test RPM
 scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
@@ -577,9 +577,9 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 ```bash
 VM_IP=192.168.13.81  # or .82 for 24.04
 OS_NAME=ubuntu2204   # or ubuntu2404
-RESULTS=/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r /home/jean/projects/linux-testing/test-framework/shared/tests jean@${VM_IP}:/tmp/
+scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
 
 # DEB
 scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.deb jean@${VM_IP}:/tmp/
@@ -600,9 +600,9 @@ ssh jean@${VM_IP} "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh" 
 **Manjaro (AppImage only):**
 ```bash
 VM_IP=192.168.13.83
-RESULTS=/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r /home/jean/projects/linux-testing/test-framework/shared/tests jean@${VM_IP}:/tmp/
+scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
 scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
 ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/manjaro-appimage-no-gpu.log
@@ -611,9 +611,9 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 **openSUSE (RPM + AppImage):**
 ```bash
 VM_IP=192.168.13.84
-RESULTS=/home/jean/projects/linux-testing/test-framework/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r /home/jean/projects/linux-testing/test-framework/shared/tests jean@${VM_IP}:/tmp/
+scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
 
 # RPM (note: zypper, not dnf!)
 scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
