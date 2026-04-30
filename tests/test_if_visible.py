@@ -23,9 +23,9 @@ sys.modules["PIL"].Image = sys.modules["PIL.Image"]
 
 # Minimal stubs for the three local modules functional_runner imports
 for stub in (
-    "test_framework.automation.vlm_client",
-    "test_framework.automation.input_injector",
-    "test_framework.automation.screenshot",
+    "test_framework.automation.vlm.client",
+    "test_framework.automation.vlm.input",
+    "test_framework.automation.vlm.screenshot",
 ):
     if stub not in sys.modules:
         m = types.ModuleType(stub)
@@ -45,21 +45,18 @@ import importlib.util as _ilu
 
 _spec = _ilu.spec_from_file_location(
     "functional_runner",
-    Path(__file__).parent.parent / "automation" / "functional_runner.py",
+    Path(__file__).parent.parent / "automation" / "runners" / "functional.py",
 )
 _mod = _ilu.module_from_spec(_spec)
 
 # Patch the relative imports that functional_runner uses
-_mod.__package__ = "automation"
+_mod.__package__ = "automation.runners"
 with patch.dict(
     sys.modules,
     {
-        "automation.vlm_client": sys.modules["test_framework.automation.vlm_client"],
-        "automation.input_injector": sys.modules["test_framework.automation.input_injector"],
-        "automation.screenshot": sys.modules["test_framework.automation.screenshot"],
-        ".vlm_client": sys.modules["test_framework.automation.vlm_client"],
-        ".input_injector": sys.modules["test_framework.automation.input_injector"],
-        ".screenshot": sys.modules["test_framework.automation.screenshot"],
+        "automation.vlm.client": sys.modules["test_framework.automation.vlm.client"],
+        "automation.vlm.input": sys.modules["test_framework.automation.vlm.input"],
+        "automation.vlm.screenshot": sys.modules["test_framework.automation.vlm.screenshot"],
     },
 ):
     try:
