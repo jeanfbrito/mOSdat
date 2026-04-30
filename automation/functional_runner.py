@@ -1,4 +1,4 @@
-"""Functional UI test runner using Holo2 for element localization and verification."""
+"""Functional UI test runner using VLM for element localization and verification."""
 
 import time
 from dataclasses import dataclass, field
@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 from PIL import Image
 
-from .holo2_client import Holo2Client
+from .vlm_client import VLMClient
 from .input_injector import InputInjector
 from .screenshot import Screenshotter
 
@@ -28,6 +28,8 @@ class FunctionalStep:
     wait: int = 0                          # seconds to wait after launch before proceeding
     focus: Optional[str] = None           # window title to bring to front after launch+wait
     shell: Optional[str] = None            # arbitrary shell/PowerShell command to run on the VM (one-shot)
+    if_visible: Optional[str] = None      # VLM visibility check; if True → execute `then_steps`, if False → skip silently
+    then_steps: Optional[list] = None     # steps to execute when if_visible is True (list of FunctionalStep)
 
 
 class StepFailed(Exception):
@@ -37,13 +39,13 @@ class StepFailed(Exception):
 class FunctionalRunner:
     def __init__(
         self,
-        holo2: Holo2Client,
+        vlm: VLMClient,
         screenshotter: Screenshotter,
         injector: InputInjector,
         screenshot_dir: Optional[Path] = None,
         log_fn: Callable[[str], None] = print,
     ):
-        self.holo2 = holo2
+        self.vlm = vlm
         self.screenshotter = screenshotter
         self.injector = injector
         self.screenshot_dir = screenshot_dir
@@ -102,6 +104,24 @@ class FunctionalRunner:
                 self.log(f"    → waiting {step.wait}s")
                 time.sleep(step.wait)
 
+        # if_visible: check element presence once via VLM; execute then_steps if
+        # visible, skip silently if not. No failure, no retry on this outer check.
+        if step.if_visible is not None:
+            self.log(f"  Step {step_num}: if_visible '{step.if_visible[:60]}'")
+            try:
+                screenshot, _ = self.screenshotter.capture()
+                visible = self.vlm.verify(screenshot, f"is there a {step.if_visible}")
+            except Exception as e:
+                self.log(f"    → visibility check error ({e}), treating as not visible — skip")
+                visible = False
+            if visible:
+                self.log(f"    → visible: executing then_steps")
+                for sub_i, sub_step in enumerate(step.then_steps or [], start=1):
+                    self.run_step(sub_step, f"{step_num}.{sub_i}")
+            else:
+                self.log(f"    → not visible: skipping")
+            return
+
         # Focus can run with or without a launch — used to re-assert that the
         # target window is in the foreground before any input/localize, so
         # notifications or background windows can't hijack keystrokes.
@@ -126,7 +146,7 @@ class FunctionalRunner:
                 if step.localize:
                     self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
                     screenshot, screen_size = self.screenshotter.capture()
-                    x, y = self.holo2.localize(screenshot, step.localize, screen_size)
+                    x, y = self.vlm.localize(screenshot, step.localize, screen_size)
                     self.log(f"    → click ({x}, {y})")
                     self.injector.click(x, y)
                     time.sleep(0.4)
@@ -146,7 +166,7 @@ class FunctionalRunner:
                         if attempt > 1:
                             try:
                                 screenshot_chk, _ = self.screenshotter.capture()
-                                already_typed = self.holo2.verify(
+                                already_typed = self.vlm.verify(
                                     screenshot_chk,
                                     f"the text '{step.then_type}' is already visible in an input field on screen",
                                 )
@@ -209,7 +229,7 @@ class FunctionalRunner:
                     raise StepFailed(f"Step {step_num}: {e}") from e
 
     def _wait_for_state(self, question: str, timeout: int, step_num: int, must_be_false: Optional[str] = None) -> bool:
-        """Poll until Holo2 confirms the expected state or timeout expires.
+        """Poll until VLM confirms the expected state or timeout expires.
 
         Passes when `question` is True AND (if given) `must_be_false` is False.
         The negative check catches error banners that a hallucinating VLM
@@ -221,9 +241,9 @@ class FunctionalRunner:
             time.sleep(interval)
             try:
                 screenshot, _ = self.screenshotter.capture()
-                if not self.holo2.verify(screenshot, question):
+                if not self.vlm.verify(screenshot, question):
                     continue
-                if must_be_false and self.holo2.verify(screenshot, must_be_false):
+                if must_be_false and self.vlm.verify(screenshot, must_be_false):
                     continue
                 return True
             except Exception:
@@ -287,6 +307,8 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             wait=s.wait,
             focus=s.focus,
             shell=_sub(s.shell, vars) if s.shell else None,
+            if_visible=_sub(s.if_visible, vars) if s.if_visible else None,
+            then_steps=_resolve_vars(s.then_steps, vars) if s.then_steps else None,
         ))
     return resolved
 
@@ -313,19 +335,29 @@ def load_test_yaml(path: Path) -> tuple[str, list[FunctionalStep], dict]:
     vars = data.get("vars", {})
     steps = []
     for raw in data.get("steps", []):
-        steps.append(FunctionalStep(
-            localize=raw.get("localize"),
-            then_type=raw.get("then_type") or raw.get("type"),
-            then_key=raw.get("then_key") or raw.get("key"),
-            then_key_pre=raw.get("then_key_pre") or raw.get("key_pre"),
-            verify=raw.get("verify"),
-            verify_not=raw.get("verify_not"),
-            verify_input=raw.get("verify_input"),
-            verify_timeout=int(raw.get("verify_timeout", 10)),
-            retries=int(raw.get("retries", 3)),
-            launch=raw.get("launch"),
-            wait=int(raw.get("wait", 0)),
-            focus=raw.get("focus"),
-            shell=raw.get("shell"),
-        ))
+        steps.append(_parse_step(raw))
     return name, steps, vars
+
+
+def _parse_step(raw: dict) -> "FunctionalStep":
+    """Parse a single raw YAML step dict into a FunctionalStep."""
+    then_steps = None
+    if "then" in raw:
+        then_steps = [_parse_step(s) for s in raw["then"]]
+    return FunctionalStep(
+        localize=raw.get("localize"),
+        then_type=raw.get("then_type") or raw.get("type"),
+        then_key=raw.get("then_key") or raw.get("key"),
+        then_key_pre=raw.get("then_key_pre") or raw.get("key_pre"),
+        verify=raw.get("verify"),
+        verify_not=raw.get("verify_not"),
+        verify_input=raw.get("verify_input"),
+        verify_timeout=int(raw.get("verify_timeout", 10)),
+        retries=int(raw.get("retries", 3)),
+        launch=raw.get("launch"),
+        wait=int(raw.get("wait", 0)),
+        focus=raw.get("focus"),
+        shell=raw.get("shell"),
+        if_visible=raw.get("if_visible"),
+        then_steps=then_steps,
+    )

@@ -1,4 +1,4 @@
-"""Holo2 VLM client for GUI element localization and visual verification."""
+"""VLM client for GUI element localization and visual verification."""
 
 import base64
 import json
@@ -8,7 +8,7 @@ from openai import OpenAI
 from PIL import Image
 
 
-class Holo2Error(Exception):
+class VLMError(Exception):
     pass
 
 
@@ -34,7 +34,7 @@ def _parse_coords(raw: str) -> dict:
     """Extract click coords from model response.
 
     Returns {"x": int, "y": int, "space": "norm01k"|"pixel"}.
-      - "norm01k": values on 0-1000 normalized grid (Holo2, qwen3-vl).
+      - "norm01k": values on 0-1000 normalized grid (VLM, qwen3-vl).
       - "pixel": values in screenshot pixel space (qwen3.6 bbox_2d).
 
     Handles:
@@ -45,7 +45,7 @@ def _parse_coords(raw: str) -> dict:
     - Malformed values like {"x":":<number>","y":<number>} (extra colon/quote)
     """
     if not raw:
-        raise Holo2Error(f"No JSON found in response: {raw[:200]!r}")
+        raise VLMError(f"No JSON found in response: {raw[:200]!r}")
     # Strip thinking block
     if "</think>" in raw:
         raw = raw[raw.rfind("</think>") + len("</think>"):]
@@ -57,13 +57,13 @@ def _parse_coords(raw: str) -> dict:
     for m in _re.finditer(r"\[[\s\S]*\]|\{[\s\S]*\}", text):
         candidates.append(m.group(0))
     if not candidates:
-        raise Holo2Error(f"No JSON found in response: {raw[:200]!r}")
+        raise VLMError(f"No JSON found in response: {raw[:200]!r}")
     # Fix malformed values like "x":":<number>" → "x":<number>
     json_str = _re.sub(r':\s*"[:\s]*(\d+)"', r': \1', candidates[-1])
     obj = json.loads(json_str)
     if isinstance(obj, list):
         if not obj:
-            raise Holo2Error(f"Empty list: {raw[:200]!r}")
+            raise VLMError(f"Empty list: {raw[:200]!r}")
         obj = obj[0]
 
     def _to_scalar(v):
@@ -75,7 +75,7 @@ def _parse_coords(raw: str) -> dict:
                 else:
                     flat.append(int(float(item)))
             if not flat:
-                raise Holo2Error(f"Empty coordinate list: {v!r}")
+                raise VLMError(f"Empty coordinate list: {v!r}")
             return sum(flat) // len(flat)
         return int(float(v))
 
@@ -83,7 +83,7 @@ def _parse_coords(raw: str) -> dict:
     if isinstance(obj, dict) and "bbox_2d" in obj:
         bb = obj["bbox_2d"]
         if not (isinstance(bb, (list, tuple)) and len(bb) >= 4):
-            raise Holo2Error(f"Malformed bbox_2d: {bb!r}")
+            raise VLMError(f"Malformed bbox_2d: {bb!r}")
         x1, y1, x2, y2 = (int(float(bb[i])) for i in range(4))
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
         space = "pixel" if (cx > 1000 or cy > 1000) else "norm01k"
@@ -91,7 +91,7 @@ def _parse_coords(raw: str) -> dict:
 
     # Point format.
     if not (isinstance(obj, dict) and "x" in obj and "y" in obj):
-        raise Holo2Error(f"Unrecognized coord format: {obj!r}")
+        raise VLMError(f"Unrecognized coord format: {obj!r}")
     x = _to_scalar(obj["x"])
     y = _to_scalar(obj["y"])
     # Auto-detect space: values >1000 cannot be normalized.
@@ -100,7 +100,7 @@ def _parse_coords(raw: str) -> dict:
     return {"x": x, "y": y, "space": "norm01k"}
 
 
-class Holo2Client:
+class VLMClient:
     def __init__(self, base_url: str, model: str = "holo2-4b", verify_model: str | None = None):
         """Args:
             model: VLM for element localization (expects coordinate output).
@@ -129,7 +129,7 @@ class Holo2Client:
             (pixel_x, pixel_y) ready to pass to InputInjector.click().
         """
         b64 = _encode_image(screenshot)
-        last_err: Exception = Holo2Error("no attempts made")
+        last_err: Exception = VLMError("no attempts made")
         # Some VLMs (gemma, sometimes Holo2 after a swap) return empty strings
         # intermittently. Retry more aggressively with small prompt tweaks to
         # bust any server-side KV cache.
@@ -162,7 +162,7 @@ class Holo2Client:
                 last_err = e
                 if attempt < max_attempts - 1:
                     import time as _t
-                    _t.sleep(0.5 if isinstance(e, Holo2Error) and "No JSON" in str(e) else 2)
+                    _t.sleep(0.5 if isinstance(e, VLMError) and "No JSON" in str(e) else 2)
         raise last_err
 
     def verify(self, screenshot: Image.Image, question: str) -> bool:

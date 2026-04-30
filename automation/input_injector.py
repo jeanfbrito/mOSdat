@@ -139,8 +139,28 @@ Write-Output "launch:ok"
 """
             self.ssh.run(_ps_encoded(ps), timeout=15)
         else:
-            safe = cmd.replace("'", "'\\''")
-            self.ssh.run(
-                f"DISPLAY=:0 nohup '{safe}' </dev/null >/dev/null 2>&1 &",
-                timeout=5,
+            # Launch in the user's graphical session. Grab DISPLAY / XAUTHORITY /
+            # WAYLAND_DISPLAY / DBUS_SESSION_BUS_ADDRESS / XDG_RUNTIME_DIR from
+            # gnome-shell's /proc/<pid>/environ so Electron (and any X or
+            # Wayland client) picks the same compositor and auth file the
+            # logged-in user is using. Falls back to DISPLAY=:0 if gnome-shell
+            # isn't running (other DEs are handled similarly — the only thing
+            # that matters is finding the session leader's env block).
+            # cmd may include args (e.g. "/bin/app --no-sandbox"); pass it
+            # through to sh -c so the shell tokenizes it correctly.
+            escaped = cmd.replace("'", "'\\''")
+            launcher = (
+                "SESSION_PID=$(pgrep -u \"$USER\" -x gnome-shell || "
+                "pgrep -u \"$USER\" -x plasmashell || "
+                "pgrep -u \"$USER\" -x xfce4-session); "
+                "if [ -n \"$SESSION_PID\" ]; then "
+                "  ENV_ARGS=$(tr '\\0' '\\n' </proc/\"$SESSION_PID\"/environ "
+                "    | grep -E '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|"
+                "DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)=' | xargs); "
+                "else "
+                "  ENV_ARGS='DISPLAY=:0'; "
+                "fi; "
+                f"setsid env $ENV_ARGS sh -c '{escaped}' "
+                "</dev/null >/dev/null 2>&1 & disown"
             )
+            self.ssh.run(launcher, timeout=10)

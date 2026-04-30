@@ -7,7 +7,7 @@ from typing import Callable, Optional
 from .config import ProjectConfig, VMConfig, Package
 from .gpu import GPUManager
 from .proxmox import ProxmoxAPI
-from .state import StateManager, TestStatus, Phase
+from .state import StateManager, TestStatus, Phase, CompletionError, validate_completion
 from .vm import VMOperations
 
 
@@ -265,6 +265,20 @@ class TestRunner:
 
             from .report import generate_report
             generate_report(self.state, self.config)
+
+            missing = validate_completion(
+                self.state,
+                self.get_vms_to_test(),
+                skip_validation=self.config.allow_incomplete,
+            )
+            if missing:
+                lines = "\n".join(
+                    f"  - {vm} / {pkg} / {gpu_mode}"
+                    for vm, pkg, gpu_mode in missing
+                )
+                raise CompletionError(
+                    f"Test matrix incomplete — {len(missing)} cell(s) not covered:\n{lines}"
+                )
 
             self.state.phase = Phase.DONE
             self.state_manager.save()

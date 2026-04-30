@@ -3,7 +3,10 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .config import VMConfig
 
 
 class TestStatus(str, Enum):
@@ -160,3 +163,41 @@ class StateManager:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.save()
+
+
+class CompletionError(Exception):
+    """Raised when the test matrix is incomplete and --allow-incomplete was not set."""
+
+
+def validate_completion(
+    state: "State",
+    vms: "list[VMConfig]",
+    skip_validation: bool = False,
+) -> "list[tuple[str, str, str]]":
+    """Return missing (vm_name, package_format, gpu_mode) cells.
+
+    gpu_mode is the string "gpu" or "no-gpu" to match TestResult.key conventions.
+    An empty list means the matrix is fully covered.
+
+    Args:
+        state: Current test State.
+        vms: List of VMConfig objects defining the expected matrix.
+        skip_validation: If True, always return [] (for --allow-incomplete dev runs).
+    """
+    if skip_validation:
+        return []
+
+    missing: list[tuple[str, str, str]] = []
+    for vm in vms:
+        for pkg in vm.packages:
+            for gpu in (False, True):
+                gpu_mode = "gpu" if gpu else "no-gpu"
+                key = f"{vm.name}-{pkg.format}-{gpu_mode}"
+                result = state.results.get(key)
+                if result is None or result.status not in (
+                    TestStatus.PASSED,
+                    TestStatus.FAILED,
+                    TestStatus.SKIPPED,
+                ):
+                    missing.append((vm.name, pkg.format, gpu_mode))
+    return missing

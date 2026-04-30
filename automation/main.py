@@ -11,6 +11,7 @@ def cmd_run(args) -> int:
     config.skip_build = args.skip_build
     config.resume = args.resume
     config.only_vm = args.only
+    config.allow_incomplete = args.allow_incomplete
     if args.results_dir:
         config.results_dir = args.results_dir
 
@@ -72,15 +73,15 @@ def cmd_functional(args) -> int:
         print(f"[mOSdat] ERROR: Test file not found: {test_file}")
         return 1
 
-    from .holo2_client import Holo2Client
+    from .vlm_client import VLMClient
     from .screenshot import Screenshotter
     from .input_injector import InputInjector
     from .functional_runner import FunctionalRunner, load_test_yaml
 
-    holo2 = Holo2Client(
-        base_url=config.holo2.base_url,
-        model=args.model or config.holo2.model,
-        verify_model=args.verify_model or config.holo2.verify_model or None,
+    vlm = VLMClient(
+        base_url=config.vlm.base_url,
+        model=args.model or config.vlm.model,
+        verify_model=args.verify_model or config.vlm.verify_model or None,
     )
 
     name, steps, vars_ = load_test_yaml(test_file)
@@ -123,7 +124,7 @@ def cmd_functional(args) -> int:
             screenshotter = Screenshotter(vnc)
             injector = InputInjector(vnc, ssh, vm.is_windows)
             runner = FunctionalRunner(
-                holo2=holo2,
+                vlm=vlm,
                 screenshotter=screenshotter,
                 injector=injector,
                 screenshot_dir=screenshot_dir,
@@ -212,6 +213,8 @@ def main() -> int:
     run_p.add_argument("--skip-build", action="store_true", help="Skip build phase")
     run_p.add_argument("--only", metavar="VM", help="Test only one VM")
     run_p.add_argument("--results-dir", type=Path, help="Custom results directory")
+    run_p.add_argument("--allow-incomplete", action="store_true",
+                       help="Skip completion validation (dev runs with partial matrix)")
 
     # mosdat test
     test_p = sub.add_parser("test", help="Quick test with pre-built package")
@@ -221,7 +224,7 @@ def main() -> int:
     test_p.add_argument("--results-dir", type=Path, help="Custom results directory")
 
     # mosdat functional
-    fn_p = sub.add_parser("functional", help="Run Holo2 VLM functional UI tests")
+    fn_p = sub.add_parser("functional", help="Run VLM functional UI tests")
     fn_p.add_argument("config", type=Path, help="Path to mosdat config (TOML)")
     fn_p.add_argument("--vms", required=True, help="Comma-separated VM names")
     fn_p.add_argument("--test", default="rocketchat-smoke", metavar="NAME",

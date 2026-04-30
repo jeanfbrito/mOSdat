@@ -30,6 +30,13 @@ steps:
     verify_timeout: 20
     retries: 2
 
+  # ── Dismiss RC's electron-updater "update available" dialog if it appears.
+  #    The modal floats over the login screen and obscures the server URL input.
+  #    VLM checks visibility first; skips silently if no dialog is present.
+  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+
   # ── With a wiped config, Rocket.Chat opens directly to the server URL
   #    form (rocket.chat logo + "Enter your server URL" input + Connect).
   #    Each localize click implicitly brings Rocket.Chat to the foreground,

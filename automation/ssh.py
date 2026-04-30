@@ -58,20 +58,29 @@ class SSHClient:
                 stderr="",
             )
         
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=capture_output,
-                text=True,
-                timeout=timeout,
-            )
-            return SSHResult(
-                returncode=result.returncode,
-                stdout=result.stdout if capture_output else "",
-                stderr=result.stderr if capture_output else "",
-            )
-        except subprocess.TimeoutExpired:
-            return SSHResult(returncode=124, stdout="", stderr="SSH command timed out")
+        for attempt in range(2):
+            try:
+                result = subprocess.run(
+                    ssh_cmd,
+                    capture_output=capture_output,
+                    text=True,
+                    timeout=timeout,
+                )
+                if result.returncode == 255 and attempt == 0:
+                    # rc 255 = SSH connection failure (not a remote command error).
+                    # Retry once after a short delay.
+                    import time as _time
+                    _time.sleep(5)
+                    continue
+                return SSHResult(
+                    returncode=result.returncode,
+                    stdout=result.stdout if capture_output else "",
+                    stderr=result.stderr if capture_output else "",
+                )
+            except subprocess.TimeoutExpired:
+                return SSHResult(returncode=124, stdout="", stderr="SSH command timed out")
+        # Should not be reached, but satisfies the type checker.
+        return SSHResult(returncode=255, stdout="", stderr="SSH connection failed after retry")
 
     def is_reachable(self) -> bool:
         result = self.run("echo OK", timeout=5)
@@ -102,7 +111,7 @@ class SSHClient:
             return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
 
 
-def wait_for_ssh(host: str, user: str, timeout: int = 120, interval: int = 5) -> bool:
+def wait_for_ssh(host: str, user: str, timeout: int = 240, interval: int = 5) -> bool:
     import time
     client = SSHClient(host, user)
     deadline = time.time() + timeout

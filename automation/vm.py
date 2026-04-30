@@ -48,11 +48,12 @@ class VMOperations:
 
     @property
     def _tmp_dir(self) -> str:
-        return "C:\\tmp" if self.vm.is_windows else "/tmp"
+        return self.vm.resolved_temp_dir
 
     @property
     def _tests_dir(self) -> str:
-        return "C:\\tmp\\tests" if self.vm.is_windows else "/tmp/tests"
+        tmp = self.vm.resolved_temp_dir
+        return f"{tmp}\\tests" if self.vm.is_windows else f"{tmp}/tests"
 
     def ensure_running(self, log_fn=print) -> bool:
         status = self.api.get_vm_status(self.vm.vmid)
@@ -80,15 +81,15 @@ class VMOperations:
                 raise VMError(f"Failed to transfer tests: {result.stderr}")
             return True
         else:
-            result = self.ssh.run("rm -rf /tmp/tests")
+            result = self.ssh.run(f"rm -rf {self._tests_dir}")
             if not result.success:
-                log_fn(f"  Warning: Could not clean /tmp/tests: {result.stderr}")
+                log_fn(f"  Warning: Could not clean {self._tests_dir}: {result.stderr}")
 
-            result = self.ssh.scp_dir_to(self.config.tests_path, "/tmp/")
+            result = self.ssh.scp_dir_to(self.config.tests_path, f"{self._tmp_dir}/")
             if not result.success:
                 raise VMError(f"Failed to transfer tests: {result.stderr}")
 
-            result = self.ssh.run("chmod +x /tmp/tests/*.sh")
+            result = self.ssh.run(f"chmod +x {self._tests_dir}/*.sh")
             return result.success
 
     def find_package_file(self, package: Package) -> Optional[Path]:
@@ -130,7 +131,7 @@ class VMOperations:
             encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
             cmd = f"powershell.exe -ExecutionPolicy Bypass -EncodedCommand {encoded}"
         else:
-            script = "/tmp/tests/run-gpu-tests.sh" if gpu else "/tmp/tests/run-all.sh"
+            script = f"{self._tests_dir}/run-gpu-tests.sh" if gpu else f"{self._tests_dir}/run-all.sh"
             cmd = f"{env} {script}"
 
         result = self.ssh.run(cmd, timeout=600, stream_output=True)

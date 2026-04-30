@@ -33,26 +33,41 @@ steps:
       for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
         [ -e "$d" ] && rm -rf "$d"
       done
+      # RC stores its login token in libsecret (GNOME keyring) via keytar,
+      # so a plain userData wipe leaves the session intact — the app auto-
+      # resumes the previous workspace on next launch. Nuke the keyring
+      # files; gnome-keyring-daemon recreates an empty one on first use.
+      rm -f "$HOME"/.local/share/keyrings/*.keyring
       echo cleanup:ok
 
-  # Reset desktop to a known state. A prior test or an SSH launch attempt
-  # may have left the Activities overview or a menu open — Escape collapses
-  # it. Then Super opens the app launcher.
-  - key_pre: "escape"
-    key: "super"
-    wait: 2
+  # Reset desktop to a known state — Escape collapses any leftover overview
+  # or menu from a previous run.
+  - key: "escape"
+    wait: 1
 
-  # Search for Rocket.Chat and launch the top result. On retries, the
-  # functional runner re-checks verify first and skips the sequence if RC
-  # is already foregrounded, so re-typing "Rocket" into whatever window
-  # happens to be focused is avoided.
-  - type: "Rocket"
-    key: "enter"
-    wait: 8
-    verify: "the Rocket.Chat application is the foreground window taking most of the screen, with the red rocket.chat logo clearly visible in the center of the window"
-    verify_not: "the GNOME Activities overview, a launcher grid, a Software Updater dialog, or any other application window is covering the center of the screen"
+  # Launch Rocket.Chat. The Linux branch of `injector.launch` runs the
+  # binary with env inherited from the user's graphical session
+  # (gnome-shell / plasmashell / xfce4-session), so Electron picks up
+  # DISPLAY / XAUTHORITY / WAYLAND_DISPLAY / DBUS from the active session
+  # and doesn't die with "Missing X server" as it would from a plain SSH
+  # shell.
+  - launch: "{app_path} --no-sandbox"
+    wait: 10
+    # Strict verify: RC must be on the first-launch "Enter your server URL" screen.
+    # This catches stale session state that cleanup missed — otherwise the
+    # next step will happily type the server URL as a chat message into the
+    # composer of a previously-logged-in workspace.
+    verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
+    verify_not: "an Email/username input field, a Password input field, a chat history containing messages, or a 'Message #...' composer is visible inside the Rocket.Chat window"
     verify_timeout: 20
     retries: 2
+
+  # ── Dismiss RC's electron-updater "update available" dialog if it appears.
+  #    The modal floats over the login screen and obscures the server URL input.
+  #    VLM checks visibility first; skips silently if no dialog is present.
+  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
 
   # ── Rest is identical to the Windows smoke. All clicks/types flow through
   #    VNC and the VLM, so they're OS-agnostic. ──────────────────────────
@@ -64,11 +79,15 @@ steps:
     verify_timeout: 25
     retries: 3
 
-  - localize: "the username or email input field in the login form"
+  - localize: "the upper input field labeled 'Email or username' (above the Password field)"
     then_type: "{test_user}"
+    # Catch VLM mis-click that lands on Password instead of Email: the
+    # username field must show the typed text AND the password field must
+    # still be empty/hidden. On fail the step re-localizes and retries.
+    verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
     retries: 3
 
-  - localize: "the password input field in the login form"
+  - localize: "the Password input field in the login form (the field whose characters render as dots)"
     then_type: "{test_password}"
     then_key: "enter"
     verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
@@ -77,8 +96,8 @@ steps:
     retries: 3
 
   - localize: "the General channel in the left sidebar"
-    verify: "the General channel has finished loading and shows real text content or real messages, with no grey skeleton or shimmer loading placeholders"
-    verify_timeout: 30
+    verify: "the General channel has finished loading and shows real text content or real messages, with no grey skeleton, shimmer placeholder, or loading dots"
+    verify_timeout: 60
     retries: 3
 
   - localize: "the message input box or composer at the bottom of the chat"

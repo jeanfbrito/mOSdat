@@ -1,3 +1,15 @@
+"""
+Configuration loader for the mosdat test framework.
+
+Precedence (highest to lowest):
+  1. TOML file values (explicit keys in config.toml)
+  2. Environment variables (from .env or shell)
+  3. Hardcoded defaults in this module
+
+Copy .env.example to .env at the repo root or next to your config.toml and
+fill in required values before running. See .env.example for all supported
+variables.
+"""
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -5,6 +17,17 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+
+
+def _require_env(name: str) -> str:
+    """Return the value of a required environment variable or raise clearly."""
+    value = os.environ.get(name, "")
+    if not value:
+        raise EnvironmentError(
+            f"Required environment variable '{name}' is not set. "
+            f"Copy .env.example to .env and set {name}."
+        )
+    return value
 
 
 @dataclass
@@ -37,12 +60,12 @@ class BuildConfig:
 
 @dataclass
 class ProxmoxConfig:
-    host: str = "192.168.13.85"
-    port: int = 8006
-    user: str = "root@pam"
-    password: str = ""
-    node: str = "pve"
-    gpu_pci_address: str = "0000:01:00"
+    host: str = field(default_factory=lambda: os.environ.get("PROXMOX_HOST", ""))
+    port: int = field(default_factory=lambda: int(os.environ.get("PROXMOX_PORT", "8006")))
+    user: str = field(default_factory=lambda: os.environ.get("PROXMOX_USER", "root@pam"))
+    password: str = field(default_factory=lambda: os.environ.get("PROXMOX_PASSWORD", ""))
+    node: str = field(default_factory=lambda: os.environ.get("PROXMOX_NODE", "pve"))
+    gpu_pci_address: str = field(default_factory=lambda: os.environ.get("PROXMOX_GPU_PCI", "0000:01:00"))
 
     @property
     def base_url(self) -> str:
@@ -74,10 +97,21 @@ class VMConfig:
     user: str = ""
     password: str = ""
     os_type: str = "linux"
+    temp_dir: Optional[str] = None
 
     @property
     def is_windows(self) -> bool:
         return self.os_type == "windows"
+
+    @property
+    def resolved_temp_dir(self) -> str:
+        """Resolve temp dir: TMPDIR env var > temp_dir field > OS default."""
+        env_val = os.environ.get("TMPDIR")
+        if env_val:
+            return env_val
+        if self.temp_dir:
+            return self.temp_dir
+        return "C:\\tmp" if self.is_windows else "/tmp"
 
 
 @dataclass
@@ -88,18 +122,18 @@ class TestScenario:
 
 
 @dataclass
-class Holo2Config:
-    base_url: str = "http://192.168.13.62:5001/v1"
-    model: str = "qwen3-vl-abliterated"  # handles both localize (bbox) and verify honestly
-    verify_model: str = ""  # general VLM for yes/no state checks; empty → reuse `model`
+class VLMConfig:
+    base_url: str = field(default_factory=lambda: os.environ.get("VLM_BASE_URL", ""))
+    model: str = field(default_factory=lambda: os.environ.get("VLM_MODEL", "holo2-4b"))
+    verify_model: str = field(default_factory=lambda: os.environ.get("VLM_VERIFY_MODEL", ""))  # general VLM for yes/no state checks; empty → reuse `model`
 
 
 @dataclass
 class FunctionalConfig:
     enabled: bool = False
-    workspace_url: str = ""
-    test_user: str = ""
-    test_password: str = ""
+    workspace_url: str = field(default_factory=lambda: os.environ.get("FUNCTIONAL_WORKSPACE_URL", ""))
+    test_user: str = field(default_factory=lambda: os.environ.get("FUNCTIONAL_TEST_USER", ""))
+    test_password: str = field(default_factory=lambda: os.environ.get("FUNCTIONAL_TEST_PASSWORD", ""))
     tests_dir: Optional[Path] = None   # directory containing YAML test files
 
 
@@ -119,13 +153,14 @@ class ProjectConfig:
     tests: list[TestScenario]
     report: ReportConfig
     build: Optional[BuildConfig] = None
-    holo2: Holo2Config = field(default_factory=Holo2Config)
+    vlm: VLMConfig = field(default_factory=VLMConfig)
     functional: FunctionalConfig = field(default_factory=FunctionalConfig)
     framework_path: Path = field(default_factory=lambda: Path(__file__).parent.parent)
     results_dir: Path = field(default_factory=Path)
     skip_build: bool = False
     resume: bool = False
     only_vm: Optional[str] = None
+    allow_incomplete: bool = False
 
     def __post_init__(self):
         if not self.results_dir or self.results_dir == Path():
@@ -163,7 +198,7 @@ class ProjectConfig:
 def load_config(config_path: Path) -> ProjectConfig:
     """Load a mosdat TOML config file and return a ProjectConfig."""
     # Load .env from same directory as config, or from framework root
-    env_path = config_path.parent / ".env"
+    env_path = Path(config_path).parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
     else:
@@ -171,8 +206,17 @@ def load_config(config_path: Path) -> ProjectConfig:
         if framework_env.exists():
             load_dotenv(framework_env)
 
+    # Load TOML first to check what fields are provided
     with open(config_path, "rb") as f:
         raw = tomllib.load(f)
+
+    # Fail fast on required env vars before touching the filesystem further
+    # Only require if TOML doesn't provide them
+    px_raw = raw.get("proxmox", {})
+    if "host" not in px_raw:
+        _require_env("PROXMOX_HOST")
+    if "password" not in px_raw:
+        _require_env("PROXMOX_PASSWORD")
 
     # App config
     app_raw = raw["app"]
@@ -190,12 +234,12 @@ def load_config(config_path: Path) -> ProjectConfig:
     # Proxmox config
     px_raw = raw.get("proxmox", {})
     proxmox = ProxmoxConfig(
-        host=px_raw.get("host", os.getenv("PROXMOX_HOST", "192.168.13.85")),
-        port=px_raw.get("port", int(os.getenv("PROXMOX_PORT", "8006"))),
-        user=px_raw.get("user", os.getenv("PROXMOX_USER", "root@pam")),
-        password=os.getenv("MOSDAT_PROXMOX_PASSWORD", os.getenv("PROXMOX_PASSWORD", "")),
-        node=px_raw.get("node", os.getenv("PROXMOX_NODE", "pve")),
-        gpu_pci_address=px_raw.get("gpu_pci_address", "0000:01:00"),
+        host=px_raw.get("host", os.environ.get("PROXMOX_HOST", "")),
+        port=px_raw.get("port", int(os.environ.get("PROXMOX_PORT", "8006"))),
+        user=px_raw.get("user", os.environ.get("PROXMOX_USER", "root@pam")),
+        password=px_raw.get("password", os.environ.get("PROXMOX_PASSWORD", "")),
+        node=px_raw.get("node", os.environ.get("PROXMOX_NODE", "pve")),
+        gpu_pci_address=px_raw.get("gpu_pci_address", os.environ.get("PROXMOX_GPU_PCI", "0000:01:00")),
     )
 
     # Build config (optional)
@@ -272,22 +316,32 @@ def load_config(config_path: Path) -> ProjectConfig:
         known_issues=known_issues,
     )
 
-    # Holo2 config
-    h2_raw = raw.get("holo2", {})
-    holo2 = Holo2Config(
-        base_url=h2_raw.get("base_url", "http://192.168.13.62:5001/v1"),
-        model=h2_raw.get("model", "holo2-4b"),
+    # VLM config
+    vlm_raw = raw.get("vlm", {})
+    vlm = VLMConfig(
+        base_url=vlm_raw.get("base_url", os.environ.get("VLM_BASE_URL", "")),
+        model=vlm_raw.get("model", os.environ.get("VLM_MODEL", "holo2-4b")),
+        verify_model=vlm_raw.get("verify_model", os.environ.get("VLM_VERIFY_MODEL", "")),
     )
 
     # Functional test config
     fn_raw = raw.get("functional", {})
     framework_path = Path(__file__).parent.parent
     default_tests_dir = framework_path / "shared" / "tests-functional"
+    fn_enabled = fn_raw.get("enabled", False)
+    if fn_enabled:
+        # Only require env vars if TOML doesn't provide them
+        if "workspace_url" not in fn_raw:
+            _require_env("FUNCTIONAL_WORKSPACE_URL")
+        if "test_user" not in fn_raw:
+            _require_env("FUNCTIONAL_TEST_USER")
+        if "test_password" not in fn_raw:
+            _require_env("FUNCTIONAL_TEST_PASSWORD")
     functional = FunctionalConfig(
-        enabled=fn_raw.get("enabled", False),
-        workspace_url=fn_raw.get("workspace_url", ""),
-        test_user=fn_raw.get("test_user", os.getenv("MOSDAT_TEST_USER", "")),
-        test_password=fn_raw.get("test_password", os.getenv("MOSDAT_TEST_PASSWORD", "")),
+        enabled=fn_enabled,
+        workspace_url=fn_raw.get("workspace_url", os.environ.get("FUNCTIONAL_WORKSPACE_URL", "")),
+        test_user=fn_raw.get("test_user", os.environ.get("FUNCTIONAL_TEST_USER", "")),
+        test_password=fn_raw.get("test_password", os.environ.get("FUNCTIONAL_TEST_PASSWORD", "")),
         tests_dir=Path(fn_raw["tests_dir"]) if "tests_dir" in fn_raw else default_tests_dir,
     )
 
@@ -298,6 +352,6 @@ def load_config(config_path: Path) -> ProjectConfig:
         vms=vms,
         tests=tests,
         report=report,
-        holo2=holo2,
+        vlm=vlm,
         functional=functional,
     )

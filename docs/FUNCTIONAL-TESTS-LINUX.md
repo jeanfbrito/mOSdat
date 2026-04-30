@@ -71,7 +71,7 @@ branch.)
 
 Switching the VLM from `qwen3-vl-abliterated` to
 `qwen3.6-35b-a3b-uncensored-vl` required two changes to
-`automation/holo2_client.py`:
+`automation/vlm_client.py`:
 
 1. `qwen3.6` wraps its answer in a list:
    `[{"bbox_2d": [x1, y1, x2, y2], "label": "…"}]`. Parser now unwraps
@@ -117,7 +117,7 @@ what actually failed.
   Linux GUI regardless of display server.
 - qwen3.6 localize/verify prompts — the prompts describe app UI
   elements, not OS chrome, so they transfer as-is.
-- VLM model swap via `[holo2]` in the TOML.
+- VLM model swap via `[vlm]` in the TOML.
 - Cleanup bash (pkill + `rm -rf ~/.config/<App>`).
 
 ## Known gotchas
