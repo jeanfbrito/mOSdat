@@ -66,7 +66,7 @@ def cmd_functional(args) -> int:
     vms = [config.vm_by_name[name] for name in vm_names]
 
     # Resolve test file
-    tests_dir = config.functional.tests_dir or (config.framework_path / "shared" / "tests-functional")
+    tests_dir = config.functional.tests_dir or (config.framework_path / "shared" / "scenarios" / "functional")
     test_name = args.test or "rocketchat-smoke"
     test_file = tests_dir / f"{test_name}.yaml"
     if not test_file.exists():

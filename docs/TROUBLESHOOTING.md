@@ -83,7 +83,7 @@ sudo ufw status               # Ubuntu
 **Solution** (required before EVERY test session):
 ```bash
 # Transfer test scripts to VM (REQUIRED before running tests)
-scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@<VM_IP>:/tmp/
+scp -r /home/jean/projects/linux-testing/mOSdat/shared/scenarios/smoke-linux jean@<VM_IP>:/tmp/tests
 
 # Verify
 ssh jean@<VM_IP> "ls -la /tmp/tests/"

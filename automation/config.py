@@ -180,11 +180,11 @@ class ProjectConfig:
 
     @property
     def tests_path(self) -> Path:
-        return self.framework_path / "shared" / "tests"
+        return self.framework_path / "shared" / "scenarios" / "smoke-linux"
 
     @property
     def tests_windows_path(self) -> Path:
-        return self.framework_path / "shared" / "tests-windows"
+        return self.framework_path / "shared" / "scenarios" / "smoke-windows"
 
     @property
     def state_file(self) -> Path:
@@ -299,7 +299,7 @@ def load_config(config_path: Path) -> ProjectConfig:
                 script=t_raw["script"],
             ))
     else:
-        tests_dir = Path(__file__).parent.parent / "shared" / "tests"
+        tests_dir = Path(__file__).parent.parent / "shared" / "scenarios" / "smoke-linux"
         if tests_dir.exists():
             for script in sorted(tests_dir.glob("test-*.sh")):
                 name = script.stem.removeprefix("test-")
@@ -327,7 +327,7 @@ def load_config(config_path: Path) -> ProjectConfig:
     # Functional test config
     fn_raw = raw.get("functional", {})
     framework_path = Path(__file__).parent.parent
-    default_tests_dir = framework_path / "shared" / "tests-functional"
+    default_tests_dir = framework_path / "shared" / "scenarios" / "functional"
     fn_enabled = fn_raw.get("enabled", False)
     if fn_enabled:
         # Only require env vars if TOML doesn't provide them

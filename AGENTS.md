@@ -63,8 +63,8 @@ Each OS must test ALL supported package formats:
 
 | Config | Description | Test Scripts |
 |--------|-------------|--------------|
-| **Without GPU** | Virtual displays (Xvfb, Weston headless) | `shared/tests/run-all.sh` |
-| **With GPU** | Real NVIDIA RTX 3060 via VFIO passthrough | `shared/tests/run-gpu-tests.sh` |
+| **Without GPU** | Virtual displays (Xvfb, Weston headless) | `shared/scenarios/smoke-linux/run-all.sh` |
+| **With GPU** | Real NVIDIA RTX 3060 via VFIO passthrough | `shared/scenarios/smoke-linux/run-gpu-tests.sh` |
 
 **Why test ALL packages with GPU?** Different package formats may have different:
 - Library bundling (system vs bundled libs)
@@ -503,7 +503,7 @@ ssh jean@<VM_IP> "chmod +x /tmp/rocketchat-*.AppImage"
 
 **Transfer test scripts (required for each VM):**
 ```bash
-scp -r ${FRAMEWORK_PATH}/shared/tests jean@<VM_IP>:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@<VM_IP>:/tmp/tests
 ```
 
 ### APP_PATH Environment Variable
@@ -561,7 +561,7 @@ VM_IP=192.168.13.80
 RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
 # Transfer tests
-scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 
 # Deploy and test RPM
 scp ${REPO_PATH}/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
@@ -580,7 +580,7 @@ VM_IP=192.168.13.81  # or .82 for 24.04
 OS_NAME=ubuntu2204   # or ubuntu2404
 RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 
 # DEB
 scp ${REPO_PATH}/dist/rocketchat-*.deb jean@${VM_IP}:/tmp/
@@ -603,7 +603,7 @@ ssh jean@${VM_IP} "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh" 
 VM_IP=192.168.13.83
 RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
 ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/manjaro-appimage-no-gpu.log
@@ -614,7 +614,7 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 VM_IP=192.168.13.84
 RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 
 # RPM (note: zypper, not dnf!)
 scp ${REPO_PATH}/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
