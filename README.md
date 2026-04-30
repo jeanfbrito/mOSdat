@@ -4,6 +4,8 @@
 
 Automated testing infrastructure using Proxmox VMs with GPU passthrough to validate desktop applications across multiple Linux distributions and display server configurations.
 
+> Supersedes the archived [`electron-linux-testing`](https://github.com/jeanfbrito/electron-linux-testing) Vagrant prototype (Jan 2026).
+
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Linux-blue?style=for-the-badge&logo=linux" alt="Linux">
   <img src="https://img.shields.io/badge/Proxmox-VE%208.x-orange?style=for-the-badge&logo=proxmox" alt="Proxmox">
