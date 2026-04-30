@@ -274,16 +274,16 @@ Wave 9: Generate report
 
 ```bash
 # Full test matrix for a release
-cd /home/jean/projects/linux-testing/mOSdat
+cd ${FRAMEWORK_PATH}
 
 # 1. Build all packages
-cd /home/jean/projects/linux-testing/Rocket.Chat.Electron
+cd ${REPO_PATH}
 git checkout <tag>
 yarn install && yarn build
 yarn electron-builder --publish never --linux rpm deb AppImage snap
 
 # 2. Create results directory
-mkdir -p results/$(date +%Y-%m-%d)_full-matrix-<version>
+mkdir -p ${FRAMEWORK_PATH}/results/$(date +%Y-%m-%d)_full-matrix-<version>
 
 # 3. Deploy and test (WITHOUT GPU - can run in parallel)
 # Fedora:
@@ -450,7 +450,7 @@ mkdir -p ${FRAMEWORK_PATH}/results/$(date +%Y-%m-%d)_full-matrix-${VERSION}
 ### Build Commands
 
 ```bash
-cd /home/jean/projects/linux-testing/Rocket.Chat.Electron
+cd ${REPO_PATH}
 
 # Checkout and build
 git fetch --tags
@@ -557,18 +557,18 @@ Examples:
 **Fedora 42 (RPM + AppImage):**
 ```bash
 VM_IP=192.168.13.80
-RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
 # Transfer tests
-scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
 
 # Deploy and test RPM
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "sudo dnf install -y /tmp/rocketchat-*.rpm"
 ssh jean@${VM_IP} "/tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/fedora42-rpm-no-gpu.log
 
 # Deploy and test AppImage
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
 ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/fedora42-appimage-no-gpu.log
 ```
@@ -577,22 +577,22 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 ```bash
 VM_IP=192.168.13.81  # or .82 for 24.04
 OS_NAME=ubuntu2204   # or ubuntu2404
-RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
 
 # DEB
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.deb jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.deb jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "sudo apt install -y /tmp/rocketchat-*.deb"
 ssh jean@${VM_IP} "/tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/${OS_NAME}-deb-no-gpu.log
 
 # AppImage
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
 ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/${OS_NAME}-appimage-no-gpu.log
 
 # Snap
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.snap jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.snap jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "sudo snap install --dangerous /tmp/rocketchat-*.snap"
 ssh jean@${VM_IP} "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/${OS_NAME}-snap-no-gpu.log
 ```
@@ -600,10 +600,10 @@ ssh jean@${VM_IP} "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh" 
 **Manjaro (AppImage only):**
 ```bash
 VM_IP=192.168.13.83
-RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
 ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/manjaro-appimage-no-gpu.log
 ```
@@ -611,17 +611,17 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 **openSUSE (RPM + AppImage):**
 ```bash
 VM_IP=192.168.13.84
-RESULTS=/home/jean/projects/linux-testing/mOSdat/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
 
-scp -r /home/jean/projects/linux-testing/mOSdat/shared/tests jean@${VM_IP}:/tmp/
+scp -r ${FRAMEWORK_PATH}/shared/tests jean@${VM_IP}:/tmp/
 
 # RPM (note: zypper, not dnf!)
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "sudo zypper install -y --allow-unsigned-rpm /tmp/rocketchat-*.rpm"
 ssh jean@${VM_IP} "/tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/opensuse-rpm-no-gpu.log
 
 # AppImage
-scp /home/jean/projects/linux-testing/Rocket.Chat.Electron/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
+scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
 ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
 ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/opensuse-appimage-no-gpu.log
 ```
