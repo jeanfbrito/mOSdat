@@ -238,4 +238,4 @@ The critical `wayland-fake` test passed on:
 
 **Total: 99/99 tests complete. wayland-fake PASSED on ALL 22 package/config combinations.**
 
-Full report: `results/2026-01-29_full-matrix-4.12.0-alpha.2/REPORT.md`
+Full report: `results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2/REPORT.md`

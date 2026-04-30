@@ -65,7 +65,7 @@ mosdat test examples/rocketchat.toml /path/to/package.rpm --vms fedora42
 ### Results Structure
 
 ```
-results/<date>_full-matrix-<version>/
+results/smoke/<date>_full-matrix-<version>/
 ├── packages.txt           # List of built packages
 ├── fedora42-rpm-no-gpu.log
 ├── fedora42-rpm-gpu.log
@@ -121,7 +121,7 @@ curl -k -s -b "PVEAuthCookie=$TICKET" \
 
 # 5. Create results directory
 VERSION="4.12.0-alpha.2"  # Change this
-mkdir -p ${FRAMEWORK_PATH}/results/$(date +%Y-%m-%d)_full-matrix-${VERSION}
+mkdir -p ${FRAMEWORK_PATH}/results/smoke/$(date +%Y-%m-%d)_full-matrix-${VERSION}
 ```
 
 ### Build Commands
@@ -234,7 +234,7 @@ Examples:
 **Fedora 42 (RPM + AppImage):**
 ```bash
 VM_IP=192.168.13.80
-RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
 
 # Transfer tests
 scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
@@ -254,7 +254,7 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 ```bash
 VM_IP=192.168.13.81  # or .82 for 24.04
 OS_NAME=ubuntu2204   # or ubuntu2404
-RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
 
 scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 
@@ -277,7 +277,7 @@ ssh jean@${VM_IP} "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh" 
 **Manjaro (AppImage only):**
 ```bash
 VM_IP=192.168.13.83
-RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
 
 scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
@@ -288,7 +288,7 @@ ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage
 **openSUSE (RPM + AppImage):**
 ```bash
 VM_IP=192.168.13.84
-RESULTS=${FRAMEWORK_PATH}/results/2026-01-29_full-matrix-4.12.0-alpha.2
+RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
 
 scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
 

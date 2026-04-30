@@ -166,7 +166,7 @@ class ProjectConfig:
         if not self.results_dir or self.results_dir == Path():
             from datetime import datetime
             date_str = datetime.now().strftime("%Y-%m-%d")
-            self.results_dir = self.framework_path / "results" / f"{date_str}_full-matrix-{self.app.version}"
+            self.results_dir = self.framework_path / "results" / "smoke" / f"{date_str}_full-matrix-{self.app.version}"
 
     @property
     def vm_by_name(self) -> dict[str, VMConfig]:

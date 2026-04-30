@@ -107,7 +107,7 @@ def cmd_functional(args) -> int:
             screenshot_dir = P(args.screenshots) / vm.name
         elif args.save_screenshots:
             ts = dt.now().strftime("%Y-%m-%d")
-            screenshot_dir = config.framework_path / "results" / f"{ts}_functional" / vm.name
+            screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
 
         from .transport.ssh import SSHClient
         from .transport.vnc import VncClient

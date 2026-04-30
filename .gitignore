@@ -48,3 +48,13 @@ __pycache__/
 build/
 dist/
 .eggs/
+
+# Test result artifacts (rebuildable / reproducible — see results/README.md)
+results/**/*.png
+results/**/*.deb
+results/**/*.rpm
+results/**/*.AppImage
+results/**/*.snap
+results/**/*.exe
+results/**/*.msi
+results/**/*.dmg

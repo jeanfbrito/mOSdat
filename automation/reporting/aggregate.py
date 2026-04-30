@@ -200,15 +200,40 @@ def load_run(run_dir: Path) -> RunData | None:
     return None
 
 
+_RUN_TYPE_SUBDIRS = ("smoke", "functional", "gpu-passthrough")
+
+
 def collect_runs(results_dir: Path) -> list[RunData]:
-    """Walk results_dir for subdirectories and load each as a run."""
+    """Walk results_dir for run subdirectories and load each as a run.
+
+    Supports both the flat legacy layout (results/<date>_label/) and the
+    typed layout (results/{smoke,functional,gpu-passthrough}/<date>_label/).
+    Typed subdirs take priority: if any of the known type subdirs exist,
+    only those are scanned. Falls back to flat scan if none are present.
+    """
     runs: list[RunData] = []
-    for child in sorted(results_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        run = load_run(child)
-        if run is not None:
-            runs.append(run)
+
+    typed_dirs = [results_dir / t for t in _RUN_TYPE_SUBDIRS if (results_dir / t).is_dir()]
+    if typed_dirs:
+        # Typed layout: walk each run-type subdir, prefix run_id with type name
+        for type_dir in typed_dirs:
+            type_name = type_dir.name
+            for child in sorted(type_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                run = load_run(child)
+                if run is not None:
+                    run.run_id = f"{type_name}/{run.run_id}"
+                    runs.append(run)
+    else:
+        # Legacy flat layout: runs sit directly under results_dir
+        for child in sorted(results_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            run = load_run(child)
+            if run is not None:
+                runs.append(run)
+
     return sorted(runs, key=lambda r: r.sort_key)
 
 
