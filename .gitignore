@@ -36,6 +36,9 @@ node_modules/
 *.temp
 /tmp/
 __pycache__/
+*.pyc
+.pytest_cache/
+.venv/
 
 # Automation state
 .sisyphus/

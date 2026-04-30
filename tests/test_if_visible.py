@@ -1,7 +1,7 @@
 """Unit tests for FunctionalRunner if_visible step support.
 
-Run with:  python -m pytest mOSdat/automation/test_if_visible.py -v
-or standalone: python mOSdat/automation/test_if_visible.py
+Run with:  python -m pytest mOSdat/tests/test_if_visible.py -v
+or standalone: python mOSdat/tests/test_if_visible.py
 """
 
 import sys
@@ -45,7 +45,7 @@ import importlib.util as _ilu
 
 _spec = _ilu.spec_from_file_location(
     "functional_runner",
-    Path(__file__).parent / "functional_runner.py",
+    Path(__file__).parent.parent / "automation" / "functional_runner.py",
 )
 _mod = _ilu.module_from_spec(_spec)
 
