@@ -34,32 +34,26 @@ Legend: PASS = Works | SKIP = Weston limitation | EXPECTED = Acceptable crash (n
 |--------|---------|
 | `build.sh` | Build Rocket.Chat from current git checkout |
 | `deploy.sh` | Transfer and install DEB on VM |
-| `test.sh` | Run Wayland/X11 crash tests |
 | `gpu-control.sh` | Attach/detach GPU from VM |
-| `full-test.sh` | Run complete test matrix |
 
 ## Usage
 
-### Quick Test
+### Full Test Matrix (Python runner — canonical)
 
 ```bash
-./build.sh
-./deploy.sh
-./test.sh
+python -m automation.main run examples/rocketchat.toml --only ubuntu2404
 ```
 
 ### Test Specific Package
 
 ```bash
-# DEB (default)
-./deploy.sh /path/to/rocketchat-*.deb
-./test.sh
+# Pre-built package via Python runner (canonical)
+python -m automation.main test examples/rocketchat.toml /path/to/rocketchat-*.deb --vms ubuntu2404
 
 # AppImage
-scp /path/to/*.AppImage jean@192.168.13.82:/tmp/
-ssh jean@192.168.13.82 "APP_PATH=/tmp/*.AppImage /tmp/tests/run-all.sh"
+python -m automation.main test examples/rocketchat.toml /path/to/rocketchat-*.AppImage --vms ubuntu2404
 
-# Snap
+# Snap — deploy manually, then run tests
 scp /path/to/*.snap jean@192.168.13.82:/tmp/
 ssh jean@192.168.13.82 "sudo snap install --dangerous /tmp/*.snap"
 ssh jean@192.168.13.82 "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh"

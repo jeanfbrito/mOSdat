@@ -57,18 +57,21 @@ sudo systemctl enable --now sshd
 |--------|---------|
 | `build.sh` | Build Rocket.Chat from current git checkout |
 | `deploy.sh` | Transfer and install RPM on VM |
-| `test.sh` | Run Wayland/X11 crash tests |
 | `gpu-control.sh` | Attach/detach GPU from VM |
-| `full-test.sh` | Run complete test matrix |
 
 ## Usage
 
-### Quick Test
+### Full Test Matrix (Python runner — canonical)
+
+```bash
+python -m automation.main run examples/rocketchat.toml --only opensuse
+```
+
+### Per-Step Primitives
 
 ```bash
 ./build.sh
 ./deploy.sh
-./test.sh
 ```
 
 ### Test AppImage

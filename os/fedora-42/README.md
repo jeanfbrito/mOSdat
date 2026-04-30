@@ -53,30 +53,21 @@ sudo systemctl enable --now sshd
 |--------|---------|
 | `build.sh` | Build Rocket.Chat from current git checkout |
 | `deploy.sh` | Transfer and install RPM on VM |
-| `test.sh` | Run Wayland/X11 crash tests |
 | `gpu-control.sh` | Attach/detach GPU from VM |
-| `full-test.sh` | Run complete test matrix |
 
 ## Usage
 
-### Quick Test (Current Branch)
+### Full Test Matrix (Python runner — canonical)
+
+```bash
+python -m automation.main run examples/rocketchat.toml --only fedora42
+```
+
+### Per-Step Primitives
 
 ```bash
 ./build.sh
 ./deploy.sh
-./test.sh
-```
-
-### Full Comparison Test
-
-```bash
-./full-test.sh
-```
-
-### Test Specific Scenario
-
-```bash
-./test.sh --test wayland-fake
 ```
 
 ### Toggle GPU

@@ -61,18 +61,21 @@ echo "jean ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/jean
 |--------|---------|
 | `build.sh` | Build AppImage from current git checkout |
 | `deploy.sh` | Transfer AppImage to VM |
-| `test.sh` | Run Wayland/X11 crash tests |
 | `gpu-control.sh` | Attach/detach GPU from VM |
-| `full-test.sh` | Run complete test matrix |
 
 ## Usage
 
-### Quick Test
+### Full Test Matrix (Python runner — canonical)
+
+```bash
+python -m automation.main run examples/rocketchat.toml --only manjaro
+```
+
+### Per-Step Primitives
 
 ```bash
 ./build.sh
 ./deploy.sh
-./test.sh
 ```
 
 ## Manjaro-Specific Notes

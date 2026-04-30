@@ -140,8 +140,8 @@ See [docs/HARDWARE.md](docs/HARDWARE.md) for full specs.
 | `os/*/config.sh` | OS-specific (VMID, package format) |
 | `os/*/build.sh` | Build RPM/DEB/AppImage |
 | `os/*/deploy.sh` | Transfer + install on VM |
-| `os/*/test.sh` | Run crash tests |
 | `os/*/gpu-control.sh` | Attach/detach GPU |
+| `automation/main.py` | Python runner — canonical orchestrator |
 
 ## Test Matrix
 
@@ -273,28 +273,29 @@ Wave 9: Generate report
 ### Quick Commands
 
 ```bash
-# Full test matrix for a release
+# Full test matrix for a release — Python runner is canonical
 cd ${FRAMEWORK_PATH}
 
-# 1. Build all packages
-cd ${REPO_PATH}
-git checkout <tag>
-yarn install && yarn build
-yarn electron-builder --publish never --linux rpm deb AppImage snap
+# Run full matrix (build + deploy + test all VMs):
+python -m automation.main run examples/rocketchat.toml
 
-# 2. Create results directory
-mkdir -p ${FRAMEWORK_PATH}/results/$(date +%Y-%m-%d)_full-matrix-<version>
+# Resume after interruption:
+python -m automation.main run examples/rocketchat.toml --resume
 
-# 3. Deploy and test (WITHOUT GPU - can run in parallel)
-# Fedora:
-./os/fedora-42/deploy.sh && ./os/fedora-42/test.sh all
+# Skip build phase (use pre-built packages):
+python -m automation.main run examples/rocketchat.toml --skip-build
 
-# 4. GPU tests (SEQUENTIAL - one at a time)
+# Test a single VM:
+python -m automation.main run examples/rocketchat.toml --only fedora42
+
+# Quick test with a pre-built package:
+python -m automation.main test examples/rocketchat.toml /path/to/package.rpm --vms fedora42
+
+# Per-OS bash adapters (build/deploy/gpu primitives only):
+./os/fedora-42/build.sh
+./os/fedora-42/deploy.sh
 ./os/fedora-42/gpu-control.sh --attach
-# wait for boot, then:
-ssh jean@192.168.13.80 '/tmp/tests/run-gpu-tests.sh'
 ./os/fedora-42/gpu-control.sh --detach
-# repeat for next VM...
 ```
 
 ### VM Quick Reference

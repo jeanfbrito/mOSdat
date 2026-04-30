@@ -12,7 +12,7 @@ This framework tests Rocket.Chat Electron's Wayland/X11 handling across multiple
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │              Test Framework Scripts                  │    │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │    │
-│  │  │ build.sh │  │ deploy.sh│  │ test.sh          │   │    │
+│  │  │ build.sh │  │ deploy.sh│  │ gpu-control.sh   │   │    │
 │  │  └────┬─────┘  └────┬─────┘  └────────┬─────────┘   │    │
 │  │       │             │                 │             │    │
 │  │       ▼             ▼                 ▼             │    │
@@ -125,9 +125,7 @@ mOSdat/
 │       ├── config.sh    # OS-specific config (VMID, etc.)
 │       ├── build.sh     # Build for this OS
 │       ├── deploy.sh    # Deploy to VM
-│       ├── test.sh      # Run tests
-│       ├── gpu-control.sh
-│       └── full-test.sh
+│       └── gpu-control.sh
 ├── results/             # Test results by timestamp
 └── docs/                # Documentation
 ```
