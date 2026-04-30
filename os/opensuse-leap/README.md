@@ -64,7 +64,7 @@ sudo systemctl enable --now sshd
 ### Full Test Matrix (Python runner — canonical)
 
 ```bash
-python -m automation.main run examples/rocketchat.toml --only opensuse
+mosdat run examples/rocketchat.toml --only opensuse
 ```
 
 ### Per-Step Primitives

@@ -75,7 +75,7 @@ Comment out:
 ### Full Test Matrix (Python runner — canonical)
 
 ```bash
-python -m automation.main run examples/rocketchat.toml --only ubuntu2204
+mosdat run examples/rocketchat.toml --only ubuntu2204
 ```
 
 ### Per-Step Primitives

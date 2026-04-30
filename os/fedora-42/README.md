@@ -60,7 +60,7 @@ sudo systemctl enable --now sshd
 ### Full Test Matrix (Python runner — canonical)
 
 ```bash
-python -m automation.main run examples/rocketchat.toml --only fedora42
+mosdat run examples/rocketchat.toml --only fedora42
 ```
 
 ### Per-Step Primitives

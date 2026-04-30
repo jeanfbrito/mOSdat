@@ -31,19 +31,19 @@ Wave 9: Generate report
 cd ${FRAMEWORK_PATH}
 
 # Run full matrix (build + deploy + test all VMs):
-python -m automation.main run examples/rocketchat.toml
+mosdat run examples/rocketchat.toml
 
 # Resume after interruption:
-python -m automation.main run examples/rocketchat.toml --resume
+mosdat run examples/rocketchat.toml --resume
 
 # Skip build phase (use pre-built packages):
-python -m automation.main run examples/rocketchat.toml --skip-build
+mosdat run examples/rocketchat.toml --skip-build
 
 # Test a single VM:
-python -m automation.main run examples/rocketchat.toml --only fedora42
+mosdat run examples/rocketchat.toml --only fedora42
 
 # Quick test with a pre-built package:
-python -m automation.main test examples/rocketchat.toml /path/to/package.rpm --vms fedora42
+mosdat test examples/rocketchat.toml /path/to/package.rpm --vms fedora42
 
 # Per-OS bash adapters (build/deploy/gpu primitives only):
 ./os/fedora-42/build.sh

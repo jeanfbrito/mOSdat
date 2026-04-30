@@ -42,3 +42,9 @@ __pycache__/
 
 # Automation state
 .sisyphus/
+
+# Python packaging artifacts
+*.egg-info/
+build/
+dist/
+.eggs/

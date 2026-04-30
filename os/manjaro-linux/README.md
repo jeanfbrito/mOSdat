@@ -68,7 +68,7 @@ echo "jean ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/jean
 ### Full Test Matrix (Python runner — canonical)
 
 ```bash
-python -m automation.main run examples/rocketchat.toml --only manjaro
+mosdat run examples/rocketchat.toml --only manjaro
 ```
 
 ### Per-Step Primitives

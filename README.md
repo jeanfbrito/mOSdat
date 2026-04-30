@@ -14,6 +14,15 @@ Automated testing infrastructure using Proxmox VMs with GPU passthrough to valid
 
 ---
 
+## Install
+
+```bash
+pip install -e .
+mosdat --help
+```
+
+---
+
 ## Overview
 
 Testing desktop apps properly requires real environments — different distros, display servers, GPU configurations. Containers can't do this. Manual testing doesn't scale.

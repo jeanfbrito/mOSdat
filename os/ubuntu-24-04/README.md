@@ -41,17 +41,17 @@ Legend: PASS = Works | SKIP = Weston limitation | EXPECTED = Acceptable crash (n
 ### Full Test Matrix (Python runner — canonical)
 
 ```bash
-python -m automation.main run examples/rocketchat.toml --only ubuntu2404
+mosdat run examples/rocketchat.toml --only ubuntu2404
 ```
 
 ### Test Specific Package
 
 ```bash
 # Pre-built package via Python runner (canonical)
-python -m automation.main test examples/rocketchat.toml /path/to/rocketchat-*.deb --vms ubuntu2404
+mosdat test examples/rocketchat.toml /path/to/rocketchat-*.deb --vms ubuntu2404
 
 # AppImage
-python -m automation.main test examples/rocketchat.toml /path/to/rocketchat-*.AppImage --vms ubuntu2404
+mosdat test examples/rocketchat.toml /path/to/rocketchat-*.AppImage --vms ubuntu2404
 
 # Snap — deploy manually, then run tests
 scp /path/to/*.snap jean@192.168.13.82:/tmp/
