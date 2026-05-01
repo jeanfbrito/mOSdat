@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+import urllib.request
+import urllib.error
+import time as _time
 from pathlib import Path
 
 from .config import load_config, ProjectConfig
@@ -95,6 +98,43 @@ def cmd_record(args) -> int:
         return app.exec()
 
 
+def _preflight_workspace(url: str, timeout: int = 10, retries: int = 2) -> tuple[bool, str]:
+    """P1: HEAD probe a workspace URL; on failure retry with short backoff.
+
+    Returns (ok, detail).
+    Treats 200-499 as alive. 5xx, connection error, timeout = dead.
+    """
+    if not url:
+        return True, "no workspace_url configured"
+
+    probe_url = url
+    if "://" not in probe_url:
+        probe_url = "https://" + probe_url
+    probe_url = probe_url.rstrip("/") + "/api/info"
+
+    last_err = "unknown"
+    for attempt in range(retries + 1):
+        if attempt > 0:
+            _time.sleep(2)
+        t0 = _time.perf_counter()
+        try:
+            req = urllib.request.Request(probe_url, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                elapsed = _time.perf_counter() - t0
+                if 200 <= r.status < 500:
+                    return True, f"HTTP {r.status} in {elapsed*1000:.0f}ms"
+                last_err = f"HTTP {r.status} in {elapsed*1000:.0f}ms"
+        except urllib.error.HTTPError as e:
+            elapsed = _time.perf_counter() - t0
+            if 200 <= e.code < 500:
+                return True, f"HTTP {e.code} in {elapsed*1000:.0f}ms"
+            last_err = f"HTTP {e.code} in {elapsed*1000:.0f}ms"
+        except Exception as e:
+            elapsed = _time.perf_counter() - t0
+            last_err = f"{type(e).__name__}: {str(e)[:80]} in {elapsed*1000:.0f}ms"
+    return False, last_err
+
+
 def _warmup_vlm(vlm) -> bool:
     """G1: Trigger VLM endpoint load before the scenario loop.
 
@@ -104,7 +144,6 @@ def _warmup_vlm(vlm) -> bool:
 
     Returns True if warmup succeeded, False if it timed out or errored (non-fatal).
     """
-    import time as _time
     from PIL import Image as _Image
 
     print("[mOSdat] Warming up VLM endpoint (model swap may take 30-60s)...")
@@ -161,6 +200,19 @@ def cmd_functional(args) -> int:
     # G1: warm up VLM endpoint before per-VM loop so model swap doesn't consume step budget
     if not getattr(args, "skip_warmup", False):
         _warmup_vlm(vlm)
+
+    # P1: preflight workspace URL before per-VM loop to fail fast on dead server
+    if not getattr(args, "skip_workspace_check", False):
+        workspace_url = getattr(config.functional, "workspace_url", None)
+        if workspace_url:
+            print(f"[mOSdat] Pre-flight workspace check: {workspace_url}")
+            ok, detail = _preflight_workspace(workspace_url)
+            if ok:
+                print(f"[mOSdat]   Workspace OK ({detail})")
+            else:
+                print(f"[mOSdat]   ERROR: workspace unreachable — {detail}")
+                print(f"[mOSdat]   Fix the workspace server (or pass --skip-workspace-check) and retry.")
+                return 2
 
     name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file)
 
@@ -410,6 +462,8 @@ def main() -> int:
                       help="C2: disable Proxmox snapshot checkpoints even if YAML enables them")
     fn_p.add_argument("--skip-warmup", action="store_true", dest="skip_warmup",
                       help="Skip VLM warmup phase (faster startup; first scenario step may be slow if endpoint cold)")
+    fn_p.add_argument("--skip-workspace-check", action="store_true", dest="skip_workspace_check",
+                      help="Skip workspace URL preflight (faster startup; scenario will burn VLM budget if server is down)")
     fn_p.add_argument("--record", action="store_true",
                       help="C3: interactive authoring mode — open VNC viewer, capture clicks, generate YAML")
     fn_p.add_argument("--output", type=str, default=None,
