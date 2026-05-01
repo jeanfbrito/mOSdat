@@ -228,7 +228,25 @@ def cmd_list_vms(args) -> int:
 
 
 def cmd_report(args) -> int:
-    from .state import StateManager
+    # Handle --flakes flag (B5)
+    if getattr(args, "flakes", False):
+        from .reporting.aggregate import flake_leaderboard
+
+        results_root = args.root if hasattr(args, "root") and args.root else args.results_dir
+        output_path = args.output if hasattr(args, "output") and args.output else (results_root / "functional" / "flake-leaderboard.md")
+
+        # If output is "-", write to stdout; otherwise write to file
+        markdown = flake_leaderboard(results_root)
+        if output_path == "-" or str(output_path) == "-":
+            print(markdown)
+        else:
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(markdown, encoding="utf-8")
+            print(f"[mOSdat] Flakiness leaderboard written: {output_path.absolute()}")
+        return 0
+
+    # Original report regeneration logic
     state_file = args.results_dir / "state.json"
     if not state_file.exists():
         print(f"[mOSdat] ERROR: No state.json found in {args.results_dir}")
@@ -307,9 +325,12 @@ def main() -> int:
     list_p.add_argument("config", type=Path, help="Path to mosdat config (TOML)")
 
     # mosdat report
-    report_p = sub.add_parser("report", help="Regenerate report from existing results")
-    report_p.add_argument("results_dir", type=Path, help="Results directory with state.json")
+    report_p = sub.add_parser("report", help="Regenerate report from existing results or generate flakiness leaderboard")
+    report_p.add_argument("results_dir", type=Path, help="Results directory with state.json (or root for --flakes)")
     report_p.add_argument("--config", type=Path, help="Path to mosdat config (TOML)")
+    report_p.add_argument("--flakes", action="store_true", help="B5: Generate flakiness leaderboard from functional runs")
+    report_p.add_argument("--output", type=Path, help="Output path for flakiness leaderboard (default: <results_dir>/functional/flake-leaderboard.md, or - for stdout)")
+    report_p.add_argument("--root", type=Path, help="Root path for flakiness leaderboard search (defaults to results_dir)")
 
     args = parser.parse_args()
 

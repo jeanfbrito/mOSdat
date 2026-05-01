@@ -17,6 +17,7 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +375,166 @@ def _section_flaky(runs: list[RunData]) -> str:
     )
     lines.append(table)
     lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Flakiness leaderboard (B5)
+# ---------------------------------------------------------------------------
+
+def flake_leaderboard(results_root: Path) -> str:
+    """Aggregate retry rates across ALL past functional runs.
+
+    Walks results_root/functional for all dated run dirs, groups events by step label,
+    counts retries and failures, aggregates across runs, and returns a markdown table
+    ranked by retry_rate.
+
+    Args:
+        results_root: Path to results directory (contains "functional" subdir)
+
+    Returns:
+        Markdown string with flakiness leaderboard table. Empty report if no runs found.
+    """
+    functional_dir = results_root / "functional"
+
+    if not functional_dir.exists():
+        return f"# Flakiness Leaderboard\n\nNo functional runs found under {results_root}\n"
+
+    # Collect all run directories matching pattern: YYYY-MM-DD*
+    run_dirs = []
+    for item in sorted(functional_dir.iterdir()):
+        if item.is_dir() and re.match(r"\d{4}-\d{2}-\d{2}", item.name):
+            run_dirs.append(item)
+
+    if not run_dirs:
+        return f"# Flakiness Leaderboard\n\nNo functional runs found under {results_root}\n"
+
+    # Data structure: {step_label: {"runs": set, "retries": count, "failures": count, "attempts": []}}
+    step_stats: dict[str, dict] = {}
+
+    # Walk all run dirs looking for events.jsonl in VM subdirs
+    for run_dir in run_dirs:
+        for vm_dir in run_dir.iterdir():
+            if not vm_dir.is_dir():
+                continue
+            events_file = vm_dir / "events.jsonl"
+            if not events_file.exists():
+                continue
+
+            # Parse events.jsonl
+            try:
+                with events_file.open("r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            warnings.warn(f"[flake_leaderboard] Malformed JSON in {events_file}: {line[:100]}")
+                            continue
+
+                        # Track step_start → step_end + retry events per step
+                        if event.get("event") == "step_start":
+                            step_num = event.get("step_num")
+                            label = event.get("label", "")
+                            # Normalize label: truncate to first 60 chars to avoid duplicates from ellipsis
+                            label_key = label[:60] if label else f"step_{step_num}"
+
+                            if label_key not in step_stats:
+                                step_stats[label_key] = {
+                                    "runs": set(),
+                                    "retries": 0,
+                                    "failures": 0,
+                                    "attempts": [],
+                                }
+                            # Register this run as having encountered this step
+                            step_stats[label_key]["runs"].add(run_dir.name)
+
+                        elif event.get("event") == "retry":
+                            step_num = event.get("step_num")
+                            label = event.get("label", "")
+                            label_key = label[:60] if label else f"step_{step_num}"
+                            if label_key in step_stats:
+                                step_stats[label_key]["retries"] += 1
+
+                        elif event.get("event") == "step_end":
+                            step_num = event.get("step_num")
+                            label = event.get("label", "")
+                            label_key = label[:60] if label else f"step_{step_num}"
+                            status = event.get("status", "")
+                            attempts = event.get("attempts", 1)
+
+                            if label_key in step_stats:
+                                if status == "failed":
+                                    step_stats[label_key]["failures"] += 1
+                                if attempts:
+                                    step_stats[label_key]["attempts"].append(attempts)
+
+            except OSError as exc:
+                warnings.warn(f"[flake_leaderboard] Could not read {events_file}: {exc}")
+                continue
+
+    if not step_stats:
+        return f"# Flakiness Leaderboard\n\nNo events found in {results_root}\n"
+
+    # Compute metrics for each step
+    leaderboard: list[tuple[str, int, int, int, float, float, int]] = []
+    for label, stats in step_stats.items():
+        runs_total = len(stats["runs"])
+        # Exclude steps with <2 runs (not statistically meaningful)
+        if runs_total < 2:
+            continue
+
+        retries_total = stats["retries"]
+        failures_total = stats["failures"]
+        attempts_list = stats["attempts"]
+
+        retry_rate = retries_total / runs_total if runs_total > 0 else 0.0
+        failure_rate = failures_total / runs_total if runs_total > 0 else 0.0
+        median_attempts = int(median(attempts_list)) if attempts_list else 1
+
+        leaderboard.append((
+            label,
+            runs_total,
+            retries_total,
+            failures_total,
+            retry_rate,
+            failure_rate,
+            median_attempts,
+        ))
+
+    # Sort by retry_rate descending (most flaky first)
+    leaderboard.sort(key=lambda x: x[4], reverse=True)
+
+    # Cap at top 30 entries
+    leaderboard = leaderboard[:30]
+
+    # Render as markdown table
+    now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    rows = []
+    for label, runs, retries, failures, retry_rate, failure_rate, med_attempts in leaderboard:
+        rows.append([
+            label,
+            str(runs),
+            f"{retry_rate:.2f}",
+            f"{failure_rate:.2f}",
+            str(med_attempts),
+        ])
+
+    table = _md_table(
+        ["Step", "Runs", "Retry rate", "Failure rate", "Median attempts"],
+        rows,
+    ) if rows else "_No steps with sufficient history (minimum 2 runs)._"
+
+    lines = [
+        "# Flakiness Leaderboard\n",
+        f"Generated: {now}\n"
+        f"Runs analyzed: {len(run_dirs)}\n",
+        table,
+        "",
+    ]
+
     return "\n".join(lines)
 
 
