@@ -37,6 +37,7 @@ class FunctionalStep:
     then_steps: Optional[list] = None     # steps to execute when if_visible is True (list of FunctionalStep)
     verify_consistent: bool = False        # A2: if True, use 3-sample quorum vote for verify calls
     precheck_click: bool = False           # A4: if True, use localize_verified (pre-click crop verify)
+    localize_consistent: bool = False      # C5: if True, use 3-sample coord cluster for localize
     launch_window: Optional[str] = None   # B6: window name hint for launch verification (derived from launch basename if omitted)
     launch_timeout: Optional[int] = None  # B6: polling budget for launch verification (defaults to step.wait)
 
@@ -331,15 +332,42 @@ class FunctionalRunner:
                     screenshot, screen_size = self.screenshotter.capture()
                     # A6: save the screenshot used for localize
                     self._save_screenshot(screenshot, f"step{step_num}_localize")
-                    # A4: opt-in pre-click crop verify
+                    # C5 + A4: opt-in localization strategies
+                    # localize_consistent takes precedence over precheck_click
+                    # when both are set; precheck_click crop-verify then runs
+                    # on the consistent centroid.
                     t0_loc = time.perf_counter()
-                    if step.precheck_click:
+                    if step.localize_consistent:
+                        x, y = self.vlm.localize_consistent(screenshot, step.localize, screen_size)
+                        latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+                        self._emit("vlm_localize_consistent", step_num=step_num, attempt=attempt,
+                                   target=step.localize[:80], centroid=(x, y),
+                                   latency_ms=latency_ms_loc)
+                        if step.precheck_click:
+                            # A4 crop-verify on the consistent centroid
+                            crop_size = 100
+                            w_s, h_s = screen_size
+                            box = (
+                                max(0, x - crop_size),
+                                max(0, y - crop_size),
+                                min(w_s, x + crop_size),
+                                min(h_s, y + crop_size),
+                            )
+                            crop = screenshot.crop(box)
+                            from ..vlm.client import VLMError
+                            if not self.vlm.verify(crop, f"is this {step.localize}"):
+                                raise VLMError(
+                                    f"Pre-click verify failed: VLM denies centroid ({x},{y}) is '{step.localize}'"
+                                )
+                    elif step.precheck_click:
                         x, y = self.vlm.localize_verified(screenshot, step.localize, screen_size)
+                        latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
                     else:
                         x, y = self.vlm.localize(screenshot, step.localize, screen_size)
-                    latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
-                    self._emit("vlm_localize", step_num=step_num, attempt=attempt,
-                               target=step.localize[:80], x=x, y=y, latency_ms=latency_ms_loc)
+                        latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+                    if not step.localize_consistent:
+                        self._emit("vlm_localize", step_num=step_num, attempt=attempt,
+                                   target=step.localize[:80], x=x, y=y, latency_ms=latency_ms_loc)
                     self.log(f"    → click ({x}, {y})")
                     self._emit("click", step_num=step_num, x=x, y=y)
                     self.injector.click(x, y)
@@ -627,6 +655,7 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             then_steps=_resolve_vars(s.then_steps, vars) if s.then_steps else None,
             verify_consistent=s.verify_consistent,
             precheck_click=s.precheck_click,
+            localize_consistent=s.localize_consistent,
             launch_window=s.launch_window,
             launch_timeout=s.launch_timeout,
         ))
@@ -682,6 +711,7 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         then_steps=then_steps,
         verify_consistent=bool(raw.get("verify_consistent", False)),
         precheck_click=bool(raw.get("precheck_click", False)),
+        localize_consistent=bool(raw.get("localize_consistent", False)),
         launch_window=raw.get("launch_window"),
         launch_timeout=int(raw["launch_timeout"]) if "launch_timeout" in raw else None,
     )

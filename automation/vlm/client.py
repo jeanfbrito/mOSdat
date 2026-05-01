@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import time
 from io import BytesIO
 
 from openai import OpenAI
@@ -13,6 +14,28 @@ logger = logging.getLogger(__name__)
 
 class VLMError(Exception):
     pass
+
+
+def _is_failover_error(exc: Exception) -> bool:
+    """Return True if the exception warrants failover to the next endpoint.
+
+    Retryable: connection errors, 5xx, 429 rate-limit, timeout.
+    Non-retryable: 4xx (except 429), parse errors, schema errors.
+    """
+    import httpx
+    from openai import APIConnectionError, APITimeoutError, RateLimitError
+    from openai import APIStatusError
+
+    if isinstance(exc, (APIConnectionError, APITimeoutError)):
+        return True
+    if isinstance(exc, RateLimitError):  # 429
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code >= 500  # 5xx only
+    # httpx transport-level errors
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError)):
+        return True
+    return False
 
 
 # Models specialized for localization that hallucinate on yes/no verify prompts.
@@ -115,12 +138,21 @@ def _parse_coords(raw: str) -> dict:
 class VLMClient:
     def __init__(self, base_url: str, model: str = "holo2-4b", verify_model: str | None = None):
         """Args:
+            base_url: Single URL or comma-separated list of URLs for failover.
+                E.g. "http://primary:5001/v1" or
+                "http://primary:5001/v1,http://backup:5001/v1".
             model: VLM for element localization (expects coordinate output).
             verify_model: VLM for yes/no state verification. Defaults to `model`.
                 Use a general-purpose VLM here (e.g. qwen3-vl-abliterated) —
                 localization-specialized models hallucinate on yes/no prompts.
         """
-        self.client = OpenAI(base_url=base_url, api_key="unused")
+        # C4: parse comma-separated URLs into a list of OpenAI clients
+        raw_urls = [u.strip() for u in base_url.split(",") if u.strip()]
+        self._urls: list[str] = raw_urls
+        self._clients: list[OpenAI] = [OpenAI(base_url=u, api_key="unused") for u in raw_urls]
+        self._primary_idx: int = 0
+        # Backward-compat: expose self.client pointing at the current primary
+        self.client = self._clients[0]
         self.model = model
         if verify_model is None:
             model_lower = model.lower()
@@ -137,6 +169,46 @@ class VLMClient:
             self.verify_model = model
         else:
             self.verify_model = verify_model
+
+    def _call_with_failover(self, method_path: str, *args, **kwargs):
+        """C4: Call an OpenAI client method with failover across all endpoints.
+
+        `method_path` is a dot-separated attribute chain on the OpenAI client,
+        e.g. "chat.completions.create".
+
+        Retryable errors (connection, 5xx, 429, timeout) advance to the next
+        URL. Non-retryable errors (4xx != 429, parse, schema) re-raise
+        immediately.  Cycles through the full URL list up to 3 full passes.
+        Sleeps 0.5s between attempts to avoid hammering.
+        """
+        n = len(self._clients)
+        max_attempts = 3 * n
+        for attempt in range(max_attempts):
+            idx = (self._primary_idx + attempt) % n
+            client = self._clients[idx]
+            # Resolve nested attribute (e.g. chat.completions.create)
+            obj = client
+            for attr in method_path.split("."):
+                obj = getattr(obj, attr)
+            try:
+                result = obj(*args, **kwargs)
+                # Success: promote this endpoint as primary for future calls
+                self._primary_idx = idx
+                self.client = self._clients[idx]
+                return result
+            except Exception as exc:
+                if _is_failover_error(exc):
+                    logger.warning(
+                        "VLM endpoint %s failed (attempt %d/%d): %s — trying next",
+                        self._urls[idx], attempt + 1, max_attempts, exc,
+                    )
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.5)
+                    continue
+                raise  # non-retryable: re-raise immediately
+        raise VLMError(
+            "All VLM endpoints exhausted: " + ", ".join(self._urls)
+        )
 
     def localize(
         self,
@@ -171,7 +243,8 @@ class VLMClient:
             suffix = suffixes[attempt % len(suffixes)]
             prompt_prefix = _BOUNDS_CLARIFICATION if oob_count > 0 else ""
             try:
-                resp = self.client.chat.completions.create(
+                resp = self._call_with_failover(
+                    "chat.completions.create",
                     model=self.model,
                     messages=[{
                         "role": "user",
@@ -226,7 +299,8 @@ class VLMClient:
             True if the model answers "yes".
         """
         b64 = _encode_image(screenshot)
-        resp = self.client.chat.completions.create(
+        resp = self._call_with_failover(
+            "chat.completions.create",
             model=self.verify_model,
             messages=[{
                 "role": "user",
@@ -273,7 +347,8 @@ class VLMClient:
         responses: list[str] = []
         votes: list[bool] = []
         for _ in range(samples):
-            resp = self.client.chat.completions.create(
+            resp = self._call_with_failover(
+                "chat.completions.create",
                 model=self.verify_model,
                 messages=[{
                     "role": "user",
@@ -328,3 +403,104 @@ class VLMClient:
                 f"Pre-click verify failed: VLM denies the localized point ({x},{y}) is '{target}'"
             )
         return x, y
+
+    def localize_consistent(
+        self,
+        screenshot: Image.Image,
+        target: str,
+        screen_size: tuple[int, int],
+        samples: int = 3,
+        max_spread: int = 50,
+    ) -> tuple[int, int]:
+        """C5: Self-consistency localize — 3-sample coord cluster.
+
+        Calls localize() `samples` times at varying temperatures (0.0, 0.3, 0.6),
+        computes the centroid, and checks that all samples are within `max_spread`
+        pixels of the centroid.  Scattered samples indicate hallucination; the
+        method retries once with an unambiguity prefix before giving up.
+
+        Args:
+            screenshot: Current screen capture.
+            target: Natural language description of the element to find.
+            screen_size: (width, height) of the screen in pixels.
+            samples: Number of localize calls (default 3).
+            max_spread: Maximum Euclidean distance from centroid in pixels (default 50).
+
+        Returns:
+            (pixel_x, pixel_y) centroid, bounds-checked.
+
+        Raises:
+            VLMError: If samples scatter beyond max_spread after one retry.
+        """
+        import math
+
+        temperatures = [0.0, 0.3, 0.6]
+        b64 = _encode_image(screenshot)
+
+        def _sample_coords(prompt_prefix: str = "") -> list[tuple[int, int]]:
+            coords_list: list[tuple[int, int]] = []
+            for i in range(samples):
+                temp = temperatures[i % len(temperatures)]
+                resp = self._call_with_failover(
+                    "chat.completions.create",
+                    model=self.model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                            {"type": "text", "text": f"{prompt_prefix}{_LOCALIZE_PROMPT}\n{target}"},
+                        ],
+                    }],
+                    max_tokens=256,
+                    temperature=temp,
+                    timeout=90,
+                )
+                raw = resp.choices[0].message.content or ""
+                parsed = _parse_coords(raw)
+                w, h = screen_size
+                if parsed.get("space") == "pixel":
+                    px, py = parsed["x"], parsed["y"]
+                else:
+                    px = int(parsed["x"] / 1000 * w)
+                    py = int(parsed["y"] / 1000 * h)
+                # Apply bounds check (A5 logic)
+                if px < 0 or px > w or py < 0 or py > h:
+                    raise VLMError(
+                        f"localize_consistent: coords {px},{py} out of screen {screen_size}"
+                    )
+                coords_list.append((px, py))
+            return coords_list
+
+        def _centroid_and_spread(coords: list[tuple[int, int]]) -> tuple[float, float, float]:
+            cx = sum(x for x, _ in coords) / len(coords)
+            cy = sum(y for _, y in coords) / len(coords)
+            max_dist = max(math.sqrt((x - cx) ** 2 + (y - cy) ** 2) for x, y in coords)
+            return cx, cy, max_dist
+
+        coords = _sample_coords()
+        cx, cy, max_dist = _centroid_and_spread(coords)
+
+        if max_dist > max_spread:
+            logger.warning(
+                "localize_consistent: samples scattered (spread=%.1fpx > %dpx), "
+                "coords=%s — retrying with unambiguity prefix",
+                max_dist, max_spread, coords,
+            )
+            retry_prefix = (
+                "The element is unambiguous and has a single clear location on the screen.\n\n"
+            )
+            coords = _sample_coords(prompt_prefix=retry_prefix)
+            cx, cy, max_dist = _centroid_and_spread(coords)
+            if max_dist > max_spread:
+                raise VLMError(
+                    f"Localize disagreement after retry: samples={coords}, spread={max_dist:.1f}px"
+                )
+
+        # Bounds check on centroid
+        w, h = screen_size
+        final_x, final_y = int(cx), int(cy)
+        if final_x < 0 or final_x > w or final_y < 0 or final_y > h:
+            raise VLMError(
+                f"localize_consistent centroid {final_x},{final_y} out of screen {screen_size}"
+            )
+        return final_x, final_y
