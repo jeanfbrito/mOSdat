@@ -25,6 +25,10 @@ class InputInjector:
 
     # ---- RFB-backed input ----
 
+    def move(self, x: int, y: int) -> None:
+        """Move mouse to absolute coordinates (no click, wakes DPMS)."""
+        self.vnc.move(x, y)
+
     def click(self, x: int, y: int) -> None:
         self.vnc.click(x, y)
 

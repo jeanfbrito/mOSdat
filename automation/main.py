@@ -95,6 +95,33 @@ def cmd_record(args) -> int:
         return app.exec()
 
 
+def _warmup_vlm(vlm) -> bool:
+    """G1: Trigger VLM endpoint load before the scenario loop.
+
+    llama-swap returns 502 while swapping models; the failover wrapper retries
+    with backoff, consuming ~90s on a cold endpoint. Running a tiny warmup call
+    here absorbs that wait outside the scenario step budget.
+
+    Returns True if warmup succeeded, False if it timed out or errored (non-fatal).
+    """
+    import time as _time
+    from PIL import Image as _Image
+
+    print("[mOSdat] Warming up VLM endpoint (model swap may take 30-60s)...")
+    t0 = _time.perf_counter()
+    try:
+        img = _Image.new("RGB", (64, 64), (0, 0, 0))
+        result = vlm.verify(img, "is the screen visible")
+        elapsed = _time.perf_counter() - t0
+        print(f"[mOSdat]   Warmup OK in {elapsed:.1f}s (answer={'yes' if result else 'no'})")
+        return True
+    except Exception as e:
+        elapsed = _time.perf_counter() - t0
+        print(f"[mOSdat]   Warmup failed after {elapsed:.1f}s: {e}")
+        print(f"[mOSdat]   Proceeding anyway — scenario may take longer for first VLM call")
+        return False
+
+
 def cmd_functional(args) -> int:
     if getattr(args, "record", False):
         return cmd_record(args)
@@ -130,6 +157,10 @@ def cmd_functional(args) -> int:
         model=args.model or config.vlm.model,
         verify_model=args.verify_model or config.vlm.verify_model or None,
     )
+
+    # G1: warm up VLM endpoint before per-VM loop so model swap doesn't consume step budget
+    if not getattr(args, "skip_warmup", False):
+        _warmup_vlm(vlm)
 
     name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file)
 
@@ -377,6 +408,8 @@ def main() -> int:
                       help="B7: skip VM health probe before scenario start")
     fn_p.add_argument("--no-checkpoints", action="store_true", dest="no_checkpoints",
                       help="C2: disable Proxmox snapshot checkpoints even if YAML enables them")
+    fn_p.add_argument("--skip-warmup", action="store_true", dest="skip_warmup",
+                      help="Skip VLM warmup phase (faster startup; first scenario step may be slow if endpoint cold)")
     fn_p.add_argument("--record", action="store_true",
                       help="C3: interactive authoring mode — open VNC viewer, capture clicks, generate YAML")
     fn_p.add_argument("--output", type=str, default=None,

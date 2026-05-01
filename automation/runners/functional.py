@@ -705,6 +705,41 @@ class FunctionalRunner:
                     self.log(f"  [checkpoint] WARNING: failed to delete snapshot '{snap_name}': {e}")
         # "keep" and "keep-named" both keep all user-named snapshots (default: keep-named)
 
+    def _prepare_display(self) -> None:
+        """Wake display and disable screensaver/DPMS for the scenario.
+
+        Mouse jiggle via VNC is the universal wake (works without display
+        server access). xset/gsettings via SSH disables future blanking on
+        Linux. Failures are silent — best effort.
+        """
+        # 1. Mouse jiggle to wake DPMS
+        try:
+            self.injector.move(640, 400)
+            self.injector.move(642, 402)
+        except Exception:
+            try:
+                self.injector.click(640, 400)
+            except Exception:
+                pass
+
+        # 2. Disable screensaver / DPMS on Linux (silent on Windows)
+        if not getattr(self.injector, "is_windows", False):
+            try:
+                self.injector.shell(
+                    'for x in "/run/user/$(id -u)/gdm/Xauthority" "$HOME/.Xauthority"; do '
+                    '    [ -e "$x" ] && export XAUTHORITY="$x" && break; '
+                    "done; "
+                    "xset -display :0 s off s noblank -dpms 2>/dev/null || true; "
+                    "gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true; "
+                    "gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null || true; "
+                    "echo display:prepared",
+                    timeout=10,
+                )
+            except Exception:
+                pass
+
+        self._emit("display_prepared", method="vnc_jiggle+xset_dpms_off")
+
     def run_test(
         self,
         steps: list[FunctionalStep],
@@ -729,6 +764,9 @@ class FunctionalRunner:
 
         _log(f"[functional] {name}")
         _log(f"  {len(steps)} steps")
+
+        # G2: wake display and disable screensaver/DPMS before any step runs
+        self._prepare_display()
 
         resolved = _resolve_vars(steps, vars)
 
