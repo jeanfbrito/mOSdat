@@ -170,7 +170,7 @@ def cmd_functional(args) -> int:
         if args.screenshots:
             screenshot_dir = P(args.screenshots) / vm.name
         elif args.save_screenshots:
-            ts = dt.now().strftime("%Y-%m-%d")
+            ts = dt.now().strftime("%Y-%m-%d_%H%M%S")
             screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
         else:
             # A6: screenshot_dir is mandatory; default to a timestamped results dir.

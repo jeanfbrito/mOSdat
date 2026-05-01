@@ -198,11 +198,23 @@ class VLMClient:
                 return result
             except Exception as exc:
                 if _is_failover_error(exc):
-                    logger.warning(
-                        "VLM endpoint %s failed (attempt %d/%d): %s — trying next",
-                        self._urls[idx], attempt + 1, max_attempts, exc,
-                    )
-                    if attempt < max_attempts - 1:
+                    is_last = attempt == max_attempts - 1
+                    # F6: distinguish cold-start transient failures from hard failures.
+                    # 502 on the first call often means the VLM server is still
+                    # warming up — log as WARNING but don't alarm the user about
+                    # "trying next" when there is only one endpoint configured.
+                    if len(self._urls) == 1:
+                        logger.warning(
+                            "VLM endpoint %s failed (attempt %d/%d): %s%s",
+                            self._urls[idx], attempt + 1, max_attempts, exc,
+                            " — will retry" if not is_last else " — giving up",
+                        )
+                    else:
+                        logger.warning(
+                            "VLM endpoint %s failed (attempt %d/%d): %s — trying next",
+                            self._urls[idx], attempt + 1, max_attempts, exc,
+                        )
+                    if not is_last:
                         time.sleep(0.5)
                     continue
                 raise  # non-retryable: re-raise immediately

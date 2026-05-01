@@ -53,6 +53,9 @@ steps:
   # shell.
   - launch: "{app_path} --no-sandbox"
     wait: 10
+    # F4: explicit window name so VLM question uses natural language ("Rocket.Chat")
+    # instead of the raw binary basename ("rocketchat-desktop" with hyphens).
+    launch_window: "Rocket.Chat"
     # Strict verify: RC must be on the first-launch "Enter your server URL" screen.
     # This catches stale session state that cleanup missed — otherwise the
     # next step will happily type the server URL as a chat message into the

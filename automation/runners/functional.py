@@ -69,6 +69,9 @@ class FunctionalRunner:
         self.popup_sweep = popup_sweep
         # B2: events.jsonl always-on when screenshot_dir is set
         self._events_path: Optional[Path] = (screenshot_dir / "events.jsonl") if screenshot_dir else None
+        # F3: truncate events.jsonl at init so same-date re-runs don't append
+        if self._events_path and self._events_path.exists():
+            self._events_path.unlink()
         # C2: checkpoint config
         _ckpt = checkpoint_config or {}
         self._checkpoints_enabled: bool = bool(_ckpt.get("enabled", False))
@@ -243,21 +246,41 @@ class FunctionalRunner:
             self.injector.launch(step.launch)
 
             # B6: Replace blind sleep with polling loop for process + window presence
+            # F4: strip common suffixes from app_basename for natural-language VLM question
+            NATURAL = app_basename
+            for _sfx in ("-desktop", "-bin", ".exe", "-electron", ".AppImage"):
+                if NATURAL.lower().endswith(_sfx.lower()):
+                    NATURAL = NATURAL[: -len(_sfx)]
+                    break
             launch_budget = step.launch_timeout if step.launch_timeout is not None else step.wait
-            window_name = step.launch_window or app_basename
+            window_name = step.launch_window or NATURAL
             if launch_budget > 0:
                 self.log(f"    → waiting up to {launch_budget}s for '{app_basename}' to start…")
                 t_launch = time.perf_counter()
                 process_present = False
                 window_present = False
                 deadline_launch = time.time() + launch_budget
+                # F1: cap VLM verify calls to prevent runaway with slow VLM
+                MAX_LAUNCH_VLM_CALLS = 2
+                n_calls = 0
                 while time.time() < deadline_launch:
                     time.sleep(1)
+                    # F1: re-check deadline after sleep
+                    if time.time() >= deadline_launch:
+                        break
                     try:
                         process_present = self.injector.process_running(app_basename)
                     except Exception:
                         process_present = False
                     if process_present:
+                        # F1: check deadline BEFORE invoking blocking VLM call
+                        if time.time() >= deadline_launch:
+                            break
+                        if n_calls >= MAX_LAUNCH_VLM_CALLS:
+                            self.log(f"    → verify call cap ({MAX_LAUNCH_VLM_CALLS}) reached, stopping")
+                            break
+                        elapsed_so_far = round((time.perf_counter() - t_launch) * 1000)
+                        self.log(f"    → verify call {n_calls + 1} ({elapsed_so_far}ms elapsed of {launch_budget}s budget)")
                         try:
                             screenshot_lv, _ = self.screenshotter.capture()
                             t0_vlm = time.perf_counter()
@@ -266,11 +289,13 @@ class FunctionalRunner:
                                 f"is the {window_name} window visible on screen",
                             )
                             latency_ms_lv = round((time.perf_counter() - t0_vlm) * 1000)
-                            self._emit("vlm_verify", step_num=step_num, attempt=1,
+                            n_calls += 1
+                            self._emit("vlm_verify", step_num=step_num, attempt=n_calls,
                                        question=f"is the {window_name} window visible on screen",
                                        answer="yes" if window_present else "no",
                                        latency_ms=latency_ms_lv, kind="launch_verify")
                         except Exception:
+                            n_calls += 1
                             window_present = False
                         if window_present:
                             break
@@ -281,8 +306,9 @@ class FunctionalRunner:
                 if not (process_present and window_present):
                     raise StepFailed(
                         f"Step {step_num}: Launch failed: process not running and/or "
-                        f"window not visible after {launch_budget}s "
-                        f"(process={process_present}, window={window_present})"
+                        f"window not visible after {elapsed_ms / 1000:.1f}s "
+                        f"(budget {launch_budget}s, calls={n_calls}, "
+                        f"process={process_present}, window={window_present})"
                     )
                 self.log(f"    → '{app_basename}' verified (process={process_present}, window={window_present})")
             elif step.wait:
@@ -634,46 +660,33 @@ class FunctionalRunner:
     # ---- B7: VM health probe ----
 
     def _probe_vm_health(self) -> bool:
-        """Check if the VM display is responsive (B7).
+        """Non-invasive responsiveness check (B7). NO mouse/keyboard injection.
 
-        Captures 3 frames with a click + 200ms waits between them.
-        If all three frames are pixel-identical AND the click triggered no
-        change, the VM is considered frozen (returns False).
-        Returns True if any frame differs (responsive).
+        F2: Replaces the invasive click(50,50) approach that caused false-positive
+        frozen detection on idle desktops and real side-effects on the desktop.
+
+        1. SSH: proves OS layer alive by running a harmless echo command.
+        2. VNC: proves framebuffer is readable and non-degenerate (size >= 100px).
+        Returns True if both checks pass, False if either fails.
         """
-        def _thumb(img: Image.Image) -> list:
-            return list(img.convert("L").resize((64, 64), Image.BILINEAR).getdata())
-
-        def _diff(a: list, b: list) -> float:
-            return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
-
+        # 1. SSH responsive — proves OS layer alive
         try:
-            img1, _ = self.screenshotter.capture()
-            t1 = _thumb(img1)
-        except Exception:
-            return True  # can't capture; assume alive
+            self.injector.shell("echo mosdat_health_ping", timeout=5)
+        except Exception as e:
+            self.log(f"  Health probe: SSH unresponsive ({e})")
+            return False
 
+        # 2. VNC capture works AND returns a non-degenerate frame
         try:
-            self.injector.click(50, 50)
-        except Exception:
-            pass
-        time.sleep(0.2)
+            img, size = self.screenshotter.capture()
+            if not img or size[0] < 100 or size[1] < 100:
+                self.log(f"  Health probe: VNC framebuffer suspect (size={size})")
+                return False
+        except Exception as e:
+            self.log(f"  Health probe: VNC unresponsive ({e})")
+            return False
 
-        try:
-            img2, _ = self.screenshotter.capture()
-            t2 = _thumb(img2)
-        except Exception:
-            return True
-
-        time.sleep(0.2)
-        try:
-            img3, _ = self.screenshotter.capture()
-            t3 = _thumb(img3)
-        except Exception:
-            return True
-
-        frozen = _diff(t1, t2) < 2 and _diff(t2, t3) < 2
-        return not frozen
+        return True
 
     def _cleanup_snapshots(self, retain: str) -> None:
         """C2: Delete snapshots created this run per retain policy."""

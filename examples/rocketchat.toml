@@ -182,9 +182,11 @@ model = "qwen3.6-35b-a3b-uncensored-vl"
 
 [functional]
 enabled = true
-workspace_url = "rocketchat.jeanbrito.com"
-test_user = "jean"
-test_password = "Jean1989."
+# Credentials are loaded from env vars (set in .env next to this config):
+#   FUNCTIONAL_WORKSPACE_URL  — e.g. "chat.example.com"
+#   FUNCTIONAL_TEST_USER      — e.g. "testuser"
+#   FUNCTIONAL_TEST_PASSWORD  — e.g. "s3cr3t"
+# Do NOT commit real credentials here.
 
 # --- Report ---
 
