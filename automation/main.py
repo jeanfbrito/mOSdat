@@ -174,6 +174,14 @@ def cmd_functional(args) -> int:
                 print(f"[mOSdat]   Halted at step {until_step}; {remaining} remaining steps NOT executed. "
                       f"VM left in current state for inspection. SSH: {vm.ip}")
 
+            # B1: Generate HTML report for this run
+            try:
+                from .reporting.report import generate_html_report
+                report_path = generate_html_report(screenshot_dir)
+                print(f"[mOSdat] Report: file://{report_path.absolute()}")
+            except Exception as e:
+                print(f"[mOSdat] WARN: report generation failed: {e}")
+
         status = "PASS" if passed else "FAIL"
         print(f"[mOSdat]   Result: {status}")
         if not passed:
