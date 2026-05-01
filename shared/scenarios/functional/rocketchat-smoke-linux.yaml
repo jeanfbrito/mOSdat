@@ -136,9 +136,11 @@ steps:
   - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
     then_type: "{test_password}"
     then_key: "enter"
-    # A4: critical for password field — Forgot-password link sits directly
-    # below it and previous runs mis-targeted there, sending creds nowhere.
-    precheck_click: true
+    # A4 precheck_click was tried — too strict. The VLM's binary yes/no on a
+    # narrow crop false-rejects valid clicks too often (iter 14 — 3 attempts
+    # all rejected on visually-correct password-field clicks). Rely instead on
+    # the retry loop: each attempt re-localizes; verify_not catches the
+    # "user not found" UI signature when type went to wrong field.
     verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
     verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
     verify_timeout: 30
