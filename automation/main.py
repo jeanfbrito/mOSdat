@@ -84,7 +84,12 @@ def cmd_functional(args) -> int:
         verify_model=args.verify_model or config.vlm.verify_model or None,
     )
 
-    name, steps, vars_ = load_test_yaml(test_file)
+    name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file)
+
+    # C2: resolve checkpoint config (YAML wins unless --no-checkpoints overrides)
+    checkpoint_config = dict(yaml_checkpoints)
+    if getattr(args, "no_checkpoints", False):
+        checkpoint_config["enabled"] = False
 
     # B4: step slicing
     total_steps = len(steps)
@@ -139,6 +144,11 @@ def cmd_functional(args) -> int:
         with VncClient(proxmox, vmid=vm.vmid) as vnc:
             screenshotter = Screenshotter(vnc)
             injector = InputInjector(vnc, ssh, vm.is_windows)
+            # C2: vm_ops needed only when checkpoints are enabled
+            from .proxmox.vm import VMOperations
+            _vm_ops_for_ckpt = None
+            if checkpoint_config.get("enabled"):
+                _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
             runner = FunctionalRunner(
                 vlm=vlm,
                 screenshotter=screenshotter,
@@ -146,6 +156,9 @@ def cmd_functional(args) -> int:
                 screenshot_dir=screenshot_dir,
                 log_fn=lambda msg: print(f"[mOSdat] {msg}"),
                 popup_sweep=getattr(args, "popup_sweep", False),
+                checkpoint_config=checkpoint_config,
+                vm_ops=_vm_ops_for_ckpt,
+                vmid=vm.vmid if checkpoint_config.get("enabled") else None,
             )
 
             # B7: VM health probe before scenario start
@@ -315,6 +328,8 @@ def main() -> int:
                       help="B4: stop after step N (inclusive, default: last step)")
     fn_p.add_argument("--skip-health-probe", action="store_true", dest="skip_health_probe",
                       help="B7: skip VM health probe before scenario start")
+    fn_p.add_argument("--no-checkpoints", action="store_true", dest="no_checkpoints",
+                      help="C2: disable Proxmox snapshot checkpoints even if YAML enables them")
 
     # mosdat validate
     val_p = sub.add_parser("validate", help="Validate config file")

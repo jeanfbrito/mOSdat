@@ -1,8 +1,9 @@
+import time
 from pathlib import Path
 from typing import Optional
 
 from ..config import VMConfig, Package, ProjectConfig
-from .api import ProxmoxAPI
+from .api import ProxmoxAPI, ProxmoxAPIError
 from ..transport.ssh import SSHClient, wait_for_ssh
 
 
@@ -152,6 +153,64 @@ class VMOperations:
         endpoint = f"/nodes/{self.api.config.node}/qemu/{self.vm.vmid}/status/reset"
         self.api.post(endpoint)
         log_fn(f"VM {self.vm.name} reset issued")
+
+    # ---- C2: Snapshot / checkpoint operations ----
+
+    def _wait_for_task(self, upid: str, timeout: int = 120) -> None:
+        """Poll /nodes/{node}/tasks/{upid}/status until status==stopped.
+
+        Raises VMError if the task fails or times out.
+        Sleeps 2 s between polls (snapshot ops are slow — no busy-wait).
+        """
+        node = self.api.config.node
+        endpoint = f"/nodes/{node}/tasks/{upid}/status"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(2)
+            try:
+                data = self.api.get(endpoint).get("data", {})
+            except ProxmoxAPIError:
+                # Transient — keep polling
+                continue
+            status = data.get("status", "")
+            if status == "stopped":
+                exitstatus = data.get("exitstatus", "")
+                if exitstatus and exitstatus != "OK":
+                    raise VMError(f"Proxmox task {upid} failed: exitstatus={exitstatus}")
+                return
+        raise VMError(f"Proxmox task {upid} did not complete within {timeout}s")
+
+    def snapshot(self, vmid: int, name: str) -> None:
+        """Create a disk-only snapshot (vmstate=0) and wait for completion."""
+        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot"
+        response = self.api.post(endpoint, data={"snapname": name, "vmstate": 0})
+        upid = response.get("data", "")
+        if not upid:
+            raise VMError(f"snapshot: no UPID returned for VM {vmid} snap '{name}'")
+        self._wait_for_task(upid)
+
+    def rollback(self, vmid: int, name: str) -> None:
+        """Rollback VM to a named snapshot and wait for completion."""
+        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}/rollback"
+        response = self.api.post(endpoint)
+        upid = response.get("data", "")
+        if not upid:
+            raise VMError(f"rollback: no UPID returned for VM {vmid} snap '{name}'")
+        self._wait_for_task(upid)
+
+    def delete_snapshot(self, vmid: int, name: str) -> None:
+        """Delete a named snapshot and wait for completion."""
+        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}"
+        response = self.api.delete(endpoint)
+        upid = response.get("data", "")
+        if upid:
+            self._wait_for_task(upid)
+
+    def list_snapshots(self, vmid: int) -> list:
+        """Return list of snapshot names, excluding the always-present 'current' entry."""
+        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot"
+        data = self.api.get(endpoint).get("data", [])
+        return [s["name"] for s in data if s.get("name") != "current"]
 
     def cleanup_package(self, package: Package, log_fn=print) -> None:
         log_fn(f"Cleaning up {package.format} from {self.vm.name}...")

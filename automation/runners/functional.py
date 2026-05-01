@@ -41,6 +41,7 @@ class FunctionalStep:
     launch_window: Optional[str] = None   # B6: window name hint for launch verification (derived from launch basename if omitted)
     launch_timeout: Optional[int] = None  # B6: polling budget for launch verification (defaults to step.wait)
     on_failure_agent: Optional[dict] = None  # C1: agent fallback on retry exhaustion
+    checkpoint: Optional[str] = None      # C2: snapshot VM at this step; value is the snapshot name
 
 
 class StepFailed(Exception):
@@ -56,6 +57,9 @@ class FunctionalRunner:
         screenshot_dir: Optional[Path] = None,
         log_fn: Callable[[str], None] = print,
         popup_sweep: bool = False,
+        checkpoint_config: Optional[dict] = None,
+        vm_ops=None,
+        vmid: Optional[int] = None,
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
@@ -65,6 +69,17 @@ class FunctionalRunner:
         self.popup_sweep = popup_sweep
         # B2: events.jsonl always-on when screenshot_dir is set
         self._events_path: Optional[Path] = (screenshot_dir / "events.jsonl") if screenshot_dir else None
+        # C2: checkpoint config
+        _ckpt = checkpoint_config or {}
+        self._checkpoints_enabled: bool = bool(_ckpt.get("enabled", False))
+        self._checkpoints_retain: str = _ckpt.get("retain", "keep-named")
+        self._checkpoints_rewind: bool = bool(_ckpt.get("rewind_on_failure", True))
+        self._vm_ops = vm_ops   # VMOperations instance for snapshot calls
+        self._vmid: Optional[int] = vmid
+        # Internal tracking: list of (name, step_num) in creation order
+        self._checkpoints: list = []
+        # Track which snapshots were created this run (for cleanup)
+        self._created_snapshots: list = []
 
     def _save_screenshot(self, img: Image.Image, label: str) -> None:
         if not self.screenshot_dir:
@@ -174,11 +189,35 @@ class FunctionalRunner:
             return result
         return self.vlm.verify(screenshot, question)
 
+    def _do_checkpoint(self, name: str, step_num) -> None:
+        """C2: Snapshot the VM at this step. Handles name collision by deleting first."""
+        if not self._checkpoints_enabled or self._vm_ops is None or self._vmid is None:
+            return
+        self.log(f"  Step {step_num}: checkpoint '{name}'")
+        # Collision guard: if name already exists, delete it first
+        try:
+            existing = self._vm_ops.list_snapshots(self._vmid)
+            if name in existing:
+                self.log(f"    → snapshot '{name}' exists from previous run — deleting first")
+                self._vm_ops.delete_snapshot(self._vmid, name)
+        except Exception as e:
+            self.log(f"    → WARNING: could not list/delete existing snapshot '{name}': {e}")
+        self._vm_ops.snapshot(self._vmid, name)
+        self._checkpoints.append((name, step_num))
+        self._created_snapshots.append(name)
+        self._emit("checkpoint_created", step_num=step_num, name=name)
+        self.log(f"    → checkpoint '{name}' created at step {step_num}")
+
     def run_step(self, step: FunctionalStep, step_num) -> None:
         """Execute a single test step with retries.
 
         Raises StepFailed if all retries are exhausted.
         """
+        # C2: checkpoint step — snapshot and return immediately (no UI action)
+        if step.checkpoint is not None:
+            self._do_checkpoint(step.checkpoint, step_num)
+            return
+
         label = step.localize[:60] if step.localize else (step.launch or step.shell or "")[:60]
         kind = ("localize" if step.localize else
                 "launch" if step.launch else
@@ -636,6 +675,23 @@ class FunctionalRunner:
         frozen = _diff(t1, t2) < 2 and _diff(t2, t3) < 2
         return not frozen
 
+    def _cleanup_snapshots(self, retain: str) -> None:
+        """C2: Delete snapshots created this run per retain policy."""
+        if not self._created_snapshots or self._vm_ops is None or self._vmid is None:
+            return
+        # Determine which names are "user-named" (came from checkpoint: steps in the YAML)
+        # All entries in _created_snapshots were named by the user — auto ones would need
+        # a prefix; here every snapshot was explicitly named in the YAML, so "keep-named"
+        # means keep all, "delete" means delete all, "keep" means keep all.
+        if retain == "delete":
+            for snap_name in self._created_snapshots:
+                try:
+                    self._vm_ops.delete_snapshot(self._vmid, snap_name)
+                    self.log(f"  [checkpoint] deleted snapshot '{snap_name}'")
+                except Exception as e:
+                    self.log(f"  [checkpoint] WARNING: failed to delete snapshot '{snap_name}': {e}")
+        # "keep" and "keep-named" both keep all user-named snapshots (default: keep-named)
+
     def run_test(
         self,
         steps: list[FunctionalStep],
@@ -663,9 +719,19 @@ class FunctionalRunner:
 
         resolved = _resolve_vars(steps, vars)
 
-        for i, step in enumerate(resolved, start=1):
+        # C2: reset checkpoint tracking for this run
+        self._checkpoints = []
+        self._created_snapshots = []
+
+        passed = False
+        # C2: step cursor — supports rewind by adjusting where we resume from
+        step_index = 0
+        while step_index < len(resolved):
+            i = step_index + 1  # 1-indexed step number
+            step = resolved[step_index]
             try:
                 self.run_step(step, i)
+                step_index += 1
             except StepFailed as e:
                 _log(f"  FAIL: {e}")
                 # Save final state screenshot
@@ -674,9 +740,47 @@ class FunctionalRunner:
                     self._save_screenshot(screenshot, f"step{i}_final_fail")
                 except Exception:
                     pass
-                return False, "\n".join(log_lines)
 
-        _log(f"  PASS: all {len(steps)} steps completed")
+                # C2: rewind to last checkpoint if enabled and available
+                if (
+                    self._checkpoints_enabled
+                    and self._checkpoints_rewind
+                    and self._checkpoints
+                    and self._vm_ops is not None
+                    and self._vmid is not None
+                ):
+                    ckpt_name, ckpt_step_num = self._checkpoints.pop()
+                    _log(f"  [checkpoint] Rewinding to checkpoint '{ckpt_name}' (step {ckpt_step_num})")
+                    try:
+                        self._vm_ops.rollback(self._vmid, ckpt_name)
+                    except Exception as rb_err:
+                        _log(f"  [checkpoint] WARNING: rollback failed: {rb_err} — re-raising original failure")
+                        self._cleanup_snapshots(self._checkpoints_retain)
+                        return False, "\n".join(log_lines)
+                    # Wait for VM to be reachable again
+                    _log(f"  [checkpoint] Waiting for VM to come back after rollback...")
+                    from ..proxmox.api import ProxmoxAPI as _ProxmoxAPI
+                    ip = self._vm_ops.api.wait_for_ip(self._vmid, timeout=120)
+                    if not ip:
+                        _log(f"  [checkpoint] FATAL: VM did not return after rollback — aborting")
+                        self._emit("checkpoint_rewind", name=ckpt_name,
+                                   from_step=i, to_step=ckpt_step_num + 1,
+                                   status="fatal_no_ip")
+                        self._cleanup_snapshots(self._checkpoints_retain)
+                        return False, "\n".join(log_lines)
+                    self._emit("checkpoint_rewind", name=ckpt_name,
+                               from_step=i, to_step=ckpt_step_num + 1)
+                    _log(f"  [checkpoint] Rewound — resuming from step {ckpt_step_num + 1}")
+                    # Resume after the checkpoint step (0-indexed)
+                    step_index = ckpt_step_num  # ckpt_step_num is 1-indexed; index = ckpt_step_num
+                    continue
+                else:
+                    self._cleanup_snapshots(self._checkpoints_retain)
+                    return False, "\n".join(log_lines)
+
+        _log(f"  PASS: all {len(resolved)} steps completed")
+        passed = True
+        self._cleanup_snapshots(self._checkpoints_retain)
         return True, "\n".join(log_lines)
 
 
@@ -706,6 +810,7 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             launch_window=s.launch_window,
             launch_timeout=s.launch_timeout,
             on_failure_agent=_resolve_agent_vars(s.on_failure_agent, vars),
+            checkpoint=s.checkpoint,
         ))
     return resolved
 
@@ -747,26 +852,39 @@ def _parse_on_failure_agent(raw: Optional[dict]) -> Optional[dict]:
     }
 
 
-def load_test_yaml(path: Path) -> tuple[str, list[FunctionalStep], dict]:
+def load_test_yaml(path, _unused=None) -> tuple[str, list[FunctionalStep], dict, dict]:
     """Load a YAML functional test file.
 
-    Returns (name, steps, vars).
+    Returns (name, steps, vars, checkpoints_config).
+
+    checkpoints_config is the optional top-level ``checkpoints:`` dict from the
+    YAML, defaulting to ``{}`` if absent. The caller applies ``enabled``,
+    ``retain``, and ``rewind_on_failure`` from this dict.
+
+    The ``_unused`` positional parameter is accepted (but ignored) for
+    backward-compatibility with call sites that passed extra args.
     """
     import yaml  # optional dep
 
+    path = Path(path)
     with open(path) as f:
         data = yaml.safe_load(f)
 
     name = data.get("name", path.stem)
     vars = data.get("vars", {})
+    checkpoints_config = data.get("checkpoints", {}) or {}
     steps = []
     for raw in data.get("steps", []):
         steps.append(_parse_step(raw))
-    return name, steps, vars
+    return name, steps, vars, checkpoints_config
 
 
 def _parse_step(raw: dict) -> "FunctionalStep":
     """Parse a single raw YAML step dict into a FunctionalStep."""
+    # C2: checkpoint step — shorthand {checkpoint: "name"} with no other fields
+    if "checkpoint" in raw and len(raw) == 1:
+        return FunctionalStep(checkpoint=str(raw["checkpoint"]))
+
     then_steps = None
     if "then" in raw:
         then_steps = [_parse_step(s) for s in raw["then"]]
@@ -792,4 +910,5 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         launch_window=raw.get("launch_window"),
         launch_timeout=int(raw["launch_timeout"]) if "launch_timeout" in raw else None,
         on_failure_agent=_parse_on_failure_agent(raw.get("on_failure_agent")),
+        checkpoint=raw.get("checkpoint"),
     )
