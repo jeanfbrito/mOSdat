@@ -51,7 +51,54 @@ def cmd_test(args) -> int:
         return 130
 
 
+def cmd_record(args) -> int:
+    """C3: Interactive scenario authoring — open VNC viewer, capture clicks, generate YAML."""
+    config = load_config(args.config)
+
+    vm_names = [v.strip() for v in args.vms.split(",")]
+    if len(vm_names) != 1:
+        print("[mOSdat] ERROR: --record requires exactly one VM (--vms <single-vm>)")
+        return 1
+    vm_name = vm_names[0]
+    if vm_name not in config.vm_by_name:
+        print(f"[mOSdat] ERROR: Unknown VM '{vm_name}'. Available: {', '.join(config.vm_by_name.keys())}")
+        return 1
+    vm = config.vm_by_name[vm_name]
+
+    if not config.proxmox.password:
+        print("[mOSdat] ERROR: Proxmox password required for VNC. Set MOSDAT_PROXMOX_PASSWORD or [proxmox].password.")
+        return 1
+
+    from .vlm.client import VLMClient
+    from .transport.vnc import VncClient
+    from .proxmox.api import ProxmoxAPI
+
+    vlm = VLMClient(
+        base_url=config.vlm.base_url,
+        model=args.model or config.vlm.model,
+        verify_model=args.verify_model or config.vlm.verify_model or None,
+    )
+    proxmox = ProxmoxAPI(config.proxmox)
+
+    output_path = Path(args.output) if args.output else None
+
+    # QApplication must be created here, not at import time (keeps headless imports safe).
+    from PyQt6.QtWidgets import QApplication
+    from .record import RecorderWindow
+
+    app = QApplication(sys.argv)
+
+    with VncClient(proxmox, vmid=vm.vmid) as vnc:
+        window = RecorderWindow(vnc, vlm, output_path=output_path)
+        window.resize(1200, 700)
+        window.show()
+        return app.exec()
+
+
 def cmd_functional(args) -> int:
+    if getattr(args, "record", False):
+        return cmd_record(args)
+
     from datetime import datetime
     from pathlib import Path as P
 
@@ -330,6 +377,10 @@ def main() -> int:
                       help="B7: skip VM health probe before scenario start")
     fn_p.add_argument("--no-checkpoints", action="store_true", dest="no_checkpoints",
                       help="C2: disable Proxmox snapshot checkpoints even if YAML enables them")
+    fn_p.add_argument("--record", action="store_true",
+                      help="C3: interactive authoring mode — open VNC viewer, capture clicks, generate YAML")
+    fn_p.add_argument("--output", type=str, default=None,
+                      help="(--record) path to write the generated YAML")
 
     # mosdat validate
     val_p = sub.add_parser("validate", help="Validate config file")

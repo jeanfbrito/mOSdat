@@ -504,3 +504,56 @@ class VLMClient:
                 f"localize_consistent centroid {final_x},{final_y} out of screen {screen_size}"
             )
         return final_x, final_y
+
+    def describe_element(self, screenshot: Image.Image, x: int, y: int) -> str:
+        """Describe the GUI element near (x, y) in one phrase for use as a localize target.
+
+        Crops ±100px around (x, y) bounded by image dimensions, then asks the
+        verify_model for a concise, attribute-rich description of the element at
+        the centre.  Used by the interactive recorder (C3) to pre-fill the
+        element description dialog.
+
+        Args:
+            screenshot: Full-screen capture at the moment of the click.
+            x: Pixel x coordinate of the click (in screenshot space).
+            y: Pixel y coordinate of the click (in screenshot space).
+
+        Returns:
+            A single-phrase description string (8-15 words), stripped of
+            surrounding quotes and punctuation noise.
+        """
+        w, h = screenshot.size
+        crop_size = 100
+        box = (
+            max(0, x - crop_size),
+            max(0, y - crop_size),
+            min(w, x + crop_size),
+            min(h, y + crop_size),
+        )
+        crop = screenshot.crop(box)
+        b64 = _encode_image(crop)
+        prompt = (
+            "Describe the GUI element at the center of this image in one phrase "
+            "suitable for a click target. Be specific about visible attributes "
+            "(text, icon, position relative to neighbors). 8-15 words. "
+            "Output only the description."
+        )
+        resp = self._call_with_failover(
+            "chat.completions.create",
+            model=self.verify_model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+            max_tokens=64,
+            temperature=0.0,
+            timeout=60,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        # Strip wrapping quotes / punctuation noise
+        import re as _re
+        raw = _re.sub(r'^["\'“‘]+|["\'”’.!?,;]+$', "", raw).strip()
+        return raw
