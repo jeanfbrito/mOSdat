@@ -40,9 +40,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 
-# Automation state
+# Agent scratch (kept out of git)
 .sisyphus/
-.knowledge/
+
+# mastermind project store (.knowledge/) IS tracked — entries are
+# project-shared knowledge that travels with the repo. Sanitize content
+# before promoting (no internal IPs, hostnames, or credentials).
 
 # Python packaging artifacts
 *.egg-info/
