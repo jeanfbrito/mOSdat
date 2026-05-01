@@ -5,6 +5,8 @@ topic: Discovered llama-swap proxy (not vLLM) at VLM_BASE_URL — uses GGUF mode
 kind: insight
 scope: project-shared
 confidence: medium
+accessed: 22
+last_accessed: "2026-05-01"
 ---
 
 5. Problem Solving:

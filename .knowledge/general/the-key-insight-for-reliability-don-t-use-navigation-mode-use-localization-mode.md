@@ -5,6 +5,8 @@ topic: 'The key insight for reliability: **don''t use navigation mode**. Use loc
 kind: decision
 scope: project-shared
 confidence: low
+accessed: 3
+last_accessed: "2026-05-01"
 ---
 
 **2. Navigation** — full agentic multi-step reasoning (this is the 39.9% OSWorld score)

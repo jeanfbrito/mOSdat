@@ -11,6 +11,8 @@ kind: decision
 scope: project-shared
 category: docs
 confidence: high
+accessed: 7
+last_accessed: "2026-05-01"
 ---
 
 ## Decision (commit dd900d0)

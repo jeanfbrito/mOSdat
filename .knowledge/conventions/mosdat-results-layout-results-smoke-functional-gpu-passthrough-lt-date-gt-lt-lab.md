@@ -11,6 +11,8 @@ kind: decision
 scope: project-shared
 category: conventions
 confidence: high
+accessed: 14
+last_accessed: "2026-05-01"
 ---
 
 ## Decision (2026-04-30, commit 34b55f2)

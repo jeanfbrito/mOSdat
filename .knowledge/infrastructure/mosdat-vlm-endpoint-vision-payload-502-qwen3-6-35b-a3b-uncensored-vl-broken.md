@@ -12,6 +12,8 @@ kind: war-story
 scope: project-shared
 category: infrastructure
 confidence: high
+accessed: 29
+last_accessed: "2026-05-01"
 ---
 
 ## Finding (2026-05-01 live debug)
