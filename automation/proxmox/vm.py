@@ -143,6 +143,16 @@ class VMOperations:
     def run_tests_gpu(self, package: Package, pkg_filename: str, log_fn=print) -> tuple[int, str]:
         return self._run_tests(package, pkg_filename, gpu=True, log_fn=log_fn)
 
+    def reset_vm(self, log_fn=print) -> None:
+        """Hard-reset the VM (equivalent to pressing the reset button).
+
+        Uses POST /nodes/{node}/qemu/{vmid}/status/reset.
+        Non-idempotent — no retry.
+        """
+        endpoint = f"/nodes/{self.api.config.node}/qemu/{self.vm.vmid}/status/reset"
+        self.api.post(endpoint)
+        log_fn(f"VM {self.vm.name} reset issued")
+
     def cleanup_package(self, package: Package, log_fn=print) -> None:
         log_fn(f"Cleaning up {package.format} from {self.vm.name}...")
 

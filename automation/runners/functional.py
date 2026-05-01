@@ -1,5 +1,7 @@
 """Functional UI test runner using VLM for element localization and verification."""
 
+import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,6 +13,9 @@ from PIL import Image
 from ..vlm.client import VLMClient
 from ..vlm.input import InputInjector
 from ..vlm.screenshot import Screenshotter
+
+# Regex for redacting sensitive text values in event log
+_SENSITIVE_RE = re.compile(r"password|token|secret", re.IGNORECASE)
 
 
 @dataclass
@@ -32,6 +37,8 @@ class FunctionalStep:
     then_steps: Optional[list] = None     # steps to execute when if_visible is True (list of FunctionalStep)
     verify_consistent: bool = False        # A2: if True, use 3-sample quorum vote for verify calls
     precheck_click: bool = False           # A4: if True, use localize_verified (pre-click crop verify)
+    launch_window: Optional[str] = None   # B6: window name hint for launch verification (derived from launch basename if omitted)
+    launch_timeout: Optional[int] = None  # B6: polling budget for launch verification (defaults to step.wait)
 
 
 class StepFailed(Exception):
@@ -46,12 +53,16 @@ class FunctionalRunner:
         injector: InputInjector,
         screenshot_dir: Optional[Path] = None,
         log_fn: Callable[[str], None] = print,
+        popup_sweep: bool = False,
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
         self.injector = injector
         self.screenshot_dir = screenshot_dir
         self.log = log_fn
+        self.popup_sweep = popup_sweep
+        # B2: events.jsonl always-on when screenshot_dir is set
+        self._events_path: Optional[Path] = (screenshot_dir / "events.jsonl") if screenshot_dir else None
 
     def _save_screenshot(self, img: Image.Image, label: str) -> None:
         if not self.screenshot_dir:
@@ -77,6 +88,63 @@ class FunctionalRunner:
         overlay.save(path)
         self.log(f"  Click overlay: {path}")
 
+    # ---- B2: Event stream ----
+
+    def _emit(self, event_type: str, **fields) -> None:
+        """Append a JSON event line to events.jsonl (B2)."""
+        if not self._events_path:
+            return
+        record = {
+            "ts": datetime.now().isoformat(),
+            "event": event_type,
+            **fields,
+        }
+        self._events_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._events_path.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+
+    @staticmethod
+    def _redact(text: Optional[str]) -> str:
+        """Redact sensitive text values before writing to the event log."""
+        if not text:
+            return ""
+        if _SENSITIVE_RE.search(text):
+            return "<REDACTED>"
+        return text[:80]
+
+    # ---- B3: Popup sweeper ----
+
+    def _sweep_popups(self, step_num, max_attempts: int = 2) -> int:
+        """Dismiss modal dialogs / popups before a localize step (B3).
+
+        Returns the count of popups dismissed.
+        Emits popup_sweep events.
+        Only called when self.popup_sweep is True.
+        """
+        dismissed = 0
+        question = (
+            "is there a modal dialog, popup, blocking overlay, update notification, "
+            "or notification banner covering or partially covering the main application UI"
+        )
+        for _ in range(max_attempts):
+            try:
+                screenshot, _ = self.screenshotter.capture()
+                t0 = time.perf_counter()
+                found = self.vlm.verify(screenshot, question)
+                latency_ms = round((time.perf_counter() - t0) * 1000)
+                self._emit("vlm_verify", step_num=step_num, attempt=1, question=question[:80],
+                           answer="yes" if found else "no", latency_ms=latency_ms, kind="popup_sweep")
+                if not found:
+                    break
+                self.injector.key("escape")
+                time.sleep(0.5)
+                dismissed += 1
+            except Exception as e:
+                self.log(f"    → popup sweep error ({e}), skipping")
+                break
+        self._emit("popup_sweep", step_num=step_num, dismissed=dismissed)
+        return dismissed
+
     def _verify_call(
         self,
         screenshot: Image.Image,
@@ -98,6 +166,9 @@ class FunctionalRunner:
                     + "\n\n---\n\n".join(f"sample {i+1}:\n{r}" for i, r in enumerate(responses))
                 )
                 self.log(f"  Verify split logged: {split_path}")
+                # B2: emit verify_split event when quorum disagrees
+                self._emit("verify_split", step_num=step_num, question=question[:80],
+                           responses=[r[:200] for r in responses])
             return result
         return self.vlm.verify(screenshot, question)
 
@@ -107,19 +178,75 @@ class FunctionalRunner:
         Raises StepFailed if all retries are exhausted.
         """
         label = step.localize[:60] if step.localize else (step.launch or step.shell or "")[:60]
+        kind = ("localize" if step.localize else
+                "launch" if step.launch else
+                "shell" if step.shell else
+                "if_visible" if step.if_visible is not None else
+                "key")
+        # B2: step_start
+        step_start_ts = time.perf_counter()
+        self._emit("step_start", step_num=step_num, label=label, kind=kind)
 
         # Shell is a one-shot action — do it before the retry loop
         if step.shell:
             self.log(f"  Step {step_num}: shell '{step.shell[:80]}'")
+            self._emit("shell", step_num=step_num, cmd_truncated=step.shell[:80])
             self.injector.shell(step.shell)
 
         # Launch is a one-shot action — do it before the retry loop
         if step.launch:
             self.log(f"  Step {step_num}: launch '{step.launch[:80]}'")
+            import os as _os
+            app_basename = _os.path.basename(step.launch.split()[0])
+            self._emit("launch", step_num=step_num, app=step.launch[:80], args="")
             self.injector.launch(step.launch)
-            if step.wait:
-                self.log(f"    → waiting {step.wait}s for app to start…")
-                time.sleep(step.wait)
+
+            # B6: Replace blind sleep with polling loop for process + window presence
+            launch_budget = step.launch_timeout if step.launch_timeout is not None else step.wait
+            window_name = step.launch_window or app_basename
+            if launch_budget > 0:
+                self.log(f"    → waiting up to {launch_budget}s for '{app_basename}' to start…")
+                t_launch = time.perf_counter()
+                process_present = False
+                window_present = False
+                deadline_launch = time.time() + launch_budget
+                while time.time() < deadline_launch:
+                    time.sleep(1)
+                    try:
+                        process_present = self.injector.process_running(app_basename)
+                    except Exception:
+                        process_present = False
+                    if process_present:
+                        try:
+                            screenshot_lv, _ = self.screenshotter.capture()
+                            t0_vlm = time.perf_counter()
+                            window_present = self.vlm.verify(
+                                screenshot_lv,
+                                f"is the {window_name} window visible on screen",
+                            )
+                            latency_ms_lv = round((time.perf_counter() - t0_vlm) * 1000)
+                            self._emit("vlm_verify", step_num=step_num, attempt=1,
+                                       question=f"is the {window_name} window visible on screen",
+                                       answer="yes" if window_present else "no",
+                                       latency_ms=latency_ms_lv, kind="launch_verify")
+                        except Exception:
+                            window_present = False
+                        if window_present:
+                            break
+                elapsed_ms = round((time.perf_counter() - t_launch) * 1000)
+                self._emit("launch_verify", step_num=step_num, app=app_basename,
+                           process_present=process_present, window_present=window_present,
+                           elapsed_ms=elapsed_ms)
+                if not (process_present and window_present):
+                    raise StepFailed(
+                        f"Step {step_num}: Launch failed: process not running and/or "
+                        f"window not visible after {launch_budget}s "
+                        f"(process={process_present}, window={window_present})"
+                    )
+                self.log(f"    → '{app_basename}' verified (process={process_present}, window={window_present})")
+            elif step.wait:
+                # wait=0 but launch_timeout explicitly 0 — keep old behaviour of no wait
+                pass
 
         # Standalone key/type steps (no localize). Used to drive the desktop
         # launcher on Linux: `key_pre: super` → `type: "<app name>"` →
@@ -152,7 +279,13 @@ class FunctionalRunner:
             self.log(f"  Step {step_num}: if_visible '{step.if_visible[:60]}'")
             try:
                 screenshot, _ = self.screenshotter.capture()
+                t0_iv = time.perf_counter()
                 visible = self.vlm.verify(screenshot, f"is there a {step.if_visible}")
+                latency_ms_iv = round((time.perf_counter() - t0_iv) * 1000)
+                self._emit("vlm_verify", step_num=step_num, attempt=1,
+                           question=f"is there a {step.if_visible}"[:80],
+                           answer="yes" if visible else "no",
+                           latency_ms=latency_ms_iv, kind="if_visible")
             except Exception as e:
                 self.log(f"    → visibility check error ({e}), treating as not visible — skip")
                 visible = False
@@ -162,6 +295,10 @@ class FunctionalRunner:
                     self.run_step(sub_step, f"{step_num}.{sub_i}")
             else:
                 self.log(f"    → not visible: skipping")
+            duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+            self._emit("step_end", step_num=step_num,
+                       status="ok" if visible else "skipped",
+                       attempts=1, duration_ms=duration_ms)
             return
 
         # Focus can run with or without a launch — used to re-assert that the
@@ -187,16 +324,24 @@ class FunctionalRunner:
                         return
 
                 if step.localize:
+                    # B3: proactive popup sweep before each localize
+                    if self.popup_sweep:
+                        self._sweep_popups(step_num)
                     self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
                     screenshot, screen_size = self.screenshotter.capture()
                     # A6: save the screenshot used for localize
                     self._save_screenshot(screenshot, f"step{step_num}_localize")
                     # A4: opt-in pre-click crop verify
+                    t0_loc = time.perf_counter()
                     if step.precheck_click:
                         x, y = self.vlm.localize_verified(screenshot, step.localize, screen_size)
                     else:
                         x, y = self.vlm.localize(screenshot, step.localize, screen_size)
+                    latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+                    self._emit("vlm_localize", step_num=step_num, attempt=attempt,
+                               target=step.localize[:80], x=x, y=y, latency_ms=latency_ms_loc)
                     self.log(f"    → click ({x}, {y})")
+                    self._emit("click", step_num=step_num, x=x, y=y)
                     self.injector.click(x, y)
                     # A6: save click overlay
                     self._save_click_overlay(screenshot, x, y, step_num)
@@ -227,6 +372,8 @@ class FunctionalRunner:
                             self.log(f"    → skip type (already present): '{step.then_type[:40]}'")
                         else:
                             self.log(f"    → type '{step.then_type[:40]}'")
+                            self._emit("type", step_num=step_num,
+                                       text_redacted=self._redact(step.then_type))
                             self.injector.type_text(step.then_type)
                             time.sleep(0.2)
 
@@ -249,6 +396,7 @@ class FunctionalRunner:
 
                     if step.then_key:
                         self.log(f"    → key '{step.then_key}'")
+                        self._emit("key", step_num=step_num, key=step.then_key)
                         self.injector.key(step.then_key)
                         # A1: stability wait after then_key (was 0.3s fixed sleep)
                         self.screenshotter.wait_for_stable(max_seconds=3.0)
@@ -256,22 +404,41 @@ class FunctionalRunner:
                 if step.verify:
                     if not step.localize:
                         self.log(f"  Step {step_num}: verify '{step.verify[:60]}'{retry_label}")
+                    t0_verify = time.perf_counter()
                     verified = self._wait_for_state(step.verify, step.verify_timeout, step_num, must_be_false=step.verify_not, step=step)
+                    latency_ms_verify = round((time.perf_counter() - t0_verify) * 1000)
                     if verified:
                         self.log(f"    ✓ verified: {step.verify[:60]}")
+                        self._emit("vlm_verify", step_num=step_num, attempt=attempt,
+                                   question=step.verify[:80], answer="yes",
+                                   latency_ms=latency_ms_verify, kind="verify")
                         # A6: save verify screenshot
                         screenshot_v, _ = self.screenshotter.capture()
                         self._save_screenshot(screenshot_v, f"step{step_num}_verified")
+                        duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                        self._emit("step_end", step_num=step_num, status="ok",
+                                   attempts=attempt, duration_ms=duration_ms)
                         return
+                    self._emit("vlm_verify", step_num=step_num, attempt=attempt,
+                               question=step.verify[:80], answer="no",
+                               latency_ms=latency_ms_verify, kind="verify")
                     screenshot, _ = self.screenshotter.capture()
                     self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
                     if attempt < step.retries:
                         self.log(f"    ✗ not verified, retrying...")
+                        self._emit("retry", step_num=step_num, attempt=attempt,
+                                   reason="verify_failed")
                         continue
+                    duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                    self._emit("step_end", step_num=step_num, status="failed",
+                               attempts=attempt, duration_ms=duration_ms)
                     raise StepFailed(
                         f"Step {step_num}: '{step.verify}' was never true "
                         f"after {step.retries} attempts"
                     )
+                duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                self._emit("step_end", step_num=step_num, status="ok",
+                           attempts=attempt, duration_ms=duration_ms)
                 return  # no verify needed
 
             except StepFailed:
@@ -279,8 +446,12 @@ class FunctionalRunner:
             except Exception as e:
                 if attempt < step.retries:
                     self.log(f"    ✗ error: {e}, retrying...")
+                    self._emit("retry", step_num=step_num, attempt=attempt, reason=str(e)[:80])
                     time.sleep(1)
                 else:
+                    duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                    self._emit("step_end", step_num=step_num, status="failed",
+                               attempts=attempt, duration_ms=duration_ms)
                     raise StepFailed(f"Step {step_num}: {e}") from e
 
     def _check_state(
@@ -345,6 +516,50 @@ class FunctionalRunner:
             except Exception:
                 pass
         return False
+
+    # ---- B7: VM health probe ----
+
+    def _probe_vm_health(self) -> bool:
+        """Check if the VM display is responsive (B7).
+
+        Captures 3 frames with a click + 200ms waits between them.
+        If all three frames are pixel-identical AND the click triggered no
+        change, the VM is considered frozen (returns False).
+        Returns True if any frame differs (responsive).
+        """
+        def _thumb(img: Image.Image) -> list:
+            return list(img.convert("L").resize((64, 64), Image.BILINEAR).getdata())
+
+        def _diff(a: list, b: list) -> float:
+            return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+        try:
+            img1, _ = self.screenshotter.capture()
+            t1 = _thumb(img1)
+        except Exception:
+            return True  # can't capture; assume alive
+
+        try:
+            self.injector.click(50, 50)
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+        try:
+            img2, _ = self.screenshotter.capture()
+            t2 = _thumb(img2)
+        except Exception:
+            return True
+
+        time.sleep(0.2)
+        try:
+            img3, _ = self.screenshotter.capture()
+            t3 = _thumb(img3)
+        except Exception:
+            return True
+
+        frozen = _diff(t1, t2) < 2 and _diff(t2, t3) < 2
+        return not frozen
 
     def run_test(
         self,
@@ -412,6 +627,8 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             then_steps=_resolve_vars(s.then_steps, vars) if s.then_steps else None,
             verify_consistent=s.verify_consistent,
             precheck_click=s.precheck_click,
+            launch_window=s.launch_window,
+            launch_timeout=s.launch_timeout,
         ))
     return resolved
 
@@ -465,4 +682,6 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         then_steps=then_steps,
         verify_consistent=bool(raw.get("verify_consistent", False)),
         precheck_click=bool(raw.get("precheck_click", False)),
+        launch_window=raw.get("launch_window"),
+        launch_timeout=int(raw["launch_timeout"]) if "launch_timeout" in raw else None,
     )

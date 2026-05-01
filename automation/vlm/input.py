@@ -103,6 +103,27 @@ Write-Output "focus:ok"
 """
         self.ssh.run(_ps_encoded(ps), timeout=15)
 
+    def process_running(self, name: str) -> bool:
+        """Return True if a process matching `name` is running on the VM.
+
+        Uses pgrep -f on Linux and Get-Process on Windows.
+        The name is the basename of the executable (or any substring).
+        """
+        if self.is_windows:
+            result = self.ssh.run(
+                f"powershell.exe -Command \"Get-Process -ErrorAction SilentlyContinue | "
+                f"Where-Object {{$_.Name -like '*{name}*'}} | Measure-Object | "
+                f"Select-Object -ExpandProperty Count\"",
+                timeout=10,
+            )
+            try:
+                return int(result.stdout.strip()) > 0
+            except (ValueError, AttributeError):
+                return False
+        else:
+            result = self.ssh.run(f"pgrep -f '{name}' | head -1", timeout=10)
+            return result.returncode == 0 and bool(result.stdout.strip())
+
     def launch(self, cmd: str) -> None:
         """Launch an application in the user's interactive desktop session.
 

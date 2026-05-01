@@ -86,6 +86,19 @@ def cmd_functional(args) -> int:
 
     name, steps, vars_ = load_test_yaml(test_file)
 
+    # B4: step slicing
+    total_steps = len(steps)
+    from_step = args.from_step
+    until_step = args.until_step if args.until_step is not None else total_steps
+    if from_step < 1 or from_step > total_steps:
+        print(f"[mOSdat] ERROR: --from-step {from_step} out of range (scenario has {total_steps} steps)")
+        return 1
+    if until_step < from_step or until_step > total_steps:
+        print(f"[mOSdat] ERROR: --until-step {until_step} out of range (from_step={from_step}, total={total_steps})")
+        return 1
+    steps = steps[from_step - 1 : until_step]
+    partial_run = (from_step > 1 or until_step < total_steps)
+
     # Merge config vars (workspace_url, test_user, test_password) into template vars
     from datetime import datetime as dt
     vars_.setdefault("workspace_url", config.functional.workspace_url)
@@ -132,8 +145,35 @@ def cmd_functional(args) -> int:
                 injector=injector,
                 screenshot_dir=screenshot_dir,
                 log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                popup_sweep=getattr(args, "popup_sweep", False),
             )
+
+            # B7: VM health probe before scenario start
+            if not getattr(args, "skip_health_probe", False):
+                print(f"[mOSdat]   Probing VM health...")
+                healthy = runner._probe_vm_health()
+                if not healthy:
+                    print(f"[mOSdat]   WARNING: VM appears frozen — attempting reset...")
+                    from .proxmox.vm import VMOperations
+                    vm_ops = VMOperations(proxmox, vm, config)
+                    vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
+                    # Wait for VM to come back
+                    import time as _time
+                    _time.sleep(15)
+                    healthy2 = runner._probe_vm_health()
+                    if not healthy2:
+                        runner._emit("vm_health_failed")
+                        print(f"[mOSdat] ERROR: VM still frozen after reset — aborting scenario for {vm.name}")
+                        overall = False
+                        continue
+
             passed, log = runner.run_test(steps, name, vars=vm_vars)
+            # B4: partial run note
+            if partial_run and until_step < total_steps:
+                remaining = total_steps - until_step
+                print(f"[mOSdat]   Halted at step {until_step}; {remaining} remaining steps NOT executed. "
+                      f"VM left in current state for inspection. SSH: {vm.ip}")
+
         status = "PASS" if passed else "FAIL"
         print(f"[mOSdat]   Result: {status}")
         if not passed:
@@ -241,6 +281,14 @@ def main() -> int:
                       help="Save screenshots on failure to results dir")
     fn_p.add_argument("--screenshots", type=Path, metavar="DIR",
                       help="Save all step screenshots to this directory")
+    fn_p.add_argument("--popup-sweep", action="store_true", dest="popup_sweep",
+                      help="B3: sweep modal popups/dialogs before each localize step")
+    fn_p.add_argument("--from-step", type=int, default=1, dest="from_step", metavar="N",
+                      help="B4: start from step N (1-indexed, default: 1)")
+    fn_p.add_argument("--until-step", type=int, default=None, dest="until_step", metavar="N",
+                      help="B4: stop after step N (inclusive, default: last step)")
+    fn_p.add_argument("--skip-health-probe", action="store_true", dest="skip_health_probe",
+                      help="B7: skip VM health probe before scenario start")
 
     # mosdat validate
     val_p = sub.add_parser("validate", help="Validate config file")
