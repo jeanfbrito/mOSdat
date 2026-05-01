@@ -15,67 +15,53 @@ name: "Rocket.Chat smoke test (Linux)"
 steps:
   # ── Pre-test cleanup: clean-slate Rocket.Chat, dismiss stale dialogs ────
   - shell: |
-      {
-        set -x
-        # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
-        # children. Loop until pgrep returns nothing or we've waited 8s.
-        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
-        pkill -x update-manager 2>/dev/null || true
-        pkill -x update-notifier 2>/dev/null || true
-        for i in 1 2 3 4 5 6 7 8; do
-          sleep 1
-          pgrep -x rocketchat-desktop.bin >/dev/null || break
-          pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
-        done
-        pgrep -ax rocketchat-desktop.bin || echo "rc:fully-dead"
-        # Stage 2: nuke keyring daemon FIRST so it can't write back stored tokens
-        # while we delete files. RC stores login tokens in libsecret via keytar;
-        # a userData wipe alone leaves the session intact. Daemon will respawn
-        # empty on next desktop login or libsecret access.
-        pkill -9 gnome-keyring-d 2>/dev/null || true
+      # IMPORTANT: every pkill/pgrep below uses `-x` (exact process name).
+      # Do NOT use `-f` (cmdline regex) — the bash script body contains the
+      # literal strings "rocketchat-desktop", "update-manager", etc., so
+      # `pkill -f <those>` matches its own /proc/<pid>/cmdline and SIGKILLs
+      # the script after one command. See git log: 780481f, 3d705e4.
+      #
+      # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
+      # children. Loop until pgrep returns nothing or we've waited 8s.
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      pkill -x update-manager 2>/dev/null || true
+      pkill -x update-notifier 2>/dev/null || true
+      for i in 1 2 3 4 5 6 7 8; do
         sleep 1
-        rm -f "$HOME"/.local/share/keyrings/*.keyring
-        rm -rf "$HOME"/.cache/keyring-* 2>/dev/null || true
-        # Stage 3: nuke Electron userData — release, dev build, Electron suffix.
-        rm -rf "$HOME/.config/Rocket.Chat"
-        ls -d "$HOME/.config/Rocket.Chat" 2>/dev/null && echo "WARN: config/Rocket.Chat survived rm" || echo "config/Rocket.Chat: gone"
-        rm -rf "$HOME/.config/Rocket.Chat (development)"
-        ls -d "$HOME/.config/Rocket.Chat (development)" 2>/dev/null && echo "WARN: config/Rocket.Chat(dev) survived rm" || echo "config/Rocket.Chat(dev): gone"
-        rm -rf "$HOME/.config/Rocket.Chat Electron"
-        ls -d "$HOME/.config/Rocket.Chat Electron" 2>/dev/null && echo "WARN: config/Rocket.Chat Electron survived rm" || echo "config/Rocket.Chat Electron: gone"
-        # Snap confines its own userData under ~/snap/rocketchat-desktop/<rev>/.config/;
-        # GNOME's launcher prefers the snap over the deb when both installed.
-        for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
-          [ -e "$d" ] && rm -rf "$d" && echo "snap-removed: $d"
-        done
-        # Stage 4: Chromium cache + IndexedDB + alt-share-path caches (Electron
-        # writes some data here, not just .config/).
-        rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
-        ls -d "$HOME/.cache/Rocket.Chat" 2>/dev/null && echo "WARN: cache/Rocket.Chat survived rm" || echo "cache/Rocket.Chat: gone"
-        rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
-        rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
-        rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
-        ls -d "$HOME/.local/share/Rocket.Chat" 2>/dev/null && echo "WARN: local/share/Rocket.Chat survived rm" || echo "local/share/Rocket.Chat: gone"
-        rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
-        # Stage 5: broad find for any survivors anywhere in HOME
-        echo "=== find: all Rocket*Chat* in HOME ==="
-        find "$HOME" -iname "Rocket*Chat*" 2>/dev/null
-        echo "=== end find ==="
-        # Stage 6: keyring state after our pkill
-        echo "=== gnome-keyring after pkill ==="
-        pgrep -af gnome-keyring 2>/dev/null || echo "gnome-keyring: not running"
-        echo "=== end keyring ==="
-        # Stage 5: confirm clean. Fail loudly if anything survived so the test
-        # halts here instead of running on a half-stale session.
-        remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
-        if [ -n "$remaining" ]; then
-          echo "cleanup:FAILED — $remaining survived"
-          exit 1
-        fi
-      } > /tmp/mosdat-cleanup-trace.log 2>&1
-      echo "=== cleanup trace ==="
-      tail -100 /tmp/mosdat-cleanup-trace.log
-      echo "=== end trace ==="
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      # Stage 2: nuke keyring daemon FIRST so it can't write back stored tokens
+      # while we delete files. RC stores login tokens in libsecret via keytar;
+      # a userData wipe alone leaves the session intact. Daemon will respawn
+      # empty on next desktop login or libsecret access.
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      rm -f "$HOME"/.local/share/keyrings/*.keyring
+      rm -rf "$HOME"/.cache/keyring-* 2>/dev/null || true
+      # Stage 3: nuke Electron userData — release, dev build, Electron suffix.
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.config/Rocket.Chat Electron"
+      # Snap confines its own userData under ~/snap/rocketchat-desktop/<rev>/.config/;
+      # GNOME's launcher prefers the snap over the deb when both installed.
+      for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
+        [ -e "$d" ] && rm -rf "$d"
+      done
+      # Stage 4: Chromium cache + IndexedDB + alt-share-path caches (Electron
+      # writes some data here, not just .config/).
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
+      # Stage 5: confirm clean. Fail loudly if anything survived so the test
+      # halts here instead of running on a half-stale session.
+      remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
+      if [ -n "$remaining" ]; then
+        echo "cleanup:FAILED — $remaining survived"
+        exit 1
+      fi
       echo cleanup:ok
 
   # Reset desktop to a known state — Escape collapses any leftover overview
