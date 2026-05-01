@@ -40,6 +40,7 @@ class FunctionalStep:
     localize_consistent: bool = False      # C5: if True, use 3-sample coord cluster for localize
     launch_window: Optional[str] = None   # B6: window name hint for launch verification (derived from launch basename if omitted)
     launch_timeout: Optional[int] = None  # B6: polling budget for launch verification (defaults to step.wait)
+    on_failure_agent: Optional[dict] = None  # C1: agent fallback on retry exhaustion
 
 
 class StepFailed(Exception):
@@ -460,6 +461,29 @@ class FunctionalRunner:
                     duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
                     self._emit("step_end", step_num=step_num, status="failed",
                                attempts=attempt, duration_ms=duration_ms)
+                    # C1: agent fallback on verify exhaustion
+                    if step.on_failure_agent:
+                        self.log(f"  Step {step_num}: handing off to agent fallback")
+                        from ..vlm.agent import AgentLoop
+                        agent = AgentLoop(
+                            vlm=self.vlm,
+                            screenshotter=self.screenshotter,
+                            injector=self.injector,
+                            log_fn=self.log,
+                            emit_event=self._emit,
+                        )
+                        result = agent.run(
+                            goal=step.on_failure_agent["goal"],
+                            budget_turns=step.on_failure_agent.get("budget_turns", 10),
+                            success_check=step.on_failure_agent.get("success_check"),
+                            step_num=step_num,
+                        )
+                        if result.success:
+                            self.log(f"  Step {step_num}: agent fallback succeeded after {result.turns_used} turns")
+                            self._emit("agent_fallback", step_num=step_num, success=True, turns=result.turns_used)
+                            return  # Step recovered
+                        self._emit("agent_fallback", step_num=step_num, success=False,
+                                   turns=result.turns_used, reason=result.reason)
                     raise StepFailed(
                         f"Step {step_num}: '{step.verify}' was never true "
                         f"after {step.retries} attempts"
@@ -480,6 +504,29 @@ class FunctionalRunner:
                     duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
                     self._emit("step_end", step_num=step_num, status="failed",
                                attempts=attempt, duration_ms=duration_ms)
+                    # C1: agent fallback (raised after retry loop, before StepFailed)
+                    if step.on_failure_agent:
+                        self.log(f"  Step {step_num}: handing off to agent fallback")
+                        from ..vlm.agent import AgentLoop
+                        agent = AgentLoop(
+                            vlm=self.vlm,
+                            screenshotter=self.screenshotter,
+                            injector=self.injector,
+                            log_fn=self.log,
+                            emit_event=self._emit,
+                        )
+                        result = agent.run(
+                            goal=step.on_failure_agent["goal"],
+                            budget_turns=step.on_failure_agent.get("budget_turns", 10),
+                            success_check=step.on_failure_agent.get("success_check"),
+                            step_num=step_num,
+                        )
+                        if result.success:
+                            self.log(f"  Step {step_num}: agent fallback succeeded after {result.turns_used} turns")
+                            self._emit("agent_fallback", step_num=step_num, success=True, turns=result.turns_used)
+                            return  # Step recovered
+                        self._emit("agent_fallback", step_num=step_num, success=False,
+                                   turns=result.turns_used, reason=result.reason)
                     raise StepFailed(f"Step {step_num}: {e}") from e
 
     def _check_state(
@@ -658,6 +705,7 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             localize_consistent=s.localize_consistent,
             launch_window=s.launch_window,
             launch_timeout=s.launch_timeout,
+            on_failure_agent=_resolve_agent_vars(s.on_failure_agent, vars),
         ))
     return resolved
 
@@ -668,6 +716,35 @@ def _sub(text: Optional[str], vars: dict) -> Optional[str]:
     for k, v in vars.items():
         text = text.replace(f"{{{k}}}", v)
     return text
+
+
+def _resolve_agent_vars(agent: Optional[dict], vars: dict) -> Optional[dict]:
+    """C1: Substitute {key} placeholders in on_failure_agent dict string values."""
+    if not agent:
+        return agent
+    result = dict(agent)
+    for field_name in ("goal", "success_check"):
+        if isinstance(result.get(field_name), str):
+            result[field_name] = _sub(result[field_name], vars)
+    return result
+
+
+def _parse_on_failure_agent(raw: Optional[dict]) -> Optional[dict]:
+    """C1: Validate and normalize an on_failure_agent dict from YAML.
+
+    Requires 'goal' (str). Applies defaults: budget_turns=10, success_check=None.
+    Returns None if raw is None or falsy.
+    Raises ValueError if goal is missing.
+    """
+    if not raw:
+        return None
+    if "goal" not in raw or not isinstance(raw["goal"], str):
+        raise ValueError("on_failure_agent requires a 'goal' string field")
+    return {
+        "goal": raw["goal"],
+        "budget_turns": int(raw.get("budget_turns", 10)),
+        "success_check": raw.get("success_check"),
+    }
 
 
 def load_test_yaml(path: Path) -> tuple[str, list[FunctionalStep], dict]:
@@ -714,4 +791,5 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         localize_consistent=bool(raw.get("localize_consistent", False)),
         launch_window=raw.get("launch_window"),
         launch_timeout=int(raw["launch_timeout"]) if "launch_timeout" in raw else None,
+        on_failure_agent=_parse_on_failure_agent(raw.get("on_failure_agent")),
     )
