@@ -15,29 +15,49 @@ name: "Rocket.Chat smoke test (Linux)"
 steps:
   # ── Pre-test cleanup: clean-slate Rocket.Chat, dismiss stale dialogs ────
   - shell: |
+      # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
+      # children. Loop until pgrep returns nothing or we've waited 8s.
       pkill -9 -f rocketchat-desktop 2>/dev/null || true
       pkill -9 -f Rocket.Chat 2>/dev/null || true
-      # Dismiss Ubuntu's update-notifier / update-manager popup which
-      # otherwise floats on top of Rocket.Chat and steals clicks.
       pkill -f update-manager 2>/dev/null || true
       pkill -f update-notifier 2>/dev/null || true
-      sleep 2
-      # Wipe Electron userData so the "add server" flow appears on launch.
-      # Cover release, dev build, and older Electron-suffixed names.
+      for i in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        pgrep -f rocketchat-desktop >/dev/null || break
+        pkill -9 -f rocketchat-desktop 2>/dev/null || true
+      done
+      pgrep -af rocketchat-desktop || echo "rc:fully-dead"
+      # Stage 2: nuke keyring daemon FIRST so it can't write back stored tokens
+      # while we delete files. RC stores login tokens in libsecret via keytar;
+      # a userData wipe alone leaves the session intact. Daemon will respawn
+      # empty on next desktop login or libsecret access.
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      rm -f "$HOME"/.local/share/keyrings/*.keyring
+      rm -rf "$HOME"/.cache/keyring-* 2>/dev/null || true
+      # Stage 3: nuke Electron userData — release, dev build, Electron suffix.
       rm -rf "$HOME/.config/Rocket.Chat"
       rm -rf "$HOME/.config/Rocket.Chat (development)"
       rm -rf "$HOME/.config/Rocket.Chat Electron"
       # Snap confines its own userData under ~/snap/rocketchat-desktop/<rev>/.config/;
-      # GNOME's launcher prefers the snap over the deb when both are installed,
-      # so its session survives wiping the deb's dir alone.
+      # GNOME's launcher prefers the snap over the deb when both installed.
       for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
         [ -e "$d" ] && rm -rf "$d"
       done
-      # RC stores its login token in libsecret (GNOME keyring) via keytar,
-      # so a plain userData wipe leaves the session intact — the app auto-
-      # resumes the previous workspace on next launch. Nuke the keyring
-      # files; gnome-keyring-daemon recreates an empty one on first use.
-      rm -f "$HOME"/.local/share/keyrings/*.keyring
+      # Stage 4: Chromium cache + IndexedDB + alt-share-path caches (Electron
+      # writes some data here, not just .config/).
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
+      # Stage 5: confirm clean. Fail loudly if anything survived so the test
+      # halts here instead of running on a half-stale session.
+      remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
+      if [ -n "$remaining" ]; then
+        echo "cleanup:FAILED — $remaining survived"
+        exit 1
+      fi
       echo cleanup:ok
 
   # Reset desktop to a known state — Escape collapses any leftover overview
@@ -52,9 +72,12 @@ steps:
   # and doesn't die with "Missing X server" as it would from a plain SSH
   # shell.
   - launch: "{app_path} --no-sandbox"
-    wait: 10
+    wait: 30
     # F4: explicit window name so VLM question uses natural language ("Rocket.Chat")
     # instead of the raw binary basename ("rocketchat-desktop" with hyphens).
+    # wait=30: Electron + RC takes 5-15s post-spawn to paint the splash, then
+    # several more seconds for the server-URL form. First VLM verify call must
+    # land AFTER UI draws.
     launch_window: "Rocket.Chat"
     # Strict verify: RC must be on the first-launch "Enter your server URL" screen.
     # This catches stale session state that cleanup missed — otherwise the
@@ -84,15 +107,20 @@ steps:
 
   - localize: "the upper input field labeled 'Email or username' (above the Password field)"
     then_type: "{test_user}"
-    # Catch VLM mis-click that lands on Password instead of Email: the
-    # username field must show the typed text AND the password field must
-    # still be empty/hidden. On fail the step re-localizes and retries.
+    # Note: A4 precheck_click NOT used here — verify_input below already
+    # catches mis-click (typed text must appear in the username field, and
+    # password field must stay empty). A4's narrow crop also tends to
+    # false-reject valid clicks because the field "Email or username"
+    # label sits OUTSIDE the input box.
     verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
     retries: 3
 
-  - localize: "the Password input field in the login form (the field whose characters render as dots)"
+  - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
     then_type: "{test_password}"
     then_key: "enter"
+    # A4: critical for password field — Forgot-password link sits directly
+    # below it and previous runs mis-targeted there, sending creds nowhere.
+    precheck_click: true
     verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
     verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
     verify_timeout: 30
