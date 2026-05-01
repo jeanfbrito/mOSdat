@@ -30,6 +30,8 @@ class FunctionalStep:
     shell: Optional[str] = None            # arbitrary shell/PowerShell command to run on the VM (one-shot)
     if_visible: Optional[str] = None      # VLM visibility check; if True → execute `then_steps`, if False → skip silently
     then_steps: Optional[list] = None     # steps to execute when if_visible is True (list of FunctionalStep)
+    verify_consistent: bool = False        # A2: if True, use 3-sample quorum vote for verify calls
+    precheck_click: bool = False           # A4: if True, use localize_verified (pre-click crop verify)
 
 
 class StepFailed(Exception):
@@ -60,7 +62,46 @@ class FunctionalRunner:
         img.save(path)
         self.log(f"  Screenshot: {path}")
 
-    def run_step(self, step: FunctionalStep, step_num: int) -> None:
+    def _save_click_overlay(self, img: Image.Image, x: int, y: int, step_num) -> None:
+        """A6: Save screenshot with red dot marking the click coordinate."""
+        if not self.screenshot_dir:
+            return
+        from PIL import ImageDraw
+        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%H%M%S")
+        overlay = img.copy()
+        draw = ImageDraw.Draw(overlay)
+        draw.ellipse([(x - 15, y - 15), (x + 15, y + 15)], outline="red", width=4)
+        draw.ellipse([(x - 4, y - 4), (x + 4, y + 4)], fill="red")
+        path = self.screenshot_dir / f"{ts}_step{step_num}_click.png"
+        overlay.save(path)
+        self.log(f"  Click overlay: {path}")
+
+    def _verify_call(
+        self,
+        screenshot: Image.Image,
+        question: str,
+        step: "FunctionalStep",
+        step_num,
+        label: str = "verify",
+    ) -> bool:
+        """A2: Route verify through quorum if step.verify_consistent, else plain verify."""
+        if step.verify_consistent:
+            result, responses = self.vlm.verify_consistent(screenshot, question)
+            if not result and self.screenshot_dir:
+                # Log the split responses for forensics
+                ts = datetime.now().strftime("%H%M%S")
+                split_path = self.screenshot_dir / f"{ts}_step{step_num}_{label}_split.txt"
+                self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+                split_path.write_text(
+                    f"question: {question}\n\n"
+                    + "\n\n---\n\n".join(f"sample {i+1}:\n{r}" for i, r in enumerate(responses))
+                )
+                self.log(f"  Verify split logged: {split_path}")
+            return result
+        return self.vlm.verify(screenshot, question)
+
+    def run_step(self, step: FunctionalStep, step_num) -> None:
         """Execute a single test step with retries.
 
         Raises StepFailed if all retries are exhausted.
@@ -99,7 +140,8 @@ class FunctionalRunner:
             if step.then_key:
                 self.log(f"  Step {step_num}: key '{step.then_key}'")
                 self.injector.key(step.then_key)
-                time.sleep(0.3)
+                # A1: stability wait after then_key (replaces fixed 0.3s sleep)
+                self.screenshotter.wait_for_stable(max_seconds=3.0)
             if step.wait:
                 self.log(f"    → waiting {step.wait}s")
                 time.sleep(step.wait)
@@ -139,16 +181,25 @@ class FunctionalRunner:
                 # but the page transition was slower than verify_timeout.
                 # Re-executing blindly double-types and breaks the field.
                 if attempt > 1 and step.verify:
-                    if self._wait_for_state(step.verify, 3, step_num, must_be_false=step.verify_not):
+                    screenshot_chk, _ = self.screenshotter.capture()
+                    if self._check_state(screenshot_chk, step.verify, 3, step_num, must_be_false=step.verify_not, step=step):
                         self.log(f"    ✓ already verified (state settled between attempts)")
                         return
 
                 if step.localize:
                     self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
                     screenshot, screen_size = self.screenshotter.capture()
-                    x, y = self.vlm.localize(screenshot, step.localize, screen_size)
+                    # A6: save the screenshot used for localize
+                    self._save_screenshot(screenshot, f"step{step_num}_localize")
+                    # A4: opt-in pre-click crop verify
+                    if step.precheck_click:
+                        x, y = self.vlm.localize_verified(screenshot, step.localize, screen_size)
+                    else:
+                        x, y = self.vlm.localize(screenshot, step.localize, screen_size)
                     self.log(f"    → click ({x}, {y})")
                     self.injector.click(x, y)
+                    # A6: save click overlay
+                    self._save_click_overlay(screenshot, x, y, step_num)
                     time.sleep(0.4)
 
                     if step.then_key_pre:
@@ -185,7 +236,7 @@ class FunctionalRunner:
                     # different window / Windows Search / taskbar.
                     if step.verify_input:
                         self.log(f"    → verify input '{step.verify_input[:60]}'")
-                        if not self._wait_for_state(step.verify_input, min(step.verify_timeout, 10), step_num):
+                        if not self._wait_for_state(step.verify_input, min(step.verify_timeout, 10), step_num, step=step):
                             screenshot, _ = self.screenshotter.capture()
                             self._save_screenshot(screenshot, f"step{step_num}_input_fail_attempt{attempt}")
                             if attempt < step.retries:
@@ -199,14 +250,18 @@ class FunctionalRunner:
                     if step.then_key:
                         self.log(f"    → key '{step.then_key}'")
                         self.injector.key(step.then_key)
-                        time.sleep(0.3)
+                        # A1: stability wait after then_key (was 0.3s fixed sleep)
+                        self.screenshotter.wait_for_stable(max_seconds=3.0)
 
                 if step.verify:
                     if not step.localize:
                         self.log(f"  Step {step_num}: verify '{step.verify[:60]}'{retry_label}")
-                    verified = self._wait_for_state(step.verify, step.verify_timeout, step_num, must_be_false=step.verify_not)
+                    verified = self._wait_for_state(step.verify, step.verify_timeout, step_num, must_be_false=step.verify_not, step=step)
                     if verified:
                         self.log(f"    ✓ verified: {step.verify[:60]}")
+                        # A6: save verify screenshot
+                        screenshot_v, _ = self.screenshotter.capture()
+                        self._save_screenshot(screenshot_v, f"step{step_num}_verified")
                         return
                     screenshot, _ = self.screenshotter.capture()
                     self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
@@ -228,20 +283,61 @@ class FunctionalRunner:
                 else:
                     raise StepFailed(f"Step {step_num}: {e}") from e
 
-    def _wait_for_state(self, question: str, timeout: int, step_num: int, must_be_false: Optional[str] = None) -> bool:
+    def _check_state(
+        self,
+        screenshot: Image.Image,
+        question: str,
+        timeout: int,
+        step_num,
+        must_be_false: Optional[str] = None,
+        step: Optional["FunctionalStep"] = None,
+    ) -> bool:
+        """Single-shot state check (no polling). Used for retry pre-checks."""
+        try:
+            result = self._verify_call(screenshot, question, step, step_num) if step else self.vlm.verify(screenshot, question)
+            if not result:
+                return False
+            if must_be_false:
+                screenshot2, _ = self.screenshotter.capture()
+                if self.vlm.verify(screenshot2, must_be_false):
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _wait_for_state(
+        self,
+        question: str,
+        timeout: int,
+        step_num,
+        must_be_false: Optional[str] = None,
+        step: Optional["FunctionalStep"] = None,
+    ) -> bool:
         """Poll until VLM confirms the expected state or timeout expires.
 
         Passes when `question` is True AND (if given) `must_be_false` is False.
         The negative check catches error banners that a hallucinating VLM
         might otherwise let through on the positive question.
+
+        A1: calls wait_for_stable() before each retry within the polling loop
+        (not before the first poll — state should still be moving from the
+        action just taken).
         """
         deadline = time.time() + timeout
         interval = min(2, timeout // 3) or 1
+        first_poll = True
         while time.time() < deadline:
             time.sleep(interval)
+            # A1: stability gate before each retry (skip the very first poll)
+            if not first_poll:
+                self.screenshotter.wait_for_stable(max_seconds=2.0)
+            first_poll = False
             try:
                 screenshot, _ = self.screenshotter.capture()
-                if not self.vlm.verify(screenshot, question):
+                # A6: save verify attempt screenshot
+                self._save_screenshot(screenshot, f"step{step_num}_verify_poll")
+                result = self._verify_call(screenshot, question, step, step_num) if step else self.vlm.verify(screenshot, question)
+                if not result:
                     continue
                 if must_be_false and self.vlm.verify(screenshot, must_be_false):
                     continue
@@ -259,7 +355,12 @@ class FunctionalRunner:
         """Run a sequence of steps.
 
         Returns (passed, summary_log).
+
+        Raises ValueError if screenshot_dir was not provided (A6: mandatory for
+        forensic auditing in production runs).
         """
+        if self.screenshot_dir is None:
+            raise ValueError("screenshot_dir is required for forensic auditing")
         vars = vars or {}
         log_lines: list[str] = []
 
@@ -309,6 +410,8 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             shell=_sub(s.shell, vars) if s.shell else None,
             if_visible=_sub(s.if_visible, vars) if s.if_visible else None,
             then_steps=_resolve_vars(s.then_steps, vars) if s.then_steps else None,
+            verify_consistent=s.verify_consistent,
+            precheck_click=s.precheck_click,
         ))
     return resolved
 
@@ -360,4 +463,6 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         shell=raw.get("shell"),
         if_visible=raw.get("if_visible"),
         then_steps=then_steps,
+        verify_consistent=bool(raw.get("verify_consistent", False)),
+        precheck_click=bool(raw.get("precheck_click", False)),
     )
