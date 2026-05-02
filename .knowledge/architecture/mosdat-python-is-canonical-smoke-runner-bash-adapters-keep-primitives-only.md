@@ -11,8 +11,8 @@ kind: decision
 scope: project-shared
 category: architecture
 confidence: high
-accessed: 24
-last_accessed: "2026-05-01"
+accessed: 26
+last_accessed: "2026-05-02"
 ---
 
 ## Decision (2026-04-30)
