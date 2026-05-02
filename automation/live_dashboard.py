@@ -37,191 +37,370 @@ def _hb(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inline HTML
+# Inline HTML — chat-timeline UX
 # ---------------------------------------------------------------------------
 _HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mOSdat live</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #0f1117; color: #e0e0e0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f3f4f6; color: #111827; }
+
+  /* ── Sticky header ── */
   #topbar {
-    display: flex; align-items: center; gap: 16px;
-    background: #1a1d2e; padding: 10px 16px; border-bottom: 1px solid #2d3045;
     position: sticky; top: 0; z-index: 100;
+    background: #1e293b; color: #f1f5f9;
+    padding: 10px 16px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+    border-bottom: 2px solid #0f172a;
   }
-  #topbar h1 { font-size: 1rem; font-weight: 600; color: #7f9cf5; }
-  .badge {
-    font-size: 0.75rem; padding: 2px 8px; border-radius: 99px; font-weight: 600;
+  #topbar-title { font-size: 0.95rem; font-weight: 700; color: #7dd3fc; white-space: nowrap; }
+  #topbar-vm    { font-size: 0.8rem; color: #94a3b8; white-space: nowrap; }
+  #topbar-run   { font-size: 0.75rem; color: #64748b; white-space: nowrap; }
+  #topbar-elapsed { font-size: 0.75rem; color: #94a3b8; white-space: nowrap; }
+  #topbar-steps { font-size: 0.75rem; color: #cbd5e1; white-space: nowrap; }
+  .tb-badge {
+    font-size: 0.72rem; padding: 2px 8px; border-radius: 99px; font-weight: 600; white-space: nowrap;
   }
-  .badge-inflight { background: #2d3045; color: #93c5fd; }
-  .badge-pass { background: #14532d; color: #86efac; }
-  .badge-fail { background: #7f1d1d; color: #fca5a5; }
-  #stale-indicator {
-    margin-left: auto; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px;
-    background: #14532d; color: #86efac;
+  .tb-pass { background: #166534; color: #bbf7d0; }
+  .tb-fail { background: #7f1d1d; color: #fecaca; }
+  #hb-pill {
+    margin-left: auto; font-size: 0.7rem; padding: 2px 9px; border-radius: 99px;
+    font-weight: 600; white-space: nowrap;
+    background: #166534; color: #bbf7d0;
+    transition: background 0.4s, color 0.4s;
   }
-  #stale-indicator.stale { background: #7f1d1d; color: #fca5a5; }
-  #filter-bar { padding: 8px 16px; background: #12151f; border-bottom: 1px solid #2d3045; }
-  #filter-bar select { background: #1a1d2e; color: #e0e0e0; border: 1px solid #2d3045; padding: 4px 8px; border-radius: 4px; }
-  #lanes { padding: 12px 16px; display: flex; flex-direction: column; gap: 16px; }
-  .lane {
-    background: #1a1d2e; border: 1px solid #2d3045; border-radius: 8px; overflow: hidden;
-  }
-  .lane-header {
+  #hb-pill.yellow { background: #854d0e; color: #fef08a; }
+  #hb-pill.red    { background: #7f1d1d; color: #fecaca; }
+
+  /* ── Filter bar ── */
+  #filter-bar {
+    padding: 7px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
     display: flex; align-items: center; gap: 8px;
-    padding: 8px 14px; background: #12151f; font-size: 0.85rem; font-weight: 600;
   }
-  .lane-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
-  .timeline { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
-  .chip {
-    font-size: 0.7rem; padding: 3px 8px; border-radius: 4px; cursor: default;
-    white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+  #filter-bar label { font-size: 0.78rem; color: #475569; }
+  #filter-vm {
+    font-size: 0.78rem; padding: 3px 8px; border-radius: 4px;
+    border: 1px solid #cbd5e1; background: #fff; color: #1e293b;
   }
-  .chip-shell    { background: #1e3a5f; color: #93c5fd; }
-  .chip-key      { background: #1c3a2c; color: #86efac; }
-  .chip-type     { background: #2d2a1e; color: #fbbf24; }
-  .chip-localize { background: #2a1f3d; color: #c4b5fd; }
-  .chip-launch   { background: #1a2e1a; color: #6ee7b7; }
-  .chip-verify   { background: #1e2a3a; color: #60a5fa; }
-  .chip-ok       { border-left: 3px solid #22c55e; }
-  .chip-fail     { border-left: 3px solid #ef4444; background: #3b1818; color: #fca5a5; }
-  .chip-running  { border-left: 3px solid #facc15; animation: pulse 1s infinite; }
-  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.5 } }
-  .thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
-  .thumb { cursor: pointer; border: 1px solid #2d3045; border-radius: 4px; overflow: hidden; }
-  .thumb img { display: block; height: 72px; width: auto; }
+
+  /* ── Chat column ── */
+  #chat-wrap {
+    max-width: 960px; margin: 0 auto; padding: 16px 12px 80px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+
+  /* ── Bubble ── */
+  .bubble {
+    background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 9px 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    transition: background 0.3s;
+  }
+  .bubble.ok   { background: #f0fdf4; border-color: #bbf7d0; }
+  .bubble.fail { background: #fff1f2; border-color: #fecaca; }
+
+  /* ── Bubble header row ── */
+  .bubble-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 4px;
+  }
+  .bh-ts   { font-size: 0.7rem; color: #94a3b8; font-variant-numeric: tabular-nums; }
+  .bh-step {
+    font-size: 0.68rem; padding: 1px 7px; border-radius: 99px;
+    background: #e0e7ff; color: #3730a3; font-weight: 600;
+  }
+  .bh-icon { font-size: 0.9rem; }
+  .bh-kind { font-size: 0.8rem; font-weight: 600; color: #334155; }
+  .bh-status-ok   { font-size: 0.75rem; color: #16a34a; font-weight: 600; }
+  .bh-status-fail { font-size: 0.75rem; color: #dc2626; font-weight: 600; }
+  .bh-running { font-size: 0.75rem; color: #d97706; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
+
+  /* ── Bubble body ── */
+  .bubble-body {
+    font-size: 0.78rem; color: #475569; margin-top: 2px;
+    word-break: break-word; white-space: pre-wrap;
+  }
+
+  /* ── Screenshot thumbnail ── */
+  .bubble-thumb {
+    margin-top: 7px; display: inline-block; cursor: pointer;
+    border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;
+    line-height: 0;
+  }
+  .bubble-thumb img { display: block; max-width: 200px; max-height: 120px; object-fit: cover; }
+
+  /* ── Resume-scroll button ── */
+  #resume-btn {
+    display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: #1e293b; color: #f1f5f9; border: none; border-radius: 99px;
+    padding: 7px 20px; font-size: 0.8rem; cursor: pointer; z-index: 200;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  }
+  #resume-btn.visible { display: block; }
+
+  /* ── Lightbox ── */
   #lightbox {
-    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.88);
     align-items: center; justify-content: center; z-index: 999;
   }
   #lightbox.open { display: flex; }
-  #lightbox img { max-width: 95vw; max-height: 90vh; border-radius: 6px; }
-  .empty-msg { color: #4b5563; font-size: 0.8rem; font-style: italic; }
+  #lightbox img  { max-width: 95vw; max-height: 92vh; border-radius: 8px; }
+
+  /* ── Mobile ── */
+  @media (max-width: 640px) {
+    #chat-wrap { padding: 10px 6px 80px; }
+    .bubble { padding: 8px 10px; }
+    .bubble-thumb img { max-width: 160px; max-height: 96px; }
+  }
 </style>
 </head>
 <body>
+
 <div id="topbar">
-  <h1>mOSdat live</h1>
-  <span class="badge badge-inflight" id="cnt-inflight">0 in-flight</span>
-  <span class="badge badge-pass" id="cnt-pass">0 pass</span>
-  <span class="badge badge-fail" id="cnt-fail">0 fail</span>
-  <span id="stale-indicator">live</span>
+  <span id="topbar-title">mOSdat live</span>
+  <span id="topbar-vm"></span>
+  <span id="topbar-run"></span>
+  <span id="topbar-elapsed"></span>
+  <span id="topbar-steps"></span>
+  <span class="tb-badge tb-pass" id="cnt-pass">0 pass</span>
+  <span class="tb-badge tb-fail" id="cnt-fail">0 fail</span>
+  <span id="hb-pill">live</span>
 </div>
+
 <div id="filter-bar">
+  <label for="filter-vm">VM:</label>
   <select id="filter-vm" onchange="applyFilter()">
-    <option value="">All VMs</option>
+    <option value="">All</option>
   </select>
 </div>
-<div id="lanes"></div>
+
+<div id="chat-wrap"></div>
+
+<button id="resume-btn" onclick="resumeScroll()">&#8595; Resume</button>
+
 <div id="lightbox" onclick="closeLightbox()">
   <img id="lb-img" src="" alt="">
 </div>
+
 <script>
-const state = {};        // key: "run/vm" => {steps, thumbs, inflight, pass, fail}
+// ── State ──────────────────────────────────────────────────────────────────
+// bubbles: array of {id, run, vm, ts, stepNum, kind, label, status, url}
+// stepMap: key "run/vm/stepNum" → bubble id (for step_end lookups)
+// vmMeta:  key "run/vm" → {latestVm, latestRun, runStart, maxStep, totalSteps, pass, fail}
+const bubbles = [];
+const stepMap = {};
+const vmMeta = {};
+let globalPass = 0, globalFail = 0;
 let lastEventTs = Date.now();
+let runStartTs = Date.now();
+let autoScroll = true;
+let nextId = 0;
 
-function laneKey(run, vm) { return run + '/' + vm; }
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
-function ensureLane(run, vm) {
-  const k = laneKey(run, vm);
-  if (!state[k]) {
-    state[k] = { run, vm, steps: [], thumbs: [], inflight: 0, pass: 0, fail: 0 };
-    renderLane(k);
-    updateFilter();
+function fmtTs(ms) {
+  const d = new Date(ms);
+  return d.getHours().toString().padStart(2,'0') + ':' +
+         d.getMinutes().toString().padStart(2,'0') + ':' +
+         d.getSeconds().toString().padStart(2,'0');
+}
+
+function elapsed(ms) {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return s + 's';
+  return Math.floor(s/60) + 'm ' + (s%60) + 's';
+}
+
+const KIND_ICON = {
+  launch:          '▶',
+  click:           '🖱',
+  type:            '⌨',
+  key:             '🔑',
+  shell:           '🐚',
+  verify:          '👁',
+  verify_localize: '👁',
+  localize:        '🔍',
+  screenshot:      '📷',
+  step_end_ok:     '✅',
+  step_end_fail:   '❌',
+  wait:            '⏱',
+};
+
+function kindIcon(kind) { return KIND_ICON[kind] || '▪'; }
+
+function metaKey(run, vm) { return run + '/' + vm; }
+
+function ensureMeta(run, vm) {
+  const k = metaKey(run, vm);
+  if (!vmMeta[k]) {
+    vmMeta[k] = { run, vm, runStart: Date.now(), maxStep: 0, totalSteps: null, pass: 0, fail: 0 };
+    updateFilterDropdown(run, vm, k);
   }
   return k;
 }
 
-function chipClass(kind, status) {
-  const kindMap = { shell:'chip-shell', key:'chip-key', type:'chip-type',
-    localize:'chip-localize', launch:'chip-launch', verify:'chip-verify' };
-  const base = kindMap[kind] || 'chip-shell';
-  const statusMap = { ok:'chip-ok', fail:'chip-fail', running:'chip-running' };
-  return 'chip ' + base + ' ' + (statusMap[status] || '');
-}
+// ── Filter ─────────────────────────────────────────────────────────────────
+let activeFilter = '';
 
-function renderLane(k) {
-  const lanes = document.getElementById('lanes');
-  const filter = document.getElementById('filter-vm').value;
-  const d = state[k];
-  if (filter && laneKey(d.run, d.vm) !== filter && d.vm !== filter) return;
-
-  let el = document.getElementById('lane-' + k.replace(/\//g, '-'));
-  if (!el) {
-    el = document.createElement('div');
-    el.className = 'lane';
-    el.id = 'lane-' + k.replace(/\//g, '-');
-    lanes.appendChild(el);
+function updateFilterDropdown(run, vm, k) {
+  const sel = document.getElementById('filter-vm');
+  const existing = new Set([...sel.options].map(o => o.value));
+  if (!existing.has(k)) {
+    const opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = vm + ' (' + run + ')';
+    sel.appendChild(opt);
   }
-  const stepsHtml = d.steps.length
-    ? d.steps.map(s =>
-        `<span class="${chipClass(s.kind, s.status)}" title="${esc(s.label || s.kind)}">${esc(s.label || s.kind)}</span>`
-      ).join('')
-    : '<span class="empty-msg">waiting for steps…</span>';
-
-  const thumbsHtml = d.thumbs.map(t =>
-    `<div class="thumb" onclick="openLightbox('${t}')"><img src="${t}" loading="lazy"></div>`
-  ).join('');
-
-  el.innerHTML = `
-    <div class="lane-header">
-      <span>${esc(d.vm)}</span>
-      <span style="color:#6b7280;font-size:0.75rem">${esc(d.run)}</span>
-      <span class="badge badge-pass" style="margin-left:auto">${d.pass}✓</span>
-      <span class="badge badge-fail">${d.fail}✗</span>
-    </div>
-    <div class="lane-body">
-      <div class="timeline">${stepsHtml}</div>
-      ${thumbsHtml ? '<div class="thumbs">' + thumbsHtml + '</div>' : ''}
-    </div>`;
-}
-
-function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function applyFilter() {
-  document.getElementById('lanes').innerHTML = '';
-  for (const k of Object.keys(state)) renderLane(k);
+  activeFilter = document.getElementById('filter-vm').value;
+  const wrap = document.getElementById('chat-wrap');
+  wrap.innerHTML = '';
+  for (const b of bubbles) {
+    if (passesFilter(b)) {
+      wrap.insertAdjacentHTML('beforeend', renderBubble(b));
+    }
+  }
+  if (autoScroll) scrollToBottom();
 }
 
-function updateFilter() {
-  const sel = document.getElementById('filter-vm');
-  const existing = new Set([...sel.options].map(o => o.value));
-  for (const k of Object.keys(state)) {
-    const d = state[k];
-    if (!existing.has(k)) {
-      const opt = document.createElement('option');
-      opt.value = k; opt.textContent = d.vm + ' (' + d.run + ')';
-      sel.appendChild(opt);
+function passesFilter(b) {
+  if (!activeFilter) return true;
+  return metaKey(b.run, b.vm) === activeFilter;
+}
+
+// ── Bubble rendering ───────────────────────────────────────────────────────
+function renderBubble(b) {
+  let headClass = 'bubble';
+  if (b.status === 'ok')   headClass += ' ok';
+  if (b.status === 'fail') headClass += ' fail';
+
+  let statusHtml = '';
+  if (b.status === 'running') {
+    statusHtml = `<span class="bh-running">⏳</span>`;
+  } else if (b.status === 'ok') {
+    statusHtml = `<span class="bh-status-ok">✓ ok</span>`;
+  } else if (b.status === 'fail') {
+    statusHtml = `<span class="bh-status-fail">✗ fail</span>`;
+  }
+
+  const stepBadge = b.stepNum != null
+    ? `<span class="bh-step">step ${esc(b.stepNum)}</span>` : '';
+
+  let bodyHtml = '';
+  if (b.body) {
+    bodyHtml = `<div class="bubble-body">${esc(b.body)}</div>`;
+  }
+  if (b.url) {
+    bodyHtml += `<div class="bubble-thumb" onclick="openLightbox('${esc(b.url)}')">` +
+                `<img src="${esc(b.url)}" loading="lazy" alt="screenshot"></div>`;
+  }
+
+  return `<div class="bubble" id="bubble-${b.id}" data-mk="${esc(metaKey(b.run, b.vm))}">` +
+    `<div class="bubble-head">` +
+    `<span class="bh-ts">${esc(fmtTs(b.ts))}</span>` +
+    stepBadge +
+    `<span class="bh-icon">${kindIcon(b.kind)}</span>` +
+    `<span class="bh-kind">${esc(b.kind)}</span>` +
+    statusHtml +
+    `</div>` +
+    bodyHtml +
+    `</div>`;
+}
+
+function appendBubble(b) {
+  bubbles.push(b);
+  if (!passesFilter(b)) return;
+  document.getElementById('chat-wrap').insertAdjacentHTML('beforeend', renderBubble(b));
+  if (autoScroll) scrollToBottom();
+}
+
+function updateBubbleDom(b) {
+  const el = document.getElementById('bubble-' + b.id);
+  if (!el) return;
+  // re-render only the bubble element in-place
+  const tmp = document.createElement('div');
+  tmp.innerHTML = renderBubble(b);
+  const newEl = tmp.firstChild;
+  el.replaceWith(newEl);
+}
+
+// ── Topbar refresh ─────────────────────────────────────────────────────────
+let elapsedTimer = null;
+
+function updateTopbar() {
+  document.getElementById('cnt-pass').textContent = globalPass + ' pass';
+  document.getElementById('cnt-fail').textContent = globalFail + ' fail';
+
+  // Use the most-recently-active VM meta for the header display
+  const metas = Object.values(vmMeta);
+  if (metas.length > 0) {
+    const m = metas[metas.length - 1];
+    document.getElementById('topbar-vm').textContent = m.vm;
+    document.getElementById('topbar-run').textContent = m.run;
+    const stepTxt = m.totalSteps
+      ? `step ${m.maxStep} / ${m.totalSteps}`
+      : (m.maxStep > 0 ? `step ${m.maxStep}` : '');
+    document.getElementById('topbar-steps').textContent = stepTxt;
+    if (!elapsedTimer) {
+      elapsedTimer = setInterval(function() {
+        document.getElementById('topbar-elapsed').textContent = elapsed(runStartTs);
+      }, 1000);
+      document.getElementById('topbar-elapsed').textContent = elapsed(runStartTs);
     }
   }
 }
 
-function updateTopbar() {
-  let inflight = 0, pass = 0, fail = 0;
-  for (const d of Object.values(state)) { inflight += d.inflight; pass += d.pass; fail += d.fail; }
-  document.getElementById('cnt-inflight').textContent = inflight + ' in-flight';
-  document.getElementById('cnt-pass').textContent = pass + ' pass';
-  document.getElementById('cnt-fail').textContent = fail + ' fail';
-}
-
+// ── Heartbeat staleness pill ───────────────────────────────────────────────
 function checkStale() {
-  const el = document.getElementById('stale-indicator');
+  const pill = document.getElementById('hb-pill');
   const age = (Date.now() - lastEventTs) / 1000;
   if (age > 5) {
-    el.className = 'stale';
-    el.textContent = 'stale ' + Math.round(age) + 's';
+    pill.className = 'red';
+    pill.textContent = 'stale ' + Math.round(age) + 's';
+  } else if (age > 2) {
+    pill.className = 'yellow';
+    pill.textContent = Math.round(age) + 's ago';
   } else {
-    el.className = '';
-    el.textContent = 'live';
+    pill.className = '';
+    pill.textContent = 'live';
   }
 }
 setInterval(checkStale, 1000);
 
+// ── Auto-scroll ────────────────────────────────────────────────────────────
+function scrollToBottom() {
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+}
+
+function resumeScroll() {
+  autoScroll = true;
+  document.getElementById('resume-btn').classList.remove('visible');
+  scrollToBottom();
+}
+
+window.addEventListener('scroll', function() {
+  const fromBottom = document.body.scrollHeight - window.innerHeight - window.scrollY;
+  if (fromBottom > 100) {
+    if (autoScroll) {
+      autoScroll = false;
+      document.getElementById('resume-btn').classList.add('visible');
+    }
+  } else {
+    autoScroll = true;
+    document.getElementById('resume-btn').classList.remove('visible');
+  }
+});
+
+// ── Lightbox ───────────────────────────────────────────────────────────────
 function openLightbox(src) {
   document.getElementById('lb-img').src = src;
   document.getElementById('lightbox').className = 'open';
@@ -230,7 +409,7 @@ function closeLightbox() {
   document.getElementById('lightbox').className = '';
 }
 
-// SSE connection
+// ── SSE event handler ──────────────────────────────────────────────────────
 const es = new EventSource('/stream');
 es.onmessage = function(e) {
   lastEventTs = Date.now();
@@ -239,27 +418,70 @@ es.onmessage = function(e) {
 
   const { run, vm, event } = msg;
   if (!run || !vm) return;
-  const k = ensureLane(run, vm);
-  const d = state[k];
+
+  const mk = ensureMeta(run, vm);
+  const meta = vmMeta[mk];
 
   if (event === 'step_start') {
-    d.inflight++;
-    d.steps.push({ kind: msg.kind || 'shell', label: msg.label || '', status: 'running', num: msg.step_num });
+    const stepNum = msg.step_num;
+    if (stepNum != null && stepNum > meta.maxStep) meta.maxStep = stepNum;
+    if (msg.total_steps != null) meta.totalSteps = msg.total_steps;
+
+    const id = nextId++;
+    const b = {
+      id, run, vm,
+      ts: Date.now(),
+      stepNum: stepNum,
+      kind: msg.kind || 'shell',
+      label: msg.label || '',
+      status: 'running',
+      body: msg.label || null,
+      url: null,
+    };
+    stepMap[mk + '/' + stepNum] = id;
+    appendBubble(b);
+
   } else if (event === 'step_end') {
-    d.inflight = Math.max(0, d.inflight - 1);
-    const step = d.steps.find(s => s.num === msg.step_num);
-    if (step) step.status = msg.status === 'ok' ? 'ok' : 'fail';
-    if (msg.status === 'ok') d.pass++; else d.fail++;
+    const stepNum = msg.step_num;
+    const ok = msg.status === 'ok';
+    if (ok) { meta.pass++; globalPass++; } else { meta.fail++; globalFail++; }
+
+    // update existing running bubble if present
+    const bid = stepMap[mk + '/' + stepNum];
+    if (bid != null) {
+      const b = bubbles.find(x => x.id === bid);
+      if (b) {
+        b.status = ok ? 'ok' : 'fail';
+        b.kind   = ok ? 'step_end_ok' : 'step_end_fail';
+        updateBubbleDom(b);
+      }
+    } else {
+      // No matching step_start — create a standalone bubble
+      const id = nextId++;
+      appendBubble({
+        id, run, vm, ts: Date.now(),
+        stepNum, kind: ok ? 'step_end_ok' : 'step_end_fail',
+        label: '', status: ok ? 'ok' : 'fail', body: null, url: null,
+      });
+    }
+
   } else if (event === 'screenshot') {
-    d.thumbs.push(msg.url);
+    const id = nextId++;
+    appendBubble({
+      id, run, vm, ts: Date.now(),
+      stepNum: msg.step_num ?? null,
+      kind: 'screenshot', label: '', status: null,
+      body: null, url: msg.url,
+    });
   }
 
-  renderLane(k);
   updateTopbar();
 };
+
 es.onerror = function() {
-  document.getElementById('stale-indicator').className = 'stale';
-  document.getElementById('stale-indicator').textContent = 'disconnected';
+  lastEventTs = 0;  // force red pill
+  document.getElementById('hb-pill').className = 'red';
+  document.getElementById('hb-pill').textContent = 'disconnected';
 };
 </script>
 </body>
