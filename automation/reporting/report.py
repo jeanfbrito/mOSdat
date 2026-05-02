@@ -367,8 +367,8 @@ def _esc(text: str) -> str:
 
 def _render_step_block(step_key: str, step_events: list, screenshots: set) -> str:
     """Render the HTML block for one step."""
-    start_ev = next((e for e in step_events if e.get("event") == "step_start"), {})
-    end_ev = next((e for e in step_events if e.get("event") == "step_end"), {})
+    start_ev: dict = next((e for e in step_events if e.get("event") == "step_start"), {})
+    end_ev: dict = next((e for e in step_events if e.get("event") == "step_end"), {})
 
     label = _esc(start_ev.get("label", step_key))
     kind = _esc(start_ev.get("kind", ""))
@@ -584,7 +584,7 @@ def _render_step_events(step_events: list, screenshots: set) -> str:
 </div>""")
 
         elif etype == "vm_health_failed":
-            parts.append(f"""
+            parts.append("""
 <div class="event-row">
   <div class="event-detail">
     <div class="event-type fail-tag">vm_health_failed</div>

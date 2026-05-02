@@ -2,9 +2,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
-from ..config import ProjectConfig, VMConfig, Package
+from ..config import ProjectConfig, VMConfig
 from ..proxmox.gpu import GPUManager
 from ..proxmox.api import ProxmoxAPI
 from ..state import StateManager, TestStatus, Phase, CompletionError, validate_completion

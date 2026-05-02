@@ -3,7 +3,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import requests
 import urllib3

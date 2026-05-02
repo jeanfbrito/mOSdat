@@ -1,7 +1,6 @@
 """Unit tests for automation.visual — SSIM computation and capture/check helpers."""
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest

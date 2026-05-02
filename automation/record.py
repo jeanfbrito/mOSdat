@@ -26,7 +26,6 @@ Layout:
   └────────────────────────────┴─────────────────┘
 """
 
-import sys
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -35,8 +34,8 @@ from typing import Optional
 import yaml
 from PIL import Image
 
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,

@@ -3,7 +3,7 @@
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -357,11 +357,11 @@ class FunctionalRunner:
                 self.log(f"    → visibility check error ({e}), treating as not visible — skip")
                 visible = False
             if visible:
-                self.log(f"    → visible: executing then_steps")
+                self.log("    → visible: executing then_steps")
                 for sub_i, sub_step in enumerate(step.then_steps or [], start=1):
                     self.run_step(sub_step, f"{step_num}.{sub_i}")
             else:
-                self.log(f"    → not visible: skipping")
+                self.log("    → not visible: skipping")
             duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
             self._emit("step_end", step_num=step_num,
                        status="ok" if visible else "skipped",
@@ -387,7 +387,7 @@ class FunctionalRunner:
                 if attempt > 1 and step.verify:
                     screenshot_chk, _ = self.screenshotter.capture()
                     if self._check_state(screenshot_chk, step.verify, 3, step_num, must_be_false=step.verify_not, step=step):
-                        self.log(f"    ✓ already verified (state settled between attempts)")
+                        self.log("    ✓ already verified (state settled between attempts)")
                         return
 
                 if step.localize:
@@ -481,12 +481,12 @@ class FunctionalRunner:
                             screenshot, _ = self.screenshotter.capture()
                             self._save_screenshot(screenshot, f"step{step_num}_input_fail_attempt{attempt}")
                             if attempt < step.retries:
-                                self.log(f"    ✗ input not verified, retrying...")
+                                self.log("    ✗ input not verified, retrying...")
                                 continue
                             raise StepFailed(
                                 f"Step {step_num}: verify_input '{step.verify_input}' never became true"
                             )
-                        self.log(f"    ✓ input verified")
+                        self.log("    ✓ input verified")
 
                     if step.then_key:
                         self.log(f"    → key '{step.then_key}'")
@@ -519,7 +519,7 @@ class FunctionalRunner:
                     screenshot, _ = self.screenshotter.capture()
                     self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
                     if attempt < step.retries:
-                        self.log(f"    ✗ not verified, retrying...")
+                        self.log("    ✗ not verified, retrying...")
                         self._emit("retry", step_num=step_num, attempt=attempt,
                                    reason="verify_failed")
                         continue
@@ -809,11 +809,10 @@ class FunctionalRunner:
                         self._cleanup_snapshots(self._checkpoints_retain)
                         return False, "\n".join(log_lines)
                     # Wait for VM to be reachable again
-                    _log(f"  [checkpoint] Waiting for VM to come back after rollback...")
-                    from ..proxmox.api import ProxmoxAPI as _ProxmoxAPI
+                    _log("  [checkpoint] Waiting for VM to come back after rollback...")
                     ip = self._vm_ops.api.wait_for_ip(self._vmid, timeout=120)
                     if not ip:
-                        _log(f"  [checkpoint] FATAL: VM did not return after rollback — aborting")
+                        _log("  [checkpoint] FATAL: VM did not return after rollback — aborting")
                         self._emit("checkpoint_rewind", name=ckpt_name,
                                    from_step=i, to_step=ckpt_step_num + 1,
                                    status="fatal_no_ip")

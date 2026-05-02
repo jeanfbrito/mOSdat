@@ -99,7 +99,7 @@ class State:
         return self.results[key].status in (TestStatus.PASSED, TestStatus.FAILED, TestStatus.SKIPPED)
 
     def get_pending_tests(self, gpu: bool, vms: list | None = None) -> list[tuple[str, str]]:
-        pending = []
+        pending: list[tuple[str, str]] = []
         if vms is None:
             return pending
         for vm in vms:

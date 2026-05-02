@@ -11,14 +11,12 @@ Heavy imports are stubbed at module load time (same technique as test_if_visible
 Run: pytest tests/test_negative.py -q
 """
 
-import io
-import os
 import sys
 import types
 import unittest
 import importlib.util as _ilu
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Stub heavy dependencies so we can import automation modules without
@@ -205,7 +203,6 @@ class TestNegativeWorkspaceUnreachable(unittest.TestCase):
     """P1 preflight: workspace URL that cannot be reached → exit code 2."""
 
     def test_unreachable_workspace_returns_false_and_detail(self):
-        import urllib.error
         with patch("urllib.request.urlopen") as mock_open:
             mock_open.side_effect = OSError("Connection refused")
             ok, detail = _preflight_workspace("https://10.255.255.1/", timeout=1, retries=0)
@@ -241,7 +238,8 @@ class TestNegativeMissingBinary(unittest.TestCase):
     """launch step with app_path pointing to /nonexistent/rocketchat → StepFailed."""
 
     def test_launch_nonexistent_binary_raises_step_failed(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             runner, vlm, injector = _make_runner(tmp_path=tmp)
@@ -265,7 +263,8 @@ class TestNegativeBadPassword(unittest.TestCase):
     """SSH auth failure (ConnectionRefusedError from injector.shell) → run_test returns False."""
 
     def test_ssh_refused_in_health_probe_returns_false(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             runner, vlm, injector = _make_runner(
@@ -279,7 +278,8 @@ class TestNegativeBadPassword(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_ssh_refused_in_shell_step_raises_step_failed(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             runner, vlm, injector = _make_runner(
@@ -310,7 +310,8 @@ class TestNegativeMalformedScenario(unittest.TestCase):
 
     def test_zero_step_scenario_is_vacuously_true_not_silently_passing(self):
         """A scenario with no steps returns True but the log records 0 steps — not a real PASS."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             runner, _, _ = _make_runner(tmp_path=tmp)
@@ -326,7 +327,8 @@ class TestNegativeVLM5xx(unittest.TestCase):
     """VLMClient raises VLMError (retry exhaustion after 5xx) → StepFailed with error detail."""
 
     def test_vlm_exhaustion_raises_step_failed(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             # Use the VLMError from the loaded module (not the stub)
@@ -353,7 +355,8 @@ class TestNegativeVLM5xx(unittest.TestCase):
 
     def test_vlm_5xx_causes_run_test_to_return_false(self):
         """run_test returns (False, log) when a step raises StepFailed."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             VLMError = _fr_mod.VLMError if hasattr(_fr_mod, "VLMError") else Exception
@@ -379,7 +382,8 @@ class TestNegativeSSHRefused(unittest.TestCase):
         run_test's StepFailed handler does not catch it; the caller sees the raw
         exception.  The negative assertion: the scenario cannot silently PASS.
         """
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         try:
             runner, vlm, injector = _make_runner(
@@ -402,7 +406,8 @@ class TestNegativeSSHRefused(unittest.TestCase):
 
     def test_ssh_refused_health_probe_detail(self):
         """_probe_vm_health logs the SSH error and returns False."""
-        import tempfile, shutil
+        import tempfile
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         log_lines = []
         try:

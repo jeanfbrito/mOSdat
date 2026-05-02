@@ -6,7 +6,7 @@ import urllib.error
 import time as _time
 from pathlib import Path
 
-from .config import load_config, ProjectConfig
+from .config import load_config
 
 
 def cmd_run(args) -> int:
@@ -157,7 +157,7 @@ def _warmup_vlm(vlm) -> bool:
     except Exception as e:
         elapsed = _time.perf_counter() - t0
         print(f"[mOSdat]   Warmup failed after {elapsed:.1f}s: {e}")
-        print(f"[mOSdat]   Proceeding anyway — scenario may take longer for first VLM call")
+        print("[mOSdat]   Proceeding anyway — scenario may take longer for first VLM call")
         return False
 
 
@@ -165,7 +165,6 @@ def cmd_functional(args) -> int:
     if getattr(args, "record", False):
         return cmd_record(args)
 
-    from datetime import datetime
     from pathlib import Path as P
 
     config = load_config(args.config)
@@ -211,7 +210,7 @@ def cmd_functional(args) -> int:
                 print(f"[mOSdat]   Workspace OK ({detail})")
             else:
                 print(f"[mOSdat]   ERROR: workspace unreachable — {detail}")
-                print(f"[mOSdat]   Fix the workspace server (or pass --skip-workspace-check) and retry.")
+                print("[mOSdat]   Fix the workspace server (or pass --skip-workspace-check) and retry.")
                 return 2
 
     # H2.3: probe VLM model identity before per-VM loop
@@ -222,14 +221,14 @@ def cmd_functional(args) -> int:
             if expected:
                 if served_model != expected:
                     print(f"[mOSdat] ERROR: VLM model mismatch: configured {expected!r}, endpoint serving {served_model!r}")
-                    print(f"[mOSdat]   Check your llama-swap config or pass --skip-model-check to bypass.")
+                    print("[mOSdat]   Check your llama-swap config or pass --skip-model-check to bypass.")
                     return 3
                 print(f"[mOSdat] VLM model identity OK: {served_model!r}")
             else:
                 print(f"[mOSdat] VLM model probe (no enforcement): endpoint serving {served_model!r}")
         except Exception as probe_err:
             print(f"[mOSdat] WARNING: VLM model probe failed: {probe_err}")
-            print(f"[mOSdat]   Proceeding — pass --skip-model-check to suppress this warning.")
+            print("[mOSdat]   Proceeding — pass --skip-model-check to suppress this warning.")
 
     name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file)
 
@@ -310,10 +309,10 @@ def cmd_functional(args) -> int:
 
             # B7: VM health probe before scenario start
             if not getattr(args, "skip_health_probe", False):
-                print(f"[mOSdat]   Probing VM health...")
+                print("[mOSdat]   Probing VM health...")
                 healthy = runner._probe_vm_health()
                 if not healthy:
-                    print(f"[mOSdat]   WARNING: VM appears frozen — attempting reset...")
+                    print("[mOSdat]   WARNING: VM appears frozen — attempting reset...")
                     from .proxmox.vm import VMOperations
                     vm_ops = VMOperations(proxmox, vm, config)
                     vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
@@ -368,7 +367,7 @@ def cmd_validate(args) -> int:
         if config.build:
             print(f"  Build: {config.build.repo_path}")
         else:
-            print(f"  Build: disabled (pre-built packages only)")
+            print("  Build: disabled (pre-built packages only)")
         if config.report.critical_tests:
             print(f"  Critical tests: {', '.join(config.report.critical_tests)}")
         return 0
