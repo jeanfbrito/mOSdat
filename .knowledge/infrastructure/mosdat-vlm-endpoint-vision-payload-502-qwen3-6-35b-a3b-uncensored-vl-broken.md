@@ -12,7 +12,7 @@ kind: war-story
 scope: project-shared
 category: infrastructure
 confidence: high
-accessed: 29
+accessed: 32
 last_accessed: "2026-05-01"
 ---
 

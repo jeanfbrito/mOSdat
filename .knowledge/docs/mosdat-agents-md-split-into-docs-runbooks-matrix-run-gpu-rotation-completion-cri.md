@@ -11,7 +11,7 @@ kind: decision
 scope: project-shared
 category: docs
 confidence: high
-accessed: 7
+accessed: 9
 last_accessed: "2026-05-01"
 ---
 

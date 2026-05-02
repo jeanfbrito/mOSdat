@@ -11,7 +11,7 @@ kind: lesson
 scope: project-shared
 category: packaging
 confidence: high
-accessed: 23
+accessed: 26
 last_accessed: "2026-05-01"
 ---
 

@@ -11,7 +11,7 @@ kind: decision
 scope: project-shared
 category: conventions
 confidence: high
-accessed: 14
+accessed: 17
 last_accessed: "2026-05-01"
 ---
 
