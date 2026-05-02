@@ -32,6 +32,7 @@ class _StepBase(BaseModel):
     verify: Optional[str] = None
     verify_not: Optional[str] = None
     verify_input: Optional[str] = None
+    verify_click: Optional[str] = None
     verify_timeout: int = 10
     verify_consistent: bool = False
     retries: int = 3
@@ -39,6 +40,22 @@ class _StepBase(BaseModel):
     focus: Optional[str] = None
     on_failure_agent: Optional[dict[str, Any]] = None
     checkpoint: Optional[str] = None
+    # Diff-based click verification (compare before/after crops around click point)
+    verify_click_diff: bool = False
+    verify_click_diff_prompt: Optional[str] = None
+    verify_click_diff_crop: int = 80
+    # Canary-byte typing verification
+    canary: bool = False
+    canary_verify: Optional[str] = None
+    canary_char: str = "q"
+
+    @model_validator(mode="after")
+    def _check_canary_config(self) -> "_StepBase":
+        if self.canary and self.canary_verify is None:
+            raise ValueError(
+                "canary: true requires canary_verify to be set (config error)"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------

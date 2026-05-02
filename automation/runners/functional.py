@@ -27,6 +27,7 @@ class FunctionalStep:
     verify: Optional[str] = None           # yes/no question that must be TRUE (post-step)
     verify_not: Optional[str] = None       # yes/no question that must be FALSE (catches error banners, hallucinated success)
     verify_input: Optional[str] = None     # yes/no check that fires AFTER then_type and BEFORE then_key — blocks Enter until typing actually landed in the right field
+    verify_click: Optional[str] = None     # yes/no check that fires AFTER click+0.4s delay and BEFORE then_key_pre/then_type — catches VLM mis-localize before typing leaks into wrong field
     verify_timeout: int = 10               # seconds to wait for the expected state
     retries: int = 3                       # attempts before the step is marked failed
     launch: Optional[str] = None           # executable path/command to launch before localizing
@@ -42,6 +43,14 @@ class FunctionalStep:
     launch_timeout: Optional[int] = None  # B6: polling budget for launch verification (defaults to step.wait)
     on_failure_agent: Optional[dict] = None  # C1: agent fallback on retry exhaustion
     checkpoint: Optional[str] = None      # C2: snapshot VM at this step; value is the snapshot name
+    # Diff-based click verification
+    verify_click_diff: bool = False
+    verify_click_diff_prompt: Optional[str] = None
+    verify_click_diff_crop: int = 80
+    # Canary-byte typing verification
+    canary: bool = False
+    canary_verify: Optional[str] = None
+    canary_char: str = "q"
 
 
 class StepFailed(Exception):
@@ -60,6 +69,8 @@ class FunctionalRunner:
         checkpoint_config: Optional[dict] = None,
         vm_ops=None,
         vmid: Optional[int] = None,
+        click_verify_override: str = "auto",
+        canary_override: str = "auto",
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
@@ -83,6 +94,9 @@ class FunctionalRunner:
         self._checkpoints: list = []
         # Track which snapshots were created this run (for cleanup)
         self._created_snapshots: list = []
+        # CLI overrides for click-verify and canary modes
+        self._click_verify_override = click_verify_override
+        self._canary_override = canary_override
 
     def _save_screenshot(self, img: Image.Image, label: str) -> None:
         if not self.screenshot_dir:
@@ -215,6 +229,143 @@ class FunctionalRunner:
         self._created_snapshots.append(name)
         self._emit("checkpoint_created", step_num=step_num, name=name)
         self.log(f"    → checkpoint '{name}' created at step {step_num}")
+
+    # ---- Default diff prompt ----
+
+    _DEFAULT_DIFF_PROMPT = (
+        "comparing the LEFT crop (before click) to the RIGHT crop (after click): "
+        "the RIGHT crop now shows a visible change indicating an input field has gained focus — "
+        "a text cursor / caret, or a coloured/thicker focus ring around an input box, or a "
+        "placeholder text that has disappeared. If the two crops look essentially identical, answer no."
+    )
+
+    def _resolve_click_mode(self, step: "FunctionalStep") -> tuple:
+        """Return (diff_enabled, yesno_enabled) considering CLI override."""
+        ov = self._click_verify_override
+        if ov == "auto":
+            return (step.verify_click_diff, bool(step.verify_click))
+        if ov == "off":
+            return (False, False)
+        if ov == "yesno":
+            if not step.verify_click:
+                self.log("    → --click-verify=yesno but step has no verify_click prompt; skipping yesno")
+            return (False, bool(step.verify_click))
+        if ov == "diff":
+            return (True, False)
+        if ov == "diff+yesno":
+            if not step.verify_click:
+                self.log("    → --click-verify=diff+yesno but step has no verify_click prompt; skipping yesno")
+            return (True, bool(step.verify_click))
+        return (step.verify_click_diff, bool(step.verify_click))
+
+    def _resolve_canary(self, step: "FunctionalStep") -> bool:
+        """Return whether canary is active for this step considering CLI override."""
+        ov = self._canary_override
+        if ov == "auto":
+            return step.canary
+        if ov == "off":
+            return False
+        if ov == "on":
+            if not step.canary_verify:
+                self.log("    → --canary=on but step has no canary_verify prompt; skipping canary")
+                return False
+            return True
+        return step.canary
+
+    def _check_click(
+        self,
+        step: "FunctionalStep",
+        attempt: int,
+        x: int,
+        y: int,
+        screenshot_before: "Image.Image",
+        step_num,
+        diff_enabled: bool,
+        yesno_enabled: bool,
+    ) -> bool:
+        """Run configured click-verification checks. Returns True if all pass."""
+        if diff_enabled:
+            # Capture after-click screenshot
+            screenshot_after, screen_size = self.screenshotter.capture()
+            w, h = screen_size
+            r = step.verify_click_diff_crop
+            box = (
+                max(0, x - r), max(0, y - r),
+                min(w, x + r), min(h, y + r),
+            )
+            crop_before = screenshot_before.crop(box)
+            crop_after = screenshot_after.crop(box)
+
+            # Stitch horizontally with 2px black separator
+            sep_w = 2
+            composite_w = crop_before.width + sep_w + crop_after.width
+            composite_h = max(crop_before.height, crop_after.height)
+            composite = Image.new("RGB", (composite_w, composite_h), (0, 0, 0))
+            composite.paste(crop_before, (0, 0))
+            composite.paste(crop_after, (crop_before.width + sep_w, 0))
+
+            # Save debug composite
+            if self.screenshot_dir:
+                self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+                debug_path = self.screenshot_dir / f"step{step_num}_click_diff_attempt{attempt}.png"
+                composite.save(debug_path)
+                self.log(f"    Click diff composite: {debug_path}")
+
+            prompt = step.verify_click_diff_prompt or self._DEFAULT_DIFF_PROMPT
+            t0 = time.perf_counter()
+            diff_ok = self.vlm.verify(composite, prompt)
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            self._emit("vlm_verify", step_num=step_num, attempt=attempt,
+                       question=prompt[:80], answer="yes" if diff_ok else "no",
+                       latency_ms=latency_ms, kind="verify_click_diff")
+            if not diff_ok:
+                return False
+            # diff passed — skip yesno (diff is the stronger signal per spec)
+            return True
+
+        if yesno_enabled:
+            self.log(f"    → verify click '{step.verify_click[:60]}'")
+            t0 = time.perf_counter()
+            click_ok = self._wait_for_state(step.verify_click, min(step.verify_timeout, 8), step_num, step=step)
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            self._emit("vlm_verify", step_num=step_num, attempt=attempt,
+                       question=step.verify_click[:80], answer="yes" if click_ok else "no",
+                       latency_ms=latency_ms, kind="verify_click")
+            return click_ok
+
+        return True
+
+    def _check_canary(
+        self,
+        step: "FunctionalStep",
+        attempt: int,
+        step_num,
+    ) -> bool:
+        """Type canary char, verify it landed in the correct field. Returns True if yes."""
+        self.injector.type_text(step.canary_char)
+        time.sleep(0.3)
+        screenshot, _ = self.screenshotter.capture()
+        if self.screenshot_dir:
+            self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+            canary_path = self.screenshot_dir / f"step{step_num}_canary_attempt{attempt}.png"
+            screenshot.save(canary_path)
+            self.log(f"    Canary screenshot: {canary_path}")
+        t0 = time.perf_counter()
+        landed = self.vlm.verify(screenshot, step.canary_verify)
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+        self._emit("vlm_verify", step_num=step_num, attempt=attempt,
+                   question=step.canary_verify[:80], answer="yes" if landed else "no",
+                   latency_ms=latency_ms, kind="canary_verify")
+        if not landed:
+            # Best-effort cleanup: backspace the stray canary char(s)
+            try:
+                for _ in range(len(step.canary_char)):
+                    self.injector.key("backspace")
+                    time.sleep(0.05)
+            except Exception:
+                pass
+            return False
+        return True
 
     def run_step(self, step: FunctionalStep, step_num) -> None:
         """Execute a single test step with retries.
@@ -409,6 +560,10 @@ class FunctionalRunner:
                     if self.popup_sweep:
                         self._sweep_popups(step_num)
                     self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
+                    # Capture screenshot_before for diff mode (only pay cost if needed)
+                    diff_enabled, yesno_enabled = self._resolve_click_mode(step)
+                    if diff_enabled:
+                        screenshot_before_click, _ = self.screenshotter.capture()
                     screenshot, screen_size = self.screenshotter.capture()
                     # A6: save the screenshot used for localize
                     self._save_screenshot(screenshot, f"step{step_num}_localize")
@@ -455,12 +610,49 @@ class FunctionalRunner:
                     self._save_click_overlay(screenshot, x, y, step_num)
                     time.sleep(0.4)
 
+                    # Click verification: diff-based and/or yes/no, per _check_click.
+                    if diff_enabled or yesno_enabled:
+                        _before = screenshot_before_click if diff_enabled else screenshot
+                        click_ok = self._check_click(
+                            step, attempt, x, y, _before, step_num,
+                            diff_enabled, yesno_enabled,
+                        )
+                        if not click_ok:
+                            screenshot_vc, _ = self.screenshotter.capture()
+                            self._save_screenshot(screenshot_vc, f"step{step_num}_click_fail_attempt{attempt}")
+                            self.log("    ✗ click verify failed, retrying")
+                            if attempt < step.retries:
+                                continue
+                            raise StepFailed(
+                                f"Step {step_num}: click verify never passed"
+                            )
+                        self.log("    ✓ click verified")
+
                     if step.then_key_pre:
                         self.log(f"    → key '{step.then_key_pre}' (pre)")
                         self.injector.key(step.then_key_pre)
                         time.sleep(0.15)
 
                     if step.then_type:
+                        # Canary check: type one distinctive char first, verify it
+                        # landed in the correct field, then backspace before real text.
+                        canary_active = self._resolve_canary(step)
+                        if canary_active and step.canary_verify:
+                            self.log(f"    → canary verify (char='{step.canary_char}')")
+                            canary_ok = self._check_canary(step, attempt, step_num)
+                            if not canary_ok:
+                                self.log("    ✗ canary verify failed, retrying")
+                                if attempt < step.retries:
+                                    continue
+                                raise StepFailed(
+                                    f"Step {step_num}: canary verify never passed"
+                                )
+                            # Canary landed correctly — backspace it, then type real text
+                            self.log("    ✓ canary verified — backspacing canary char")
+                            for _ in range(len(step.canary_char)):
+                                self.injector.key("backspace")
+                                time.sleep(0.05)
+
                         # Always type. Skip-on-already-present heuristic was
                         # fragile — VLM yes/no on "is text X visible in any
                         # input field" leaks across fields (e.g. username
@@ -1028,6 +1220,7 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             verify=_sub(s.verify, vars) if s.verify else None,
             verify_not=_sub(s.verify_not, vars) if s.verify_not else None,
             verify_input=_sub(s.verify_input, vars) if s.verify_input else None,
+            verify_click=_sub(s.verify_click, vars) if s.verify_click else None,
             verify_timeout=s.verify_timeout,
             retries=s.retries,
             launch=_sub(s.launch, vars) if s.launch else None,
@@ -1043,6 +1236,12 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             launch_timeout=s.launch_timeout,
             on_failure_agent=_resolve_agent_vars(s.on_failure_agent, vars),
             checkpoint=s.checkpoint,
+            verify_click_diff=s.verify_click_diff,
+            verify_click_diff_prompt=s.verify_click_diff_prompt,
+            verify_click_diff_crop=s.verify_click_diff_crop,
+            canary=s.canary,
+            canary_verify=_sub(s.canary_verify, vars) if s.canary_verify else None,
+            canary_char=s.canary_char,
         ))
     return resolved
 
@@ -1145,6 +1344,7 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         verify=raw.get("verify"),
         verify_not=raw.get("verify_not"),
         verify_input=raw.get("verify_input"),
+        verify_click=raw.get("verify_click"),
         verify_timeout=int(raw.get("verify_timeout", 10)),
         retries=int(raw.get("retries", 3)),
         launch=raw.get("launch"),
@@ -1160,4 +1360,10 @@ def _parse_step(raw: dict) -> "FunctionalStep":
         launch_timeout=int(raw["launch_timeout"]) if "launch_timeout" in raw else None,
         on_failure_agent=_parse_on_failure_agent(raw.get("on_failure_agent")),
         checkpoint=raw.get("checkpoint"),
+        verify_click_diff=bool(raw.get("verify_click_diff", False)),
+        verify_click_diff_prompt=raw.get("verify_click_diff_prompt"),
+        verify_click_diff_crop=int(raw.get("verify_click_diff_crop", 80)),
+        canary=bool(raw.get("canary", False)),
+        canary_verify=raw.get("canary_verify"),
+        canary_char=raw.get("canary_char", "q"),
     )

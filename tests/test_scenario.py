@@ -210,6 +210,17 @@ class TestCanonicalSmoke:
         model = _validate(data)
         assert len(model.steps) > 0
 
+    def test_no_screenshare_picker_yaml_parses_clean(self):
+        yaml_path = _PROJ / "shared" / "scenarios" / "functional" / "rocketchat-no-screenshare-picker.yaml"
+        if not yaml_path.exists():
+            pytest.skip("rocketchat-no-screenshare-picker.yaml not found")
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        # Should not raise — scenario must pass pydantic schema validation
+        model = _validate(data)
+        assert len(model.steps) > 0
+        assert model.name == "rocketchat-no-screenshare-picker"
+
 
 # ---------------------------------------------------------------------------
 # I3f: load_test_yaml exits 4 on schema violation

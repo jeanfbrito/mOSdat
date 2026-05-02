@@ -495,6 +495,8 @@ es.onmessage = function(e) {
     else if (event === 'vlm_localize') body = (msg.prompt || msg.label || msg.target || '').slice(0, 200);
     else if (event === 'vlm_verify')   body = (msg.prompt || msg.predicate || msg.text || '').slice(0, 200);
     else if (event === 'launch_verify') body = `process=${msg.process} window=${msg.window}`;
+    else if (event === 'vlm_verify' && msg.kind === 'verify_click_diff') body = `diff-click: ${msg.answer || ''} (${msg.latency_ms || 0}ms)`;
+    else if (event === 'vlm_verify' && msg.kind === 'canary_verify') body = `canary: ${msg.answer || ''} (${msg.latency_ms || 0}ms)`;
     else if (event === 'retry') body = `retry ${msg.attempt || ''}`;
     else if (event === 'wait')  body = `${msg.seconds || msg.duration_ms || ''}`;
     else                        body = JSON.stringify(msg).slice(0, 200);
@@ -644,7 +646,7 @@ class EventWatcher:
             # Filename pattern: <HHMMSS>_step<N>_<phase>.png. We want VLM-input
             # frames only — verify polls and localize captures. Skip click
             # overlays, final-fail snapshots, and other non-VLM-input frames.
-            VLM_INPUT_TOKENS = ("verify_poll", "localize", "verify_input", "_verify_")
+            VLM_INPUT_TOKENS = ("verify_poll", "localize", "verify_input", "verify_click", "verify_click_diff", "canary_verify", "_verify_")
             known = self._known_pngs.setdefault(key, set())
             try:
                 for entry in os.scandir(vm_path):

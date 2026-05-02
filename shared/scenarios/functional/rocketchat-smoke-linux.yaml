@@ -51,13 +51,15 @@ steps:
       for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
         [ -e "$d" ] && rm -rf "$d"
       done
-      # Stage 4: Chromium cache + IndexedDB + alt-share-path caches (Electron
-      # writes some data here, not just .config/).
+      # Stage 4: Chromium cache + alt-share-path caches. NOTE: We deliberately
+      # do NOT wipe ~/.local/share/Rocket.Chat — that holds the Meteor
+      # IndexedDB / message cache. Wiping it forces a full workspace re-sync
+      # on every smoke run; on a large workspace this stalls the chat pane
+      # on skeleton placeholders for minutes. Auth is wiped via .config +
+      # libsecret keyring above, so logout is still enforced.
       rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
       rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
       rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
-      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
-      rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
       # Stage 5: confirm clean. Fail loudly if anything survived so the test
       # halts here instead of running on a half-stale session.
       remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
@@ -105,6 +107,10 @@ steps:
   # ── Rest is identical to the Windows smoke. All clicks/types flow through
   #    VNC and the VLM, so they're OS-agnostic. ──────────────────────────
   - localize: "the Enter your server URL input text field below the rocket.chat logo"
+    verify_click: "the 'Enter your server URL' input text field is focused — a text cursor is visible inside it OR a blue/coloured focus ring is visible around the box"
+    verify_click_diff: true
+    canary: true
+    canary_verify: "the character 'q' is visible as plain text inside the 'Enter your server URL' input text field below the rocket.chat logo, NOT inside any other field, dialog, or window"
     then_type: "{workspace_url}"
     then_key: "enter"
     verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
@@ -113,6 +119,10 @@ steps:
     retries: 3
 
   - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+    verify_click: "the upper Email or username input field is focused — a text cursor or focus ring is visible inside that specific row, NOT inside the Password field below"
+    verify_click_diff: true
+    canary: true
+    canary_verify: "the character 'q' is visible as plain text inside the upper Email or username input field, NOT inside the Password field below it and NOT anywhere else"
     then_type: "{test_user}"
     # Note: A4 precheck_click NOT used here — verify_input below already
     # catches mis-click (typed text must appear in the username field, and
@@ -122,23 +132,31 @@ steps:
     verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
     retries: 3
 
-  - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+  - localize: "the Password input row — find the small eye icon (an open/closed eye glyph used to toggle password visibility) on the right edge of an input row, and click the empty space INSIDE that input row to its LEFT (the masked text area, roughly 50-150px left of the eye icon). The Email/username field above has NO eye icon — never click there. The Forgot password link is plain blue underlined text with no input box — never click there."
+    verify_click: "the Password input row (the row with the eye icon on its right edge) is focused — a text cursor or focus ring is visible inside that specific row, NOT inside the Email/username row above"
+    verify_click_diff: true
     then_type: "{test_password}"
+    # verify_input gates the Enter key on the typed text actually landing in
+    # the Password field (not leaking into Email). If VLM clicked the wrong
+    # row, password text appended to the Email value 'jean' — this check
+    # catches that and triggers retry on a fresh re-localize.
+    verify_input: "the Email or username field at top still shows ONLY the four letters 'jean' as plain text with no other characters appended, AND the Password row directly below it shows a row of masked dots indicating a typed password is present"
     then_key: "enter"
-    # A4 precheck_click was tried — too strict. The VLM's binary yes/no on a
-    # narrow crop false-rejects valid clicks too often (iter 14 — 3 attempts
-    # all rejected on visually-correct password-field clicks). Rely instead on
-    # the retry loop: each attempt re-localizes; verify_not catches the
-    # "user not found" UI signature when type went to wrong field.
     verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
     verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
     verify_timeout: 30
     retries: 3
 
   - localize: "the General channel in the left sidebar"
-    verify: "the General channel has finished loading and shows real text content or real messages, with no grey skeleton, shimmer placeholder, or loading dots"
-    verify_timeout: 60
-    retries: 3
+    # Channel content can render slowly OR be empty (no messages yet) — both
+    # are valid post-login states. Verify any sign of an interactive chat
+    # pane (messages, empty-state placeholder, or composer), and reject only
+    # the explicit broken state where ONLY skeleton bars are visible.
+    wait: 5
+    verify: "the chat pane on the right shows either real messages with sender names, OR an empty-state placeholder such as 'No messages yet' or 'Welcome', OR a message composer / 'Message #general' input field at the bottom — i.e., the channel UI is interactive"
+    verify_not: "the chat pane shows ONLY grey skeleton placeholder bars or shimmer animation with no message text, no empty-state text, and no composer rendered"
+    verify_timeout: 240
+    retries: 5
 
   - localize: "the message input box or composer at the bottom of the chat"
     then_type: "mosdat functional test {timestamp}"

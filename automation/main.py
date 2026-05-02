@@ -337,6 +337,8 @@ def cmd_functional(args) -> int:
                     checkpoint_config=checkpoint_config,
                     vm_ops=_vm_ops_for_ckpt,
                     vmid=vm.vmid if checkpoint_config.get("enabled") else None,
+                    click_verify_override=getattr(args, "click_verify", "auto"),
+                    canary_override=getattr(args, "canary_override", "auto"),
                 )
 
                 # B7: VM health probe before scenario start
@@ -537,6 +539,13 @@ def main() -> int:
                       help="C3: interactive authoring mode — open VNC viewer, capture clicks, generate YAML")
     fn_p.add_argument("--output", type=str, default=None,
                       help="(--record) path to write the generated YAML")
+    fn_p.add_argument("--click-verify",
+                      choices=["auto", "off", "yesno", "diff", "diff+yesno"],
+                      default="auto", dest="click_verify",
+                      help="Override scenario's verify_click mode globally (A/B testing)")
+    fn_p.add_argument("--canary", choices=["auto", "off", "on"],
+                      default="auto", dest="canary_override",
+                      help="Override scenario's canary setting globally (A/B testing)")
 
     # mosdat validate
     val_p = sub.add_parser("validate", help="Validate config file")

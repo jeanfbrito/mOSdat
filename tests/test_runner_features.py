@@ -221,3 +221,129 @@ class TestAgentFallback:
                 runner.run_step(FunctionalStep(
                     verify="something", verify_timeout=1, retries=1,
                 ), 1)
+
+
+# ---------------------------------------------------------------------------
+# Diff-click verify and canary
+# ---------------------------------------------------------------------------
+
+class TestDiffClickVerify:
+    def test_diff_mode_emits_verify_click_diff_event(self, tmp_path):
+        """Diff mode emits vlm_verify event with kind='verify_click_diff'."""
+        runner, vlm, ss, inj = _make_runner(vlm_verify=True, screenshot_dir=tmp_path)
+        vlm.verify.return_value = True
+
+        step = FunctionalStep(
+            localize="the login button",
+            verify_click_diff=True,
+            retries=1,
+        )
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+
+        events_path = tmp_path / "events.jsonl"
+        assert events_path.exists()
+        import json
+        events = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+        diff_events = [e for e in events if e.get("event") == "vlm_verify" and e.get("kind") == "verify_click_diff"]
+        assert len(diff_events) >= 1, "Expected at least one verify_click_diff event"
+
+    def test_diff_mode_failure_retries(self, tmp_path):
+        """Diff mode failure causes retry (second attempt attempted)."""
+        runner, vlm, ss, inj = _make_runner(screenshot_dir=tmp_path)
+        # First VLM call (diff check attempt 1) returns False → retry
+        # Second attempt's diff check returns True → succeeds
+        vlm.verify.side_effect = [False, True]
+
+        step = FunctionalStep(
+            localize="the input field",
+            verify_click_diff=True,
+            retries=2,
+        )
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+
+        # localize called twice (once per attempt)
+        assert vlm.localize.call_count == 2
+
+    def test_diff_mode_all_retries_exhausted_raises(self, tmp_path):
+        """Diff verify failing all retries raises StepFailed."""
+        runner, vlm, ss, inj = _make_runner(screenshot_dir=tmp_path)
+        vlm.verify.return_value = False  # always fail
+
+        step = FunctionalStep(
+            localize="the input field",
+            verify_click_diff=True,
+            retries=2,
+        )
+        with patch("time.sleep"):
+            with pytest.raises(StepFailed):
+                runner.run_step(step, 1)
+
+
+class TestCanaryVerify:
+    def test_canary_types_char_then_backspaces_then_real_text(self, tmp_path):
+        """Canary mode types canary char, backspaces once, then types real text."""
+        runner, vlm, ss, inj = _make_runner(vlm_verify=True, screenshot_dir=tmp_path)
+        vlm.verify.return_value = True
+
+        step = FunctionalStep(
+            localize="the username field",
+            canary=True,
+            canary_verify="q visible in username field",
+            then_type="testuser",
+            retries=1,
+        )
+        calls = []
+        inj.type_text.side_effect = lambda t: calls.append(("type", t))
+        inj.key.side_effect = lambda k: calls.append(("key", k))
+
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+
+        # canary char typed first, then backspace, then real text
+        assert ("type", "q") in calls
+        assert ("key", "backspace") in calls
+        # backspace must come before real text
+        bs_idx = next(i for i, c in enumerate(calls) if c == ("key", "backspace"))
+        real_idx = next(i for i, c in enumerate(calls) if c == ("type", "testuser"))
+        assert bs_idx < real_idx
+
+    def test_canary_emits_canary_verify_event(self, tmp_path):
+        """Canary verify emits vlm_verify event with kind='canary_verify'."""
+        runner, vlm, ss, inj = _make_runner(vlm_verify=True, screenshot_dir=tmp_path)
+        vlm.verify.return_value = True
+
+        step = FunctionalStep(
+            localize="the username field",
+            canary=True,
+            canary_verify="q visible in username field",
+            then_type="testuser",
+            retries=1,
+        )
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+
+        import json
+        events = [json.loads(l) for l in (tmp_path / "events.jsonl").read_text().splitlines() if l.strip()]
+        canary_events = [e for e in events if e.get("kind") == "canary_verify"]
+        assert len(canary_events) >= 1
+
+    def test_canary_failure_causes_retry(self, tmp_path):
+        """Canary failure causes loop retry (localize called again)."""
+        runner, vlm, ss, inj = _make_runner(screenshot_dir=tmp_path)
+        # First canary verify fails, second succeeds
+        vlm.verify.side_effect = [False, True]
+
+        step = FunctionalStep(
+            localize="the username field",
+            canary=True,
+            canary_verify="q visible",
+            then_type="user",
+            retries=2,
+        )
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+
+        # localize called twice (retry after canary failure)
+        assert vlm.localize.call_count == 2

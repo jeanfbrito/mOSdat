@@ -100,3 +100,18 @@
   in the graphical session directly and GPU probe follows Wayland path successfully.
 - **Affects**: SSH-based launch paths on any no-GPU GNOME Wayland VM.
 - **Ref**: Discovered during H1.1 fedora42 smoke iteration (iter 2-3).
+
+## VNC type_text drops shift-required keysyms on Wayland mutter VNC backend
+- **Status**: Workaround in place (avoid shift-required canary chars)
+- **Issue**: `automation/transport/vnc.py::type_text` sends X11 keysyms (with optional
+  Shift_L wrap from the `_SHIFTED` set). On the Proxmox QEMU → Wayland mutter VNC
+  path, single-char shifted typing (e.g. `~`, `§`, `!`, `@`) drops the keypress
+  silently — no error, just no character produced. Multi-char strings of unmodified
+  ASCII (lowercase letters, digits, `.` `,` `/` etc.) work fine.
+- **Workaround**: Canary chars and any single-keystroke probe must use no-shift
+  ASCII (lowercase letters or digits). Default canary char is `"q"` — not in any RC
+  placeholder text and reliably typed. If shift-required input is essential,
+  send `injector.key("shift+...")` explicitly rather than `type_text`.
+- **Affects**: `automation/runners/functional.py::_check_canary`, any scenario
+  step that relies on `type_text` for single shifted chars.
+- **Ref**: Discovered during canary-byte hardening, May 2026 (smoke iter 7-10).
