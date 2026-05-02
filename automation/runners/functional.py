@@ -749,11 +749,172 @@ class FunctionalRunner:
 
         self._emit("display_prepared", method="vnc_jiggle+xset_dpms_off")
 
+    # ---- I2: VM-side debug artifact capture ----
+
+    def _capture_vm_debug(
+        self,
+        results_dir: Path,
+        vm_name: str,
+    ) -> None:
+        """Collect VM-side debug artifacts into results_dir/vm-debug/ on FAIL (I2).
+
+        Never raises — all failures are logged as warnings so the caller's
+        FAIL path continues unimpeded.
+
+        Linux artifacts:
+          - dmesg_tail.txt       — last 200 lines of dmesg
+          - journalctl_recent.txt — journalctl output from 5 min ago (no -k)
+          - rc_logs/<name>.txt   — last 200 lines of each ~/.config/Rocket.Chat/logs/*.log
+          - xset_q.txt           — xset q output (X11 display info; skipped on Wayland)
+          - xsession_errors.txt  — ~/.xsession-errors if present
+
+        Windows artifacts:
+          - event_log_app.txt    — Get-EventLog Application -Newest 50
+          - top_processes.txt    — top 20 processes by working set
+          - rc_logs/<name>.txt   — last 200 lines of each %APPDATA%/Rocket.Chat/logs/*.log
+        """
+        debug_dir = results_dir / vm_name / "vm-debug"
+        try:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: could not create debug dir {debug_dir}: {e}")
+            return
+
+        is_win = getattr(self.injector, "is_windows", False)
+
+        if is_win:
+            self._capture_vm_debug_windows(debug_dir)
+        else:
+            self._capture_vm_debug_linux(debug_dir)
+
+    def _ssh_run(self, cmd: str, timeout: int = 20) -> str:
+        """Run cmd via injector.ssh.run() and return stdout.
+
+        For Windows, wraps via _ps_encoded so PowerShell special chars survive.
+        Returns empty string on any error — callers check for emptiness.
+        """
+        if getattr(self.injector, "is_windows", False):
+            try:
+                from ..vlm.input import _ps_encoded
+                cmd = _ps_encoded(cmd)
+            except (ImportError, AttributeError):
+                pass  # stub env or unavailable — pass cmd through unencoded
+        try:
+            result = self.injector.ssh.run(cmd, timeout=timeout)
+            return result.stdout or ""
+        except Exception:
+            return ""
+
+    def _capture_vm_debug_linux(self, debug_dir: Path) -> None:
+        """Collect Linux VM-side debug artifacts."""
+        # 1. dmesg tail
+        try:
+            out = self._ssh_run("dmesg | tail -200 2>/dev/null || true", timeout=15)
+            if out:
+                (debug_dir / "dmesg_tail.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: dmesg failed: {e}")
+
+        # 2. journalctl recent (5 min, no kernel filter so app-level events included)
+        try:
+            out = self._ssh_run(
+                "journalctl --since='5 min ago' --no-pager 2>/dev/null || true",
+                timeout=20,
+            )
+            if out:
+                (debug_dir / "journalctl_recent.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: journalctl failed: {e}")
+
+        # 3. Rocket.Chat logs — last 200 lines of each .log file
+        try:
+            out = self._ssh_run(
+                r'for f in "$HOME/.config/Rocket.Chat/logs/"*.log; do'
+                r'  [ -f "$f" ] || continue;'
+                r'  echo "=== $f ===";'
+                r'  tail -200 "$f";'
+                r'done 2>/dev/null || true',
+                timeout=15,
+            )
+            if out:
+                rc_dir = debug_dir / "rc_logs"
+                rc_dir.mkdir(exist_ok=True)
+                (rc_dir / "rc_logs.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: RC log collection failed: {e}")
+
+        # 4. xset q (X11 only — silently absent on Wayland)
+        try:
+            out = self._ssh_run("DISPLAY=:0 xset q 2>/dev/null || true", timeout=10)
+            if out.strip():
+                (debug_dir / "xset_q.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: xset q failed: {e}")
+
+        # 5. ~/.xsession-errors if present
+        try:
+            out = self._ssh_run(
+                '[ -f "$HOME/.xsession-errors" ] && cat "$HOME/.xsession-errors" || true',
+                timeout=10,
+            )
+            if out.strip():
+                (debug_dir / "xsession_errors.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: .xsession-errors collection failed: {e}")
+
+    def _capture_vm_debug_windows(self, debug_dir: Path) -> None:
+        """Collect Windows VM-side debug artifacts (via _ps_encoded SSH run)."""
+        # 1. Application event log
+        try:
+            out = self._ssh_run(
+                "Get-EventLog -LogName Application -Newest 50 | "
+                "Format-List TimeGenerated,EntryType,Source,Message",
+                timeout=30,
+            )
+            if out:
+                (debug_dir / "event_log_app.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: Get-EventLog failed: {e}")
+
+        # 2. Top 20 processes by working set
+        try:
+            out = self._ssh_run(
+                "Get-Process | Select-Object Name,Id,WS | "
+                "Sort-Object WS -Descending | Select-Object -First 20 | "
+                "Format-Table -AutoSize",
+                timeout=20,
+            )
+            if out:
+                (debug_dir / "top_processes.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: Get-Process failed: {e}")
+
+        # 3. Rocket.Chat logs
+        try:
+            out = self._ssh_run(
+                r'$logDir = "$env:APPDATA\Rocket.Chat\logs"; '
+                r'if (Test-Path $logDir) { '
+                r'  Get-ChildItem "$logDir\*.log" | ForEach-Object { '
+                r'    Write-Output "=== $($_.Name) ==="; '
+                r'    Get-Content $_.FullName -Tail 200 '
+                r'  } '
+                r'} else { Write-Output "RC log dir not found: $logDir" }',
+                timeout=20,
+            )
+            if out:
+                rc_dir = debug_dir / "rc_logs"
+                rc_dir.mkdir(exist_ok=True)
+                (rc_dir / "rc_logs.txt").write_text(out)
+        except Exception as e:
+            self.log(f"  [vm-debug] WARNING: RC log collection (Windows) failed: {e}")
+
     def run_test(
         self,
         steps: list[FunctionalStep],
         name: str,
         vars: Optional[dict] = None,
+        results_dir: Optional[Path] = None,
+        vm_name: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Run a sequence of steps.
 
@@ -761,6 +922,9 @@ class FunctionalRunner:
 
         Raises ValueError if screenshot_dir was not provided (A6: mandatory for
         forensic auditing in production runs).
+
+        I2: On FAIL, if results_dir and vm_name are provided, collect VM-side
+        debug artifacts into results_dir/<vm_name>/vm-debug/.
         """
         if self.screenshot_dir is None:
             raise ValueError("screenshot_dir is required for forensic auditing")
@@ -815,6 +979,12 @@ class FunctionalRunner:
                     except Exception as rb_err:
                         _log(f"  [checkpoint] WARNING: rollback failed: {rb_err} — re-raising original failure")
                         self._cleanup_snapshots(self._checkpoints_retain)
+                        # I2: capture VM debug artifacts before returning FAIL
+                        if results_dir and vm_name:
+                            try:
+                                self._capture_vm_debug(results_dir, vm_name)
+                            except Exception as _dbg_err:
+                                self.log(f"  [vm-debug] WARNING: capture failed: {_dbg_err}")
                         return False, "\n".join(log_lines)
                     # Wait for VM to be reachable again
                     _log("  [checkpoint] Waiting for VM to come back after rollback...")
@@ -825,6 +995,12 @@ class FunctionalRunner:
                                    from_step=i, to_step=ckpt_step_num + 1,
                                    status="fatal_no_ip")
                         self._cleanup_snapshots(self._checkpoints_retain)
+                        # I2: capture VM debug artifacts before returning FAIL
+                        if results_dir and vm_name:
+                            try:
+                                self._capture_vm_debug(results_dir, vm_name)
+                            except Exception as _dbg_err:
+                                self.log(f"  [vm-debug] WARNING: capture failed: {_dbg_err}")
                         return False, "\n".join(log_lines)
                     self._emit("checkpoint_rewind", name=ckpt_name,
                                from_step=i, to_step=ckpt_step_num + 1)
@@ -834,6 +1010,12 @@ class FunctionalRunner:
                     continue
                 else:
                     self._cleanup_snapshots(self._checkpoints_retain)
+                    # I2: capture VM debug artifacts before returning FAIL
+                    if results_dir and vm_name:
+                        try:
+                            self._capture_vm_debug(results_dir, vm_name)
+                        except Exception as _dbg_err:
+                            self.log(f"  [vm-debug] WARNING: capture failed: {_dbg_err}")
                     return False, "\n".join(log_lines)
 
         _log(f"  PASS: all {len(resolved)} steps completed")
@@ -920,12 +1102,29 @@ def load_test_yaml(path, _unused=None) -> tuple[str, list[FunctionalStep], dict,
 
     The ``_unused`` positional parameter is accepted (but ignored) for
     backward-compatibility with call sites that passed extra args.
+
+    I3: After loading YAML, validate against ScenarioModel. On ValidationError,
+    print a clear message pointing at the offending key and sys.exit(4).
     """
+    import sys as _sys
     import yaml  # optional dep
 
     path = Path(path)
     with open(path) as f:
         data = yaml.safe_load(f)
+
+    # I3: pydantic schema validation — catches typos like verfy_timeout before
+    # the step parser runs. Exit 4 with a human-readable message on failure.
+    try:
+        from automation.scenario import ScenarioModel
+        ScenarioModel.model_validate(data)
+    except ImportError:
+        pass  # pydantic not installed — skip validation (shouldn't happen; it's a dep)
+    except Exception as _val_err:
+        _sys.stderr.write(
+            f"[scenario] Validation error in {path}:\n{_val_err}\n"
+        )
+        _sys.exit(4)
 
     name = data.get("name", path.stem)
     vars = data.get("vars", {})
