@@ -7,6 +7,7 @@ import time as _time
 from pathlib import Path
 
 from .config import load_config
+from .state import StateManager
 
 
 def cmd_run(args) -> int:

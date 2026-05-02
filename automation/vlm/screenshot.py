@@ -63,7 +63,7 @@ class Screenshotter:
                 continue
 
             # Downscale to 64×64 grayscale for fast comparison.
-            thumb = img.convert("L").resize((64, 64), Image.BILINEAR)
+            thumb = img.convert("L").resize((64, 64), Image.Resampling.BILINEAR)
 
             if prev_thumb is not None:
                 # Compute mean absolute difference per pixel.

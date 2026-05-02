@@ -191,7 +191,7 @@ class VLMClient:
             for attr in method_path.split("."):
                 obj = getattr(obj, attr)
             try:
-                result = obj(*args, **kwargs)
+                result = obj(*args, **kwargs)  # type: ignore[operator]  # obj is resolved via getattr chain; runtime is callable, mypy types it as object
                 # Success: promote this endpoint as primary for future calls
                 self._primary_idx = idx
                 self.client = self._clients[idx]

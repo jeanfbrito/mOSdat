@@ -354,7 +354,7 @@ class VncClient:
             except Exception:
                 pass
             raise VncClientError(
-                f"VNC authentication failed (code {result}): {reason.decode('utf-8', 'replace')}"
+                f"VNC authentication failed (code {result}): {reason.decode('utf-8', 'replace')}"  # type: ignore[attr-defined]  # reason is bytes (b"" or r.read()); mypy loses track after try/except reassignment
             )
 
         self._send(b"\x01")  # ClientInit shared=1
