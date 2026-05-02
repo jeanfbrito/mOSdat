@@ -330,72 +330,55 @@ class TestParseCoords:
 
 
 # ---------------------------------------------------------------------------
-# H2.3: probe_model
+# H2.3: list_models
 # ---------------------------------------------------------------------------
 
-class TestProbeModel:
-    def test_probe_model_returns_first_model_id(self):
-        """probe_model() returns the id of the first model on a 200 response."""
+def _ensure_requests_stub():
+    """Ensure a requests stub is in sys.modules and return (req_mod, ConnErr, TimeoutErr)."""
+    import types as _types
+    import sys as _sys
+
+    if "requests" not in _sys.modules:
+        _req = _types.ModuleType("requests")
+        ConnErr = type("ConnectionError", (OSError,), {})
+        TimeoutErr = type("Timeout", (OSError,), {})
+        _exceptions = _types.ModuleType("requests.exceptions")
+        _exceptions.ConnectionError = ConnErr
+        _exceptions.Timeout = TimeoutErr
+        _req.exceptions = _exceptions
+        _req.get = MagicMock()
+        _sys.modules["requests"] = _req
+        _sys.modules["requests.exceptions"] = _exceptions
+
+    import requests as _req_mod
+    return _req_mod, _req_mod.exceptions.ConnectionError, _req_mod.exceptions.Timeout
+
+
+class TestListModels:
+    def test_returns_all_model_ids(self):
+        """list_models() returns all model ids from /v1/models."""
         c, _ = _make_client()
-        payload = {"data": [{"id": "qwen3.6-35b-a3b-uncensored-vl"}, {"id": "other-model"}]}
+        payload = {
+            "data": [
+                {"id": "qwen3.6-35b-a3b-uncensored-vl"},
+                {"id": "carnice-27b"},
+                {"id": "other-model"},
+            ]
+        }
         fake_resp = MagicMock()
         fake_resp.json.return_value = payload
         fake_resp.raise_for_status.return_value = None
 
-        import types as _types
-        import sys as _sys
+        req_mod, _, _ = _ensure_requests_stub()
+        with patch.object(req_mod, "get", return_value=fake_resp):
+            result = c.list_models()
+        assert result == ["qwen3.6-35b-a3b-uncensored-vl", "carnice-27b", "other-model"]
 
-        # Ensure requests is stubbed
-        if "requests" not in _sys.modules:
-            _req = _types.ModuleType("requests")
-            _req.get = MagicMock(return_value=fake_resp)
-            ConnErr = type("ConnectionError", (OSError,), {})
-            TimeoutErr = type("Timeout", (OSError,), {})
-            _exceptions = _types.ModuleType("requests.exceptions")
-            _exceptions.ConnectionError = ConnErr
-            _exceptions.Timeout = TimeoutErr
-            _req.exceptions = _exceptions
-            _sys.modules["requests"] = _req
-            _sys.modules["requests.exceptions"] = _exceptions
-        else:
-            import requests as _real_req
-            with patch.object(_real_req, "get", return_value=fake_resp):
-                result = c.probe_model()
-                assert result == "qwen3.6-35b-a3b-uncensored-vl"
-            return
-
-        import requests as _req_mod
-        with patch.object(_req_mod, "get", return_value=fake_resp):
-            result = c.probe_model()
-        assert result == "qwen3.6-35b-a3b-uncensored-vl"
-
-    def test_probe_model_raises_vlm_error_on_connection_failure(self):
-        """probe_model() raises VLMError when requests raises ConnectionError."""
+    def test_raises_on_connection_error(self):
+        """list_models() raises VLMError when requests raises ConnectionError."""
         c, _ = _make_client()
-
-        import types as _types
-        import sys as _sys
-
-        if "requests" not in _sys.modules:
-            _req = _types.ModuleType("requests")
-            ConnErr = type("ConnectionError", (OSError,), {})
-            TimeoutErr = type("Timeout", (OSError,), {})
-            _exceptions = _types.ModuleType("requests.exceptions")
-            _exceptions.ConnectionError = ConnErr
-            _exceptions.Timeout = TimeoutErr
-            _req.exceptions = _exceptions
-            _req.get = MagicMock(side_effect=ConnErr("refused"))
-            _sys.modules["requests"] = _req
-            _sys.modules["requests.exceptions"] = _exceptions
-        else:
-            import requests as _real_req
-            with patch.object(_real_req, "get", side_effect=_real_req.exceptions.ConnectionError("refused")):
-                with pytest.raises(VLMError, match="connection failed"):
-                    c.probe_model()
-            return
-
-        import requests as _req_mod
-        with patch.object(_req_mod, "get", side_effect=_req_mod.exceptions.ConnectionError("refused")):
+        req_mod, ConnErr, _ = _ensure_requests_stub()
+        with patch.object(req_mod, "get", side_effect=ConnErr("refused")):
             with pytest.raises(VLMError, match="connection failed"):
-                c.probe_model()
+                c.list_models()
 

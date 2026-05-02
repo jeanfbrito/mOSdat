@@ -217,16 +217,16 @@ def cmd_functional(args) -> int:
     # H2.3: probe VLM model identity before per-VM loop
     if not getattr(args, "skip_model_check", False):
         try:
-            served_model = vlm.probe_model()
+            models = vlm.list_models()
             expected = config.vlm.expected_model
             if expected:
-                if served_model != expected:
-                    print(f"[mOSdat] ERROR: VLM model mismatch: configured {expected!r}, endpoint serving {served_model!r}")
-                    print("[mOSdat]   Check your llama-swap config or pass --skip-model-check to bypass.")
+                if expected not in models:
+                    print(f"[mOSdat] ERROR: configured VLM model {expected!r} not in endpoint catalog ({len(models)} models). Available: {models[:5]}{'...' if len(models) > 5 else ''}")
+                    print("[mOSdat]   Check llama-swap config or pass --skip-model-check to bypass.")
                     return 3
-                print(f"[mOSdat] VLM model identity OK: {served_model!r}")
+                print(f"[mOSdat] VLM model identity OK: {expected!r} present in catalog of {len(models)} models")
             else:
-                print(f"[mOSdat] VLM model probe (no enforcement): endpoint serving {served_model!r}")
+                print(f"[mOSdat] VLM model probe (no enforcement): catalog of {len(models)} models")
         except Exception as probe_err:
             print(f"[mOSdat] WARNING: VLM model probe failed: {probe_err}")
             print("[mOSdat]   Proceeding — pass --skip-model-check to suppress this warning.")

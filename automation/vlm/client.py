@@ -222,15 +222,15 @@ class VLMClient:
             "All VLM endpoints exhausted: " + ", ".join(self._urls)
         )
 
-    def probe_model(self) -> str:
-        """H2.3: Query the endpoint's /v1/models and return the first model id.
+    def list_models(self) -> list[str]:
+        """H2.3: Query the endpoint's /v1/models and return all model ids.
 
         Uses the primary URL directly via requests to avoid the chat.completions
         call shape (models.list() exists on the OpenAI SDK but returns a paged
         iterator that may not be supported by all llama-swap-compatible servers).
 
         Returns:
-            The ``id`` field of the first model entry.
+            List of ``id`` strings for every entry in the catalog.
 
         Raises:
             VLMError: On connection failure, timeout, or unexpected response shape.
@@ -249,17 +249,17 @@ class VLMClient:
             data = resp.json()
             models = data.get("data", [])
             if not models:
-                raise VLMError(f"probe_model: /v1/models returned empty list from {url}")
-            return models[0]["id"]
+                raise VLMError(f"list_models: /v1/models returned empty list from {url}")
+            return [m["id"] for m in models]
         except (
             _requests.exceptions.ConnectionError,
             _requests.exceptions.Timeout,
         ) as exc:
-            raise VLMError(f"probe_model: connection failed to {url}: {exc}") from exc
+            raise VLMError(f"list_models: connection failed to {url}: {exc}") from exc
         except VLMError:
             raise
         except Exception as exc:
-            raise VLMError(f"probe_model: unexpected error from {url}: {exc}") from exc
+            raise VLMError(f"list_models: unexpected error from {url}: {exc}") from exc
 
     def localize(
         self,
