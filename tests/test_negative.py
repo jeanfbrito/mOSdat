@@ -295,18 +295,19 @@ class TestNegativeBadPassword(unittest.TestCase):
 
 
 class TestNegativeMalformedScenario(unittest.TestCase):
-    """Scenario YAML missing 'steps' key → load_test_yaml returns empty list.
+    """Scenario YAML missing 'steps' key → load_test_yaml exits 4 (I3).
 
-    The runner must not silently report PASS on a zero-step scenario.
-    We verify that run_test with zero steps returns (True, log) but that
-    separately, a loader enforcing steps presence raises ValueError.
+    I3 added pydantic schema validation: a YAML missing the required 'steps'
+    key is now a schema error that causes sys.exit(4) rather than silently
+    returning an empty step list.
     """
 
     def test_load_yaml_missing_steps_returns_empty(self):
         fixture = FIXTURES / "broken_malformed_scenario.yaml"
-        name, steps, vars_, _ = load_test_yaml(fixture)
-        self.assertEqual(steps, [],
-                         "load_test_yaml must return empty list when 'steps' key is absent")
+        with self.assertRaises(SystemExit) as ctx:
+            load_test_yaml(fixture)
+        self.assertEqual(ctx.exception.code, 4,
+                         "load_test_yaml must exit(4) when 'steps' key is absent")
 
     def test_zero_step_scenario_is_vacuously_true_not_silently_passing(self):
         """A scenario with no steps returns True but the log records 0 steps — not a real PASS."""
