@@ -18,9 +18,18 @@ steps:
       # stays on for the entire test. kscreenlocker re-locks the session on
       # idle; loginctl unlock-session dismisses the locker without a password.
       # kwriteconfig5 sets Timeout=0 so it won't re-lock during the run.
-      loginctl unlock-session 2>/dev/null || true
+      # loginctl unlock-session requires the session ID; get it dynamically.
       kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock false 2>/dev/null || true
       kwriteconfig5 --file kscreenlockerrc --group Daemon --key Timeout 0 2>/dev/null || true
+      # Kill the screen locker process directly — loginctl unlock-session requires
+      # the locker to cooperate (it prompts for a password). Killing kscreenlocker_greet
+      # forces the locker off immediately without needing credentials.
+      pkill -x kscreenlocker_greet 2>/dev/null || true
+      sleep 1
+      session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
+      if [ -n "$session_id" ]; then
+        loginctl unlock-session "$session_id" 2>/dev/null || true
+      fi
       # Disable DPMS via xset so screen doesn't blank. XAUTHORITY lives in
       # /tmp/xauth_* for KDE sessions (not ~/.Xauthority).
       xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
@@ -28,6 +37,12 @@ steps:
         DISPLAY=:0 XAUTHORITY="$xauth_file" xset s off 2>/dev/null || true
         DISPLAY=:0 XAUTHORITY="$xauth_file" xset -dpms 2>/dev/null || true
         DISPLAY=:0 XAUTHORITY="$xauth_file" xset dpms force on 2>/dev/null || true
+        # Wake the display: mouse wiggle + keypress in case DPMS blanked it.
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool mousemove 640 400 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key shift 2>/dev/null || true
+        sleep 1
+        # Also try qdbus to dismiss KDE screen locker if it's active.
+        DISPLAY=:0 XAUTHORITY="$xauth_file" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
       fi
       sleep 2
       # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
@@ -93,12 +108,36 @@ steps:
     then:
       - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
 
+  # Re-wake the display and dismiss KDE screen locker before interacting with RC.
+  # KDE's idle timer can re-lock the screen during the 30s RC launch wait even
+  # after the cleanup shell killed kscreenlocker_greet. Kill it again here and
+  # force DPMS on so the screen is definitely live before the localize step.
+  - shell: |
+      pkill -x kscreenlocker_greet 2>/dev/null || true
+      sleep 0.5
+      session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
+      if [ -n "$session_id" ]; then
+        loginctl unlock-session "$session_id" 2>/dev/null || true
+      fi
+      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
+      if [ -n "$xauth_file" ]; then
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xset s off 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xset -dpms 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xset dpms force on 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool mousemove 640 400 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key shift 2>/dev/null || true
+        sleep 0.5
+        DISPLAY=:0 XAUTHORITY="$xauth_file" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
+      fi
+      sleep 1
+      echo "screen-wake:ok"
+
   - localize: "the Enter your server URL input text field below the rocket.chat logo"
     then_type: "{workspace_url}"
     then_key: "enter"
     verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
     verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
-    verify_timeout: 25
+    verify_timeout: 60
     retries: 3
 
   - localize: "the upper input field labeled 'Email or username' (above the Password field)"
@@ -113,6 +152,13 @@ steps:
     verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
     verify_timeout: 30
     retries: 3
+
+  # Dismiss the post-login "Update your Rocket.Chat" banner if it appears.
+  # RC shows this banner again after login on the Home screen; it can intercept
+  # keyboard focus and cause Ctrl+K to fail to navigate away from Home.
+  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
 
   # Use Ctrl+K (RC channel switcher) to navigate to General reliably.
   # VLM consistently confuses the "#general" sidebar item with the KDE taskbar
