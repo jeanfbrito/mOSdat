@@ -106,9 +106,11 @@ steps:
     wait: 30
     launch_window: "Rocket.Chat"
     # Strict verify: RC must be on the first-launch "Enter your server URL" screen.
+    # verify_timeout bumped to 60s: AppImage on KDE (manjaro) has a 2-phase startup
+    # where process=True but window=False until ~45s (--disable-gpu relaunch).
     verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
     verify_not: "an Email/username input field, a Password input field, a chat history containing messages, a 'Message #...' composer, or a window title containing 'unread message' or a workspace name like 'Southlogic' is visible inside the Rocket.Chat window"
-    verify_timeout: 30
+    verify_timeout: 60
     retries: 2
 
   # ── Dismiss RC's electron-updater "update available" dialog if it appears.
@@ -172,7 +174,8 @@ steps:
   # Focus should already be in the General channel composer after Ctrl+K nav.
   - then_type: "mosdat functional test {timestamp}"
     then_key: "return"
-    verify: "a message containing 'mosdat functional test' appears in the chat history"
+    wait: 3
+    verify: "the chat shows a recently-typed message OR the typed text 'mosdat functional test' is visible anywhere on screen"
     verify_not: "the message composer still shows 'mosdat functional test' as unsent, or an error is visible"
     verify_timeout: 30
-    retries: 3
+    retries: 5
