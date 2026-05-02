@@ -4,6 +4,11 @@ name: "Rocket.Chat smoke test (Linux KDE)"
 #   - Kills kwalletd5/kwalletd instead of gnome-keyring-daemon
 #   - Deletes ~/.local/share/kwalletd/*.kwl and *.salt instead of GNOME keyring files
 # Used by: opensuse (KDE X11), manjaro (KDE Wayland)
+#
+# IMPORTANT: xdotool is NOT installed on opensuse Leap. All input injection
+# uses VNC-native mechanisms (localize:, key:, then_type:). Shell steps are
+# SSH-only and must not rely on X11/xdotool/xdpyinfo — those calls silently
+# fail or produce exit 127. See KNOWN_ISSUES.md.
 
 steps:
   # ── Pre-test cleanup: clean-slate Rocket.Chat, dismiss stale dialogs ────
@@ -14,63 +19,20 @@ steps:
       # matches its own /proc/<pid>/cmdline and SIGKILLs the script.
       # See git log: 780481f, 3d705e4.
       #
-      # Stage 0: unlock KDE screen lock and disable autolock so the display
-      # stays on for the entire test. kscreenlocker re-locks the session on
-      # idle; loginctl unlock-session dismisses the locker without a password.
-      # kwriteconfig5 sets Timeout=0 so it won't re-lock during the run.
-      # loginctl unlock-session requires the session ID; get it dynamically.
+      # Stage 0: disable KDE autolock so the display stays on for the test.
+      # kwriteconfig5 runs over SSH without needing a display — it writes the
+      # config file directly. Autolock=false + Timeout=0 prevents re-lock.
       kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock false 2>/dev/null || true
       kwriteconfig5 --file kscreenlockerrc --group Daemon --key Timeout 0 2>/dev/null || true
-      # Unlock the KDE screen locker. Strategy: type the password into the
-      # lock screen via xdotool, then press Enter. This is more reliable than
-      # loginctl unlock-session (requires cooperative daemon) or killing
-      # kscreenlocker_greet (KDE respawns it within seconds).
-      # We need XAUTHORITY to talk to :0 — find it first.
-      xauth_file_early=$(ls /tmp/xauth_* 2>/dev/null | head -1)
-      if [ -n "$xauth_file_early" ]; then
-        # Click on the password field (center-screen), type the VM password, press Enter.
-        # KDE lock screen centers the password input at approx 50% width, 60% height.
-        screen_w=$(DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f1)
-        screen_h=$(DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f2)
-        screen_w=${screen_w:-1280}
-        screen_h=${screen_h:-800}
-        pw_x=$((screen_w / 2))
-        pw_y=$((screen_h * 60 / 100))
-        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool mousemove "$pw_x" "$pw_y" 2>/dev/null || true
-        sleep 0.2
-        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool click 1 2>/dev/null || true
-        sleep 0.3
-        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool type --clearmodifiers "{vm_password}" 2>/dev/null || true
-        sleep 0.3
-        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool key Return 2>/dev/null || true
-        sleep 2
-      fi
-      # Also try qdbus SimulateUserActivity after the unlock attempt
-      if [ -n "$xauth_file_early" ]; then
-        DISPLAY=:0 XAUTHORITY="$xauth_file_early" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
-      fi
-      # Finally kill any surviving kscreenlocker_greet (belt-and-suspenders)
+      # Kill the locker process. loginctl unlock-session is sent as belt-and-suspenders
+      # but the real unlock happens via VNC localize: password entry below.
       pkill -x kscreenlocker_greet 2>/dev/null || true
       sleep 1
       session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
       if [ -n "$session_id" ]; then
         loginctl unlock-session "$session_id" 2>/dev/null || true
       fi
-      # Disable DPMS via xset so screen doesn't blank. XAUTHORITY lives in
-      # /tmp/xauth_* for KDE sessions (not ~/.Xauthority).
-      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
-      if [ -n "$xauth_file" ]; then
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xset s off 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xset -dpms 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xset dpms force on 2>/dev/null || true
-        # Wake the display: mouse wiggle + keypress in case DPMS blanked it.
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool mousemove 640 400 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key shift 2>/dev/null || true
-        sleep 1
-        # Also try qdbus to dismiss KDE screen locker if it's active.
-        DISPLAY=:0 XAUTHORITY="$xauth_file" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
-      fi
-      sleep 2
+      sleep 1
       # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
       # children. Loop until pgrep returns nothing or we've waited 8s.
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
@@ -111,6 +73,19 @@ steps:
       fi
       echo cleanup:ok
 
+  # ── Unlock KDE screen locker via VNC if it is showing ───────────────────
+  # xdotool is NOT installed on opensuse Leap. Use the VNC-native localize:
+  # mechanism to click the password field and type the VM password.
+  # if_visible: guards this so it is skipped when the desktop is already unlocked.
+  - if_visible: "a KDE screen lock / login screen showing a user avatar, a clock, and a Password input field — the desktop wallpaper is visible but no application windows are shown"
+    then:
+      - localize: "the Password input field on the KDE lock screen (below the user avatar and name)"
+        then_type: "{vm_password}"
+        then_key: "return"
+        verify: "the KDE desktop with a taskbar is visible and the lock screen password field is gone"
+        verify_timeout: 10
+        retries: 2
+
   # Reset desktop to a known state — Escape collapses any leftover overview
   # or menu from a previous run.
   - key: "escape"
@@ -134,44 +109,16 @@ steps:
     then:
       - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
 
-  # Re-wake the display and dismiss KDE screen locker before interacting with RC.
-  # KDE's idle timer can re-lock the screen during the 30s RC launch wait even
-  # after the cleanup shell killed kscreenlocker_greet. Kill it again here and
-  # force DPMS on so the screen is definitely live before the localize step.
-  - shell: |
-      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
-      if [ -n "$xauth_file" ]; then
-        # If lock screen is up, type password to dismiss it
-        screen_w=$(DISPLAY=:0 XAUTHORITY="$xauth_file" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f1)
-        screen_h=$(DISPLAY=:0 XAUTHORITY="$xauth_file" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f2)
-        screen_w=${screen_w:-1280}
-        screen_h=${screen_h:-800}
-        pw_x=$((screen_w / 2))
-        pw_y=$((screen_h * 60 / 100))
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool mousemove "$pw_x" "$pw_y" 2>/dev/null || true
-        sleep 0.2
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool click 1 2>/dev/null || true
-        sleep 0.3
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool type --clearmodifiers "{vm_password}" 2>/dev/null || true
-        sleep 0.3
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Return 2>/dev/null || true
-        sleep 1.5
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xset s off 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xset -dpms 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xset dpms force on 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool mousemove 640 400 2>/dev/null || true
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key shift 2>/dev/null || true
-        sleep 0.5
-        DISPLAY=:0 XAUTHORITY="$xauth_file" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
-      fi
-      pkill -x kscreenlocker_greet 2>/dev/null || true
-      sleep 0.5
-      session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
-      if [ -n "$session_id" ]; then
-        loginctl unlock-session "$session_id" 2>/dev/null || true
-      fi
-      sleep 0.5
-      echo "screen-wake:ok"
+  # ── Re-check for KDE lock screen after the 30s RC launch wait ───────────
+  # KDE's idle timer can re-lock during the launch wait even after cleanup.
+  - if_visible: "a KDE screen lock / login screen showing a user avatar, a clock, and a Password input field — the desktop wallpaper is visible but no application windows are shown"
+    then:
+      - localize: "the Password input field on the KDE lock screen (below the user avatar and name)"
+        then_type: "{vm_password}"
+        then_key: "return"
+        verify: "the KDE desktop or the Rocket.Chat window is visible and the lock screen password field is gone"
+        verify_timeout: 10
+        retries: 2
 
   - localize: "the Enter your server URL input text field below the rocket.chat logo"
     then_type: "{workspace_url}"
@@ -204,40 +151,20 @@ steps:
   # Use Ctrl+K (RC channel switcher) to navigate to General reliably.
   # VLM consistently confuses the "#general" sidebar item with the KDE taskbar
   # on opensuse (both at the lower portion of the screen). Keyboard shortcut
-  # bypasses localization entirely.
-  - shell: |
-      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
-      if [ -n "$xauth_file" ]; then
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key ctrl+k
-        sleep 0.5
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool type --clearmodifiers "general"
-        sleep 0.5
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Return
-        echo "navigated to general via ctrl+k"
-      else
-        echo "no xauth file found"
-      fi
+  # bypasses localization entirely. Injected via VNC key: step — xdotool is
+  # not installed on opensuse Leap.
+  - key: "ctrl+k"
+    wait: 1
+  - then_type: "general"
+    then_key: "return"
     verify: "the General channel is open and shows real text messages in the main chat area — NOT the Home screen, NOT skeleton/loading placeholders"
     verify_timeout: 60
     retries: 3
 
-  # After Ctrl+K navigation, focus is in the General channel. Use xdotool to
-  # click the composer area and type — avoids VLM confusing the taskbar for
-  # the message input field on KDE (both near bottom of screen).
-  - shell: |
-      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
-      if [ -n "$xauth_file" ]; then
-        # Click the RC window to ensure focus, then use Tab to reach composer
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Escape
-        sleep 0.3
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool type --clearmodifiers "mosdat functional test {timestamp}"
-        sleep 0.3
-        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Return
-        echo "message sent via xdotool"
-      else
-        echo "no xauth file found"
-        exit 1
-      fi
+  # Type the test message via VNC then_type (no xdotool needed).
+  # Focus should already be in the General channel composer after Ctrl+K nav.
+  - then_type: "mosdat functional test {timestamp}"
+    then_key: "return"
     verify: "a message containing 'mosdat functional test' appears in the chat history"
     verify_not: "the message composer still shows 'mosdat functional test' as unsent, or an error is visible"
     verify_timeout: 30
