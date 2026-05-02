@@ -22,12 +22,12 @@ steps:
       Write-Output 'cleanup:ok'
 
   - launch: "{app_path}"
-    wait: 10
+    wait: 20
     focus: "Rocket.Chat"
     # Strict verify: RC must actually be the foreground app, not just "open".
     # "Open" is true even when RC is buried behind Edge or a Microsoft popup.
     verify: "the Rocket.Chat application is the foreground window taking most of the screen, with the red rocket.chat logo clearly visible in the center of the window"
-    verify_timeout: 20
+    verify_timeout: 30
     retries: 2
 
   # ── Dismiss RC's electron-updater "update available" dialog if it appears.

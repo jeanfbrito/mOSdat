@@ -114,12 +114,20 @@ Write-Output "focus:ok"
         The name is the basename of the executable (or any substring).
         """
         if self.is_windows:
-            result = self.ssh.run(
-                f"powershell.exe -Command \"Get-Process -ErrorAction SilentlyContinue | "
-                f"Where-Object {{$_.Name -like '*{name}*'}} | Measure-Object | "
-                f"Select-Object -ExpandProperty Count\"",
-                timeout=10,
+            # Get-Process returns Name WITHOUT the .exe extension, so strip it
+            # before matching. "Rocket.Chat.exe" → "Rocket.Chat" else the
+            # wildcard *Rocket.Chat.exe* never matches.
+            # Use _ps_encoded so the Windows SSH server shell never touches $_ —
+            # a raw `powershell.exe -Command "... | Where-Object {$_.Name ...}"``
+            # sent over SSH has $_ stripped by the Windows OpenSSH default shell
+            # before PowerShell ever sees it.
+            search_name = name[:-4] if name.lower().endswith(".exe") else name
+            ps = (
+                f"Get-Process -ErrorAction SilentlyContinue | "
+                f"Where-Object {{$_.Name -like '*{search_name}*'}} | "
+                f"Measure-Object | Select-Object -ExpandProperty Count"
             )
+            result = self.ssh.run(_ps_encoded(ps), timeout=10)
             try:
                 return int(result.stdout.strip()) > 0
             except (ValueError, AttributeError):

@@ -241,7 +241,15 @@ class FunctionalRunner:
         if step.launch:
             self.log(f"  Step {step_num}: launch '{step.launch[:80]}'")
             import os as _os
-            app_basename = _os.path.basename(step.launch.split()[0])
+            import ntpath as _ntpath
+            # Use ntpath.basename for Windows paths (backslash separators) so
+            # that os.path.basename on Linux doesn't return the full path when
+            # the launch string uses backslashes (e.g. C:\...\Rocket.Chat.exe).
+            _launch_first = step.launch.split()[0]
+            if self.injector.is_windows:
+                app_basename = _ntpath.basename(_launch_first)
+            else:
+                app_basename = _os.path.basename(_launch_first)
             self._emit("launch", step_num=step_num, app=step.launch[:80], args="")
             self.injector.launch(step.launch)
 
