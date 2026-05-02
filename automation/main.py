@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import signal
 import sys
 import urllib.request
 import urllib.error
@@ -163,6 +164,14 @@ def _warmup_vlm(vlm) -> bool:
         return False
 
 
+class RuntimeWatchdogTimeout(Exception):
+    pass
+
+
+def _watchdog_handler(signum, frame):
+    raise RuntimeWatchdogTimeout()
+
+
 def cmd_functional(args) -> int:
     if getattr(args, "record", False):
         return cmd_record(args)
@@ -266,104 +275,114 @@ def cmd_functional(args) -> int:
     from .proxmox.api import ProxmoxAPI
     proxmox = ProxmoxAPI(config.proxmox)
 
+    if args.timeout > 0:
+        signal.signal(signal.SIGALRM, _watchdog_handler)
+        signal.alarm(args.timeout)
     overall = True
-    for vm in vms:
-        print(f"\n[mOSdat] --- {vm.name} ---")
-        if args.screenshots:
-            screenshot_dir = P(args.screenshots) / vm.name
-        elif args.save_screenshots:
-            ts = dt.now().strftime("%Y-%m-%d_%H%M%S")
-            screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
-        else:
-            # A6: screenshot_dir is mandatory; default to a timestamped results dir.
-            ts = dt.now().strftime("%Y-%m-%d_%H%M%S")
-            screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
+    try:
+        for vm in vms:
+            print(f"\n[mOSdat] --- {vm.name} ---")
+            if args.screenshots:
+                screenshot_dir = P(args.screenshots) / vm.name
+            elif args.save_screenshots:
+                ts = dt.now().strftime("%Y-%m-%d_%H%M%S")
+                screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
+            else:
+                # A6: screenshot_dir is mandatory; default to a timestamped results dir.
+                ts = dt.now().strftime("%Y-%m-%d_%H%M%S")
+                screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
 
-        from .transport.ssh import SSHClient
-        from .transport.vnc import VncClient
-        ssh = SSHClient(vm.ip, vm.user)
+            from .transport.ssh import SSHClient
+            from .transport.vnc import VncClient
+            ssh = SSHClient(vm.ip, vm.user)
 
-        # Inject per-VM app_path (first package with a non-empty app_path)
-        vm_vars = dict(vars_)
-        for pkg in vm.packages:
-            if pkg.app_path:
-                vm_vars.setdefault("app_path", pkg.app_path)
-                # Resolve {file} in app_path by globbing the VM's temp dir.
-                # AppImage packages use app_path="/tmp/{file}" where {file} is
-                # the actual filename matched by file_glob. Glob via SSH so the
-                # runner gets a concrete path (e.g. /tmp/rocketchat-4.x-linux-x86_64.AppImage).
-                if "{file}" in vm_vars.get("app_path", "") and pkg.file_glob:
-                    try:
-                        temp_dir = vm.resolved_temp_dir
-                        result = ssh.run(f"ls {temp_dir}/{pkg.file_glob} 2>/dev/null | head -1")
-                        resolved_file = result.stdout.strip()
-                        if resolved_file:
-                            import os as _os
-                            vm_vars["app_path"] = vm_vars["app_path"].replace(
-                                "{file}", _os.path.basename(resolved_file)
-                            )
-                    except Exception:
-                        pass  # leave {file} unresolved; launch step will fail with a clear message
-                break
+            # Inject per-VM app_path (first package with a non-empty app_path)
+            vm_vars = dict(vars_)
+            for pkg in vm.packages:
+                if pkg.app_path:
+                    vm_vars.setdefault("app_path", pkg.app_path)
+                    # Resolve {file} in app_path by globbing the VM's temp dir.
+                    # AppImage packages use app_path="/tmp/{file}" where {file} is
+                    # the actual filename matched by file_glob. Glob via SSH so the
+                    # runner gets a concrete path (e.g. /tmp/rocketchat-4.x-linux-x86_64.AppImage).
+                    if "{file}" in vm_vars.get("app_path", "") and pkg.file_glob:
+                        try:
+                            temp_dir = vm.resolved_temp_dir
+                            result = ssh.run(f"ls {temp_dir}/{pkg.file_glob} 2>/dev/null | head -1")
+                            resolved_file = result.stdout.strip()
+                            if resolved_file:
+                                import os as _os
+                                vm_vars["app_path"] = vm_vars["app_path"].replace(
+                                    "{file}", _os.path.basename(resolved_file)
+                                )
+                        except Exception:
+                            pass  # leave {file} unresolved; launch step will fail with a clear message
+                    break
 
-        with VncClient(proxmox, vmid=vm.vmid) as vnc:
-            screenshotter = Screenshotter(vnc)
-            injector = InputInjector(vnc, ssh, vm.is_windows)
-            # C2: vm_ops needed only when checkpoints are enabled
-            from .proxmox.vm import VMOperations
-            _vm_ops_for_ckpt = None
-            if checkpoint_config.get("enabled"):
-                _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
-            runner = FunctionalRunner(
-                vlm=vlm,
-                screenshotter=screenshotter,
-                injector=injector,
-                screenshot_dir=screenshot_dir,
-                log_fn=lambda msg: print(f"[mOSdat] {msg}"),
-                popup_sweep=getattr(args, "popup_sweep", False),
-                checkpoint_config=checkpoint_config,
-                vm_ops=_vm_ops_for_ckpt,
-                vmid=vm.vmid if checkpoint_config.get("enabled") else None,
-            )
+            with VncClient(proxmox, vmid=vm.vmid) as vnc:
+                screenshotter = Screenshotter(vnc)
+                injector = InputInjector(vnc, ssh, vm.is_windows)
+                # C2: vm_ops needed only when checkpoints are enabled
+                from .proxmox.vm import VMOperations
+                _vm_ops_for_ckpt = None
+                if checkpoint_config.get("enabled"):
+                    _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
+                runner = FunctionalRunner(
+                    vlm=vlm,
+                    screenshotter=screenshotter,
+                    injector=injector,
+                    screenshot_dir=screenshot_dir,
+                    log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                    popup_sweep=getattr(args, "popup_sweep", False),
+                    checkpoint_config=checkpoint_config,
+                    vm_ops=_vm_ops_for_ckpt,
+                    vmid=vm.vmid if checkpoint_config.get("enabled") else None,
+                )
 
-            # B7: VM health probe before scenario start
-            if not getattr(args, "skip_health_probe", False):
-                print("[mOSdat]   Probing VM health...")
-                healthy = runner._probe_vm_health()
-                if not healthy:
-                    print("[mOSdat]   WARNING: VM appears frozen — attempting reset...")
-                    from .proxmox.vm import VMOperations
-                    vm_ops = VMOperations(proxmox, vm, config)
-                    vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
-                    # Wait for VM to come back
-                    import time as _time
-                    _time.sleep(15)
-                    healthy2 = runner._probe_vm_health()
-                    if not healthy2:
-                        runner._emit("vm_health_failed")
-                        print(f"[mOSdat] ERROR: VM still frozen after reset — aborting scenario for {vm.name}")
-                        overall = False
-                        continue
+                # B7: VM health probe before scenario start
+                if not getattr(args, "skip_health_probe", False):
+                    print("[mOSdat]   Probing VM health...")
+                    healthy = runner._probe_vm_health()
+                    if not healthy:
+                        print("[mOSdat]   WARNING: VM appears frozen — attempting reset...")
+                        from .proxmox.vm import VMOperations
+                        vm_ops = VMOperations(proxmox, vm, config)
+                        vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
+                        # Wait for VM to come back
+                        import time as _time
+                        _time.sleep(15)
+                        healthy2 = runner._probe_vm_health()
+                        if not healthy2:
+                            runner._emit("vm_health_failed")
+                            print(f"[mOSdat] ERROR: VM still frozen after reset — aborting scenario for {vm.name}")
+                            overall = False
+                            continue
 
-            passed, log = runner.run_test(steps, name, vars=vm_vars)
-            # B4: partial run note
-            if partial_run and until_step < total_steps:
-                remaining = total_steps - until_step
-                print(f"[mOSdat]   Halted at step {until_step}; {remaining} remaining steps NOT executed. "
-                      f"VM left in current state for inspection. SSH: {vm.ip}")
+                passed, log = runner.run_test(steps, name, vars=vm_vars)
+                # B4: partial run note
+                if partial_run and until_step < total_steps:
+                    remaining = total_steps - until_step
+                    print(f"[mOSdat]   Halted at step {until_step}; {remaining} remaining steps NOT executed. "
+                          f"VM left in current state for inspection. SSH: {vm.ip}")
 
-            # B1: Generate HTML report for this run
-            try:
-                from .reporting.report import generate_html_report
-                report_path = generate_html_report(screenshot_dir)
-                print(f"[mOSdat] Report: file://{report_path.absolute()}")
-            except Exception as e:
-                print(f"[mOSdat] WARN: report generation failed: {e}")
+                # B1: Generate HTML report for this run
+                try:
+                    from .reporting.report import generate_html_report
+                    report_path = generate_html_report(screenshot_dir)
+                    print(f"[mOSdat] Report: file://{report_path.absolute()}")
+                except Exception as e:
+                    print(f"[mOSdat] WARN: report generation failed: {e}")
 
-        status = "PASS" if passed else "FAIL"
-        print(f"[mOSdat]   Result: {status}")
-        if not passed:
-            overall = False
+            status = "PASS" if passed else "FAIL"
+            print(f"[mOSdat]   Result: {status}")
+            if not passed:
+                overall = False
+
+    except RuntimeWatchdogTimeout:
+        print(f"[mOSdat] WATCHDOG: scenario exceeded {args.timeout}s — terminating")
+        return 5
+    finally:
+        signal.alarm(0)
 
     # H2.1: notify on failure when NOTIFY_WEBHOOK is configured
     if not overall and os.environ.get("NOTIFY_WEBHOOK"):
@@ -511,6 +530,9 @@ def main() -> int:
                       help="Skip workspace URL preflight (faster startup; scenario will burn VLM budget if server is down)")
     fn_p.add_argument("--skip-model-check", action="store_true", dest="skip_model_check",
                       help="H2.3: skip VLM model identity check (bypass expected_model enforcement)")
+    fn_p.add_argument("--timeout", type=int, default=900, metavar="SECONDS",
+                      help="I8: wall-clock watchdog — abort with exit 5 if scenario exceeds N seconds "
+                           "(default: 900; 0 = disabled; POSIX/Linux only — uses SIGALRM)")
     fn_p.add_argument("--record", action="store_true",
                       help="C3: interactive authoring mode — open VNC viewer, capture clicks, generate YAML")
     fn_p.add_argument("--output", type=str, default=None,
@@ -539,6 +561,15 @@ def main() -> int:
     dash_p.add_argument("--output", type=Path, default=None,
                         help="Output HTML path. Default: <root>/functional/dashboard.html")
 
+    # mosdat live  (live event-stream dashboard — appended after L4 visual block)
+    live_p = sub.add_parser("live", help="Live event-stream dashboard — stream smoke test events in real time")
+    live_p.add_argument("--port", type=int, default=8080,
+                        help="HTTP port to listen on (default: 8080)")
+    live_p.add_argument("--results", type=Path, default=Path("results"), metavar="DIR",
+                        help="Results root directory to watch (default: results/)")
+    live_p.add_argument("--refresh-ms", type=int, default=500, dest="refresh_ms",
+                        help="Poll interval in ms (default: 500)")
+
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
     visual_group = visual_p.add_mutually_exclusive_group(required=True)
@@ -556,6 +587,12 @@ def main() -> int:
     if not args.command:
         parser.print_help()
         return 0
+
+    def cmd_live(args) -> int:
+        from .live_dashboard import cli as live_cli
+        argv = ["--port", str(args.port), "--results", str(args.results),
+                "--refresh-ms", str(args.refresh_ms)]
+        return live_cli(argv)
 
     def cmd_visual(args) -> int:
         from .visual import cli as visual_cli
@@ -583,6 +620,7 @@ def main() -> int:
         "validate": cmd_validate,
         "list-vms": cmd_list_vms,
         "report": cmd_report,
+        "live": cmd_live,
         "visual": cmd_visual,
         "dashboard": cmd_dashboard,
     }
