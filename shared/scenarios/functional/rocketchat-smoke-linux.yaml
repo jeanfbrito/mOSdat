@@ -37,7 +37,10 @@ steps:
       # empty on next desktop login or libsecret access.
       pkill -9 gnome-keyring-d 2>/dev/null || true
       sleep 1
+      # Delete ALL keyring files — including 'default' (no .keyring extension).
       rm -f "$HOME"/.local/share/keyrings/*.keyring
+      rm -f "$HOME"/.local/share/keyrings/default
+      rm -f "$HOME"/.local/share/keyrings/login.keyring
       rm -rf "$HOME"/.cache/keyring-* 2>/dev/null || true
       # Stage 3: nuke Electron userData — release, dev build, Electron suffix.
       rm -rf "$HOME/.config/Rocket.Chat"
@@ -88,7 +91,7 @@ steps:
     # next step will happily type the server URL as a chat message into the
     # composer of a previously-logged-in workspace.
     verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
-    verify_not: "an Email/username input field, a Password input field, a chat history containing messages, or a 'Message #...' composer is visible inside the Rocket.Chat window"
+    verify_not: "an Email/username input field, a Password input field, a chat history containing messages, a 'Message #...' composer, or a window title containing 'unread message' or a workspace name like 'Southlogic' is visible inside the Rocket.Chat window"
     verify_timeout: 20
     retries: 2
 
