@@ -1,0 +1,18 @@
+usage: mosdat run [-h] [--resume] [--skip-build] [--only VM]
+                  [--results-dir RESULTS_DIR] [--allow-incomplete]
+                  config
+
+positional arguments:
+  config                Path to mosdat config (TOML)
+
+options:
+  -h, --help            show this help message and exit
+  --resume              Resume from last checkpoint
+  --skip-build          Skip build phase
+  --only VM             Test only one VM
+  --results-dir RESULTS_DIR
+                        Custom results directory
+  --allow-incomplete    Skip completion validation (dev runs with partial
+                        matrix)
+
+Example: mosdat run examples/rocketchat.toml --only fedora42

@@ -1,0 +1,14 @@
+usage: mosdat visual [-h] (--capture SCENARIO_DIR | --check SCENARIO_DIR)
+                     [--refs-dir DIR] [--threshold T]
+
+options:
+  -h, --help            show this help message and exit
+  --capture SCENARIO_DIR
+                        Capture *.png files in SCENARIO_DIR as references
+                        (sorted, 0-indexed)
+  --check SCENARIO_DIR  Check *.png files in SCENARIO_DIR against stored
+                        references
+  --refs-dir DIR        Root dir for reference images (default:
+                        shared/references/)
+  --threshold T         SSIM threshold [0,1] below which a check fails
+                        (default: 0.95)

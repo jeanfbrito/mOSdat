@@ -1,0 +1,7 @@
+usage: mosdat dashboard [-h] [--root ROOT] [--output OUTPUT]
+
+options:
+  -h, --help       show this help message and exit
+  --root ROOT      Root results directory (must contain functional/ subdir).
+                   Default: results/
+  --output OUTPUT  Output HTML path. Default: <root>/functional/dashboard.html

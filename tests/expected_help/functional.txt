@@ -1,0 +1,44 @@
+usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
+                         [--verify-model MODEL] [--save-screenshots]
+                         [--screenshots DIR] [--popup-sweep] [--from-step N]
+                         [--until-step N] [--skip-health-probe]
+                         [--no-checkpoints] [--skip-warmup]
+                         [--skip-workspace-check] [--skip-model-check]
+                         [--timeout SECONDS] [--record] [--output OUTPUT]
+                         config
+
+positional arguments:
+  config                Path to mosdat config (TOML)
+
+options:
+  -h, --help            show this help message and exit
+  --vms VMS             Comma-separated VM names
+  --test NAME           Test file name without .yaml (default: rocketchat-
+                        smoke)
+  --model MODEL         Override VLM for element localization (default:
+                        holo2-4b)
+  --verify-model MODEL  Override VLM for yes/no state verification (default:
+                        same as --model; recommend qwen3-vl-abliterated —
+                        localization models hallucinate on yes/no)
+  --save-screenshots    Save screenshots on failure to results dir
+  --screenshots DIR     Save all step screenshots to this directory
+  --popup-sweep         B3: sweep modal popups/dialogs before each localize
+                        step
+  --from-step N         B4: start from step N (1-indexed, default: 1)
+  --until-step N        B4: stop after step N (inclusive, default: last step)
+  --skip-health-probe   B7: skip VM health probe before scenario start
+  --no-checkpoints      C2: disable Proxmox snapshot checkpoints even if YAML
+                        enables them
+  --skip-warmup         Skip VLM warmup phase (faster startup; first scenario
+                        step may be slow if endpoint cold)
+  --skip-workspace-check
+                        Skip workspace URL preflight (faster startup; scenario
+                        will burn VLM budget if server is down)
+  --skip-model-check    H2.3: skip VLM model identity check (bypass
+                        expected_model enforcement)
+  --timeout SECONDS     I8: wall-clock watchdog — abort with exit 5 if
+                        scenario exceeds N seconds (default: 900; 0 =
+                        disabled; POSIX/Linux only — uses SIGALRM)
+  --record              C3: interactive authoring mode — open VNC viewer,
+                        capture clicks, generate YAML
+  --output OUTPUT       (--record) path to write the generated YAML

@@ -1,0 +1,7 @@
+usage: mosdat validate [-h] config
+
+positional arguments:
+  config      Path to mosdat config (TOML)
+
+options:
+  -h, --help  show this help message and exit

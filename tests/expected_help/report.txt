@@ -1,0 +1,16 @@
+usage: mosdat report [-h] [--config CONFIG] [--flakes] [--output OUTPUT]
+                     [--root ROOT]
+                     results_dir
+
+positional arguments:
+  results_dir      Results directory with state.json (or root for --flakes)
+
+options:
+  -h, --help       show this help message and exit
+  --config CONFIG  Path to mosdat config (TOML)
+  --flakes         B5: Generate flakiness leaderboard from functional runs
+  --output OUTPUT  Output path for flakiness leaderboard (default:
+                   <results_dir>/functional/flake-leaderboard.md, or - for
+                   stdout)
+  --root ROOT      Root path for flakiness leaderboard search (defaults to
+                   results_dir)

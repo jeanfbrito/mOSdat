@@ -1,0 +1,11 @@
+usage: mosdat test [-h] --vms VMS [--results-dir RESULTS_DIR] config package
+
+positional arguments:
+  config                Path to mosdat config (TOML)
+  package               Path to .deb/.rpm/.AppImage/.snap
+
+options:
+  -h, --help            show this help message and exit
+  --vms VMS             Comma-separated VM names
+  --results-dir RESULTS_DIR
+                        Custom results directory
