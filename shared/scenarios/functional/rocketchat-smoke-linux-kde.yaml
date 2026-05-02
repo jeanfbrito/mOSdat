@@ -1,0 +1,157 @@
+name: "Rocket.Chat smoke test (Linux KDE)"
+# KDE variant of rocketchat-smoke-linux.yaml.
+# Differences from the GNOME variant:
+#   - Kills kwalletd5/kwalletd instead of gnome-keyring-daemon
+#   - Deletes ~/.local/share/kwalletd/*.kwl and *.salt instead of GNOME keyring files
+# Used by: opensuse (KDE X11), manjaro (KDE Wayland)
+
+steps:
+  # ── Pre-test cleanup: clean-slate Rocket.Chat, dismiss stale dialogs ────
+  - shell: |
+      # IMPORTANT: every pkill/pgrep below uses `-x` (exact process name).
+      # Do NOT use `-f` (cmdline regex) — the bash script body contains the
+      # literal strings "rocketchat-desktop", etc., so `pkill -f <those>`
+      # matches its own /proc/<pid>/cmdline and SIGKILLs the script.
+      # See git log: 780481f, 3d705e4.
+      #
+      # Stage 0: unlock KDE screen lock and disable autolock so the display
+      # stays on for the entire test. kscreenlocker re-locks the session on
+      # idle; loginctl unlock-session dismisses the locker without a password.
+      # kwriteconfig5 sets Timeout=0 so it won't re-lock during the run.
+      loginctl unlock-session 2>/dev/null || true
+      kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock false 2>/dev/null || true
+      kwriteconfig5 --file kscreenlockerrc --group Daemon --key Timeout 0 2>/dev/null || true
+      # Disable DPMS via xset so screen doesn't blank. XAUTHORITY lives in
+      # /tmp/xauth_* for KDE sessions (not ~/.Xauthority).
+      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
+      if [ -n "$xauth_file" ]; then
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xset s off 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xset -dpms 2>/dev/null || true
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xset dpms force on 2>/dev/null || true
+      fi
+      sleep 2
+      # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
+      # children. Loop until pgrep returns nothing or we've waited 8s.
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      pkill -x update-manager 2>/dev/null || true
+      pkill -x update-notifier 2>/dev/null || true
+      for i in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      # Stage 2: nuke KWallet daemon FIRST so it can't write back stored tokens
+      # while we delete files. RC stores login tokens in libsecret via keytar;
+      # KWallet is the KDE secrets backend. Daemon will respawn empty on next
+      # libsecret access.
+      pkill -9 kwalletd5 2>/dev/null || true
+      pkill -9 kwalletd 2>/dev/null || true
+      sleep 1
+      # Delete KWallet wallet files — kwl (wallet data) and salt files.
+      rm -f "$HOME"/.local/share/kwalletd/*.kwl
+      rm -f "$HOME"/.local/share/kwalletd/*.salt
+      # Stage 3: nuke Electron userData — release, dev build, Electron suffix.
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.config/Rocket.Chat Electron"
+      # Stage 4: Chromium cache + IndexedDB + alt-share-path caches (Electron
+      # writes some data here, not just .config/).
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
+      # Stage 5: confirm clean. Fail loudly if anything survived so the test
+      # halts here instead of running on a half-stale session.
+      remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
+      if [ -n "$remaining" ]; then
+        echo "cleanup:FAILED — $remaining survived"
+        exit 1
+      fi
+      echo cleanup:ok
+
+  # Reset desktop to a known state — Escape collapses any leftover overview
+  # or menu from a previous run.
+  - key: "escape"
+    wait: 1
+
+  # Launch Rocket.Chat. The Linux branch of `injector.launch` runs the
+  # binary with env inherited from the user's graphical session
+  # (plasmashell / kwin), so Electron picks up DISPLAY / XAUTHORITY /
+  # DBUS from the active session.
+  - launch: "{app_path} --no-sandbox"
+    wait: 30
+    launch_window: "Rocket.Chat"
+    # Strict verify: RC must be on the first-launch "Enter your server URL" screen.
+    verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
+    verify_not: "an Email/username input field, a Password input field, a chat history containing messages, a 'Message #...' composer, or a window title containing 'unread message' or a workspace name like 'Southlogic' is visible inside the Rocket.Chat window"
+    verify_timeout: 20
+    retries: 2
+
+  # ── Dismiss RC's electron-updater "update available" dialog if it appears.
+  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+
+  - localize: "the Enter your server URL input text field below the rocket.chat logo"
+    then_type: "{workspace_url}"
+    then_key: "enter"
+    verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
+    verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
+    verify_timeout: 25
+    retries: 3
+
+  - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+    then_type: "{test_user}"
+    verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
+    retries: 3
+
+  - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+    then_type: "{test_password}"
+    then_key: "enter"
+    verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+    verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
+    verify_timeout: 30
+    retries: 3
+
+  # Use Ctrl+K (RC channel switcher) to navigate to General reliably.
+  # VLM consistently confuses the "#general" sidebar item with the KDE taskbar
+  # on opensuse (both at the lower portion of the screen). Keyboard shortcut
+  # bypasses localization entirely.
+  - shell: |
+      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
+      if [ -n "$xauth_file" ]; then
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key ctrl+k
+        sleep 0.5
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool type --clearmodifiers "general"
+        sleep 0.5
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Return
+        echo "navigated to general via ctrl+k"
+      else
+        echo "no xauth file found"
+      fi
+    verify: "the General channel is open and shows real text messages in the main chat area — NOT the Home screen, NOT skeleton/loading placeholders"
+    verify_timeout: 60
+    retries: 3
+
+  # After Ctrl+K navigation, focus is in the General channel. Use xdotool to
+  # click the composer area and type — avoids VLM confusing the taskbar for
+  # the message input field on KDE (both near bottom of screen).
+  - shell: |
+      xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
+      if [ -n "$xauth_file" ]; then
+        # Click the RC window to ensure focus, then use Tab to reach composer
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Escape
+        sleep 0.3
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool type --clearmodifiers "mosdat functional test {timestamp}"
+        sleep 0.3
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Return
+        echo "message sent via xdotool"
+      else
+        echo "no xauth file found"
+        exit 1
+      fi
+    verify: "a message containing 'mosdat functional test' appears in the chat history"
+    verify_not: "the message composer still shows 'mosdat functional test' as unsent, or an error is visible"
+    verify_timeout: 30
+    retries: 3
