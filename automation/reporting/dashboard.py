@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import warnings
@@ -181,50 +182,59 @@ def detect_regressions(
     aggregates: dict[str, Any],
     recent_days: int = 7,
     baseline_days: int = 30,
+    threshold_multiplier: float = 1.5,
+    min_pass_rate: float = 0.85,
 ) -> list[dict[str, Any]]:
-    """Flag steps whose pass rate dropped >10 pp in last recent_days vs prior baseline_days.
+    """Flag performance regressions across three dimensions:
+
+    1. Step pass-rate drop: pass rate dropped >10 pp in last recent_days vs
+       prior baseline_days.
+    2. Step duration regression: mean step duration over recent_days exceeds
+       baseline mean * threshold_multiplier.
+    3. VM pass-rate below floor: any VM's recent mean pass rate is below
+       min_pass_rate.
 
     Returns list of dicts with keys:
-        step, recent_rate, baseline_rate, drop_pp, recent_runs, baseline_runs
+        kind            — "pass_rate_drop" | "duration_regression" | "vm_pass_rate"
+        step            — step label (empty string for vm_pass_rate kind)
+        vm              — VM name (empty string for step-level kinds)
+        recent_rate     — recent pass rate (pass_rate_drop / vm_pass_rate kinds)
+        baseline_rate   — baseline pass rate (pass_rate_drop kind)
+        drop_pp         — drop in percentage points (pass_rate_drop kind)
+        recent_mean_s   — recent mean duration in seconds (duration_regression kind)
+        baseline_mean_s — baseline mean duration in seconds (duration_regression kind)
+        duration_ratio  — recent_mean_s / baseline_mean_s (duration_regression kind)
+        recent_runs     — number of runs in recent window
+        baseline_runs   — number of runs in baseline window
     """
     per_step = aggregates.get("per_step", {})
+    per_vm = aggregates.get("per_vm", {})
     now_ts = datetime.now(tz=timezone.utc).timestamp()
     recent_cutoff = now_ts - recent_days * 86400
     baseline_cutoff = now_ts - baseline_days * 86400
 
     # Build run_id -> run_ts lookup from per_vm data
     run_ts_map: dict[str, float] = {}
-    for vm_data in aggregates.get("per_vm", {}).values():
+    for vm_data in per_vm.values():
         for run_id, info in vm_data.items():
             if run_id not in run_ts_map:
                 ts = _parse_run_ts(info.get("run_ts", run_id))
                 if ts is not None:
                     run_ts_map[run_id] = ts
 
-    regressions = []
+    regressions: list[dict[str, Any]] = []
+
+    # --- 1. Step pass-rate drops (aggregate over all VMs) ---
     for step, stats in per_step.items():
         run_ids = stats.get("run_ids", [])
-
-        # Build per-run pass/fail from run_ids list (parallel to attempts list)
-        # We need pass/fail per occurrence, not just totals.
-        # Re-derive: passed + failed = total occurrences; run_ids has one entry per step_end
         total_occ = len(run_ids)
         if total_occ == 0:
             continue
 
-        # We don't have per-occurrence pass/fail stored separately,
-        # so approximate: distribute passes proportionally across run_ids by order.
-        # Better: store per-run data. For now compute per-run aggregate pass rate
-        # by grouping run_ids and using the proportion.
-        # Since we stored run_id per step_end event, count pass/fail directly
-        # by re-reading from per_vm — but that's step-level only.
-        # Simpler approach: use per_vm per-run pass rates (aggregate over all steps).
-
-        # Collect run pass rates from per_vm that fall in windows
         recent_rates: list[float] = []
         baseline_rates: list[float] = []
 
-        for vm_data in aggregates.get("per_vm", {}).values():
+        for vm_data in per_vm.values():
             for run_id, info in vm_data.items():
                 ts = run_ts_map.get(run_id)
                 if ts is None:
@@ -246,16 +256,127 @@ def detect_regressions(
 
         if drop > 0.10:
             regressions.append({
+                "kind": "pass_rate_drop",
                 "step": step,
+                "vm": "",
                 "recent_rate": recent_avg,
                 "baseline_rate": baseline_avg,
                 "drop_pp": drop,
+                "recent_mean_s": 0.0,
+                "baseline_mean_s": 0.0,
+                "duration_ratio": 0.0,
                 "recent_runs": len(recent_rates),
                 "baseline_runs": len(baseline_rates),
             })
 
-    regressions.sort(key=lambda x: x["drop_pp"], reverse=True)
+    # --- 2. Step duration regressions ---
+    for step, stats in per_step.items():
+        run_ids = stats.get("run_ids", [])
+        durations = stats.get("durations_s", [])
+        if not durations or not run_ids:
+            continue
+
+        # Pair each duration with its run_id (parallel lists)
+        recent_durs: list[float] = []
+        baseline_durs: list[float] = []
+
+        for run_id, dur in zip(run_ids, durations):
+            ts = run_ts_map.get(run_id)
+            if ts is None:
+                continue
+            if ts >= recent_cutoff:
+                recent_durs.append(dur)
+            elif ts >= baseline_cutoff:
+                baseline_durs.append(dur)
+
+        if not recent_durs or not baseline_durs:
+            continue
+
+        recent_mean = mean(recent_durs)
+        baseline_mean = mean(baseline_durs)
+        if baseline_mean <= 0:
+            continue
+
+        ratio = recent_mean / baseline_mean
+        if ratio >= threshold_multiplier:
+            regressions.append({
+                "kind": "duration_regression",
+                "step": step,
+                "vm": "",
+                "recent_rate": 0.0,
+                "baseline_rate": 0.0,
+                "drop_pp": 0.0,
+                "recent_mean_s": recent_mean,
+                "baseline_mean_s": baseline_mean,
+                "duration_ratio": ratio,
+                "recent_runs": len(recent_durs),
+                "baseline_runs": len(baseline_durs),
+            })
+
+    # --- 3. Per-VM pass-rate below floor ---
+    for vm_name, vm_data in per_vm.items():
+        recent_rates_vm: list[float] = []
+        for run_id, info in vm_data.items():
+            ts = run_ts_map.get(run_id)
+            if ts is None:
+                continue
+            rate = info.get("pass_rate")
+            if rate is None:
+                continue
+            if ts >= recent_cutoff:
+                recent_rates_vm.append(rate)
+
+        if not recent_rates_vm:
+            continue
+
+        vm_recent_avg = mean(recent_rates_vm)
+        if vm_recent_avg < min_pass_rate:
+            regressions.append({
+                "kind": "vm_pass_rate",
+                "step": "",
+                "vm": vm_name,
+                "recent_rate": vm_recent_avg,
+                "baseline_rate": 0.0,
+                "drop_pp": 0.0,
+                "recent_mean_s": 0.0,
+                "baseline_mean_s": 0.0,
+                "duration_ratio": 0.0,
+                "recent_runs": len(recent_rates_vm),
+                "baseline_runs": 0,
+            })
+
+    regressions.sort(key=lambda x: x.get("drop_pp", 0.0), reverse=True)
     return regressions
+
+
+def build_regression_summary(regressions: list[dict[str, Any]]) -> str:
+    """Return a human-readable plain-text summary of regression items."""
+    if not regressions:
+        return "No regressions detected."
+
+    lines: list[str] = [f"{len(regressions)} regression(s) detected:"]
+    for r in regressions:
+        kind = r.get("kind", "")
+        if kind == "pass_rate_drop":
+            lines.append(
+                f"  [pass-rate drop] step={r['step']!r}  "
+                f"baseline={r['baseline_rate']*100:.1f}%  "
+                f"recent={r['recent_rate']*100:.1f}%  "
+                f"drop={r['drop_pp']*100:.1f}pp"
+            )
+        elif kind == "duration_regression":
+            lines.append(
+                f"  [duration spike] step={r['step']!r}  "
+                f"baseline={r['baseline_mean_s']:.2f}s  "
+                f"recent={r['recent_mean_s']:.2f}s  "
+                f"ratio={r['duration_ratio']:.2f}x"
+            )
+        elif kind == "vm_pass_rate":
+            lines.append(
+                f"  [vm pass-rate]   vm={r['vm']!r}  "
+                f"recent={r['recent_rate']*100:.1f}%  (below floor)"
+            )
+    return "\n".join(lines)
 
 
 def _parse_run_ts(run_ts_str: str) -> float | None:
@@ -573,6 +694,33 @@ def cli(argv: list[str] | None = None) -> int:
         "--output", type=Path, default=None,
         help="Output HTML path. Default: <root>/functional/dashboard.html",
     )
+    parser.add_argument(
+        "--alert", action="store_true", default=False,
+        help=(
+            "When set, send a notification via notify.py if regressions are detected "
+            "and NOTIFY_WEBHOOK (or NOTIFY_EMAIL_SMTP) env var is present."
+        ),
+    )
+    parser.add_argument(
+        "--threshold-multiplier", type=float, default=1.5, dest="threshold_multiplier",
+        metavar="N",
+        help=(
+            "Duration regression threshold: alert when recent mean step duration "
+            "exceeds baseline mean * N. Default: 1.5"
+        ),
+    )
+    parser.add_argument(
+        "--min-pass-rate", type=float, default=0.85, dest="min_pass_rate",
+        metavar="R",
+        help=(
+            "VM pass-rate floor (0.0–1.0): alert when a VM's recent mean pass rate "
+            "drops below R. Default: 0.85"
+        ),
+    )
+    parser.add_argument(
+        "--report-url", type=str, default="", dest="report_url",
+        help="URL to include in the alert notification body. Default: empty string.",
+    )
     args = parser.parse_args(argv)
 
     results_root: Path = args.root
@@ -587,6 +735,38 @@ def cli(argv: list[str] | None = None) -> int:
         print(f"[mOSdat] WARNING: No functional run directories found under {results_root}/functional/")
 
     render_dashboard(agg, output_path)
+
+    if args.alert:
+        regressions = detect_regressions(
+            agg,
+            threshold_multiplier=args.threshold_multiplier,
+            min_pass_rate=args.min_pass_rate,
+        )
+        if regressions:
+            webhook = os.environ.get("NOTIFY_WEBHOOK", "")
+            smtp = os.environ.get("NOTIFY_EMAIL_SMTP", "")
+            if webhook or smtp:
+                try:
+                    from automation.notify import notify  # type: ignore[import]
+                    channel = os.environ.get("NOTIFY_CHANNEL", "slack")
+                    summary = build_regression_summary(regressions)
+                    report_url = args.report_url or str(output_path.absolute())
+                    notify(
+                        channel,
+                        run_label=summary,
+                        status="fail",
+                        report_url=report_url,
+                    )
+                    print(f"[mOSdat] Alert sent ({channel}): {len(regressions)} regression(s)")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[mOSdat] WARNING: Alert notification failed: {exc}", file=sys.stderr)
+            else:
+                print(
+                    "[mOSdat] --alert set and regressions detected, but NOTIFY_WEBHOOK / "
+                    "NOTIFY_EMAIL_SMTP not set — skipping notification.",
+                    file=sys.stderr,
+                )
+
     return 0
 
 

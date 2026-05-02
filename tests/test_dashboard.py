@@ -334,3 +334,318 @@ class TestRenderDashboard:
         assert not out.parent.exists()
         dashboard.render_dashboard(agg, out)
         assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# I6: regression alert wiring
+# ---------------------------------------------------------------------------
+
+class TestDetectRegressionsExtended:
+    """Tests for threshold_multiplier and min_pass_rate params added in I6."""
+
+    def _make_agg_with_durations(
+        self,
+        recent_mean_s: float,
+        baseline_mean_s: float,
+        now_ts: float | None = None,
+    ) -> dict:
+        """Build aggregates with duration data in two time windows."""
+        if now_ts is None:
+            now_ts = datetime.now(tz=timezone.utc).timestamp()
+
+        recent_run_id = "2026-04-28_functional"
+        base_run_id = "2026-04-16_functional"
+        recent_ts = now_ts - 3 * 86400
+        base_ts = now_ts - 15 * 86400
+
+        per_vm = {
+            "vm1": {
+                recent_run_id: {
+                    "pass_rate": 1.0,
+                    "run_ts": datetime.fromtimestamp(recent_ts, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H%M%S"
+                    ),
+                    "passed": 10,
+                    "total": 10,
+                },
+                base_run_id: {
+                    "pass_rate": 1.0,
+                    "run_ts": datetime.fromtimestamp(base_ts, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H%M%S"
+                    ),
+                    "passed": 10,
+                    "total": 10,
+                },
+            }
+        }
+        per_step = {
+            "slow step": {
+                "attempts": [1, 1],
+                "passed": 2,
+                "failed": 0,
+                "durations_s": [recent_mean_s, baseline_mean_s],
+                "run_ids": [recent_run_id, base_run_id],
+            }
+        }
+        return {
+            "runs": [{"run_id": base_run_id}, {"run_id": recent_run_id}],
+            "per_vm": per_vm,
+            "per_step": per_step,
+            "results_root": "/tmp/results",
+        }
+
+    def _make_agg_with_vm_rate(
+        self,
+        vm_recent_rate: float,
+        now_ts: float | None = None,
+    ) -> dict:
+        """Build aggregates with a single VM whose recent pass rate is vm_recent_rate."""
+        if now_ts is None:
+            now_ts = datetime.now(tz=timezone.utc).timestamp()
+
+        recent_run_id = "2026-04-28_functional"
+        recent_ts = now_ts - 3 * 86400
+
+        per_vm = {
+            "vm-low": {
+                recent_run_id: {
+                    "pass_rate": vm_recent_rate,
+                    "run_ts": datetime.fromtimestamp(recent_ts, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H%M%S"
+                    ),
+                    "passed": int(vm_recent_rate * 10),
+                    "total": 10,
+                },
+            }
+        }
+        per_step = {
+            "some step": {
+                "attempts": [1],
+                "passed": int(vm_recent_rate * 10),
+                "failed": 10 - int(vm_recent_rate * 10),
+                "durations_s": [1.0],
+                "run_ids": [recent_run_id],
+            }
+        }
+        return {
+            "runs": [{"run_id": recent_run_id}],
+            "per_vm": per_vm,
+            "per_step": per_step,
+            "results_root": "/tmp/results",
+        }
+
+    def test_duration_regression_detected_above_multiplier(self):
+        # baseline=1.0s, recent=2.0s -> ratio=2.0 >= default 1.5
+        agg = self._make_agg_with_durations(recent_mean_s=2.0, baseline_mean_s=1.0)
+        regs = dashboard.detect_regressions(agg, threshold_multiplier=1.5)
+        dur_regs = [r for r in regs if r.get("kind") == "duration_regression"]
+        assert len(dur_regs) >= 1
+        assert dur_regs[0]["duration_ratio"] >= 1.5
+
+    def test_duration_regression_not_triggered_below_multiplier(self):
+        # baseline=1.0s, recent=1.2s -> ratio=1.2 < 1.5
+        agg = self._make_agg_with_durations(recent_mean_s=1.2, baseline_mean_s=1.0)
+        regs = dashboard.detect_regressions(agg, threshold_multiplier=1.5)
+        dur_regs = [r for r in regs if r.get("kind") == "duration_regression"]
+        assert dur_regs == []
+
+    def test_threshold_multiplier_flag_honoured(self):
+        # ratio=1.3x — only triggered when multiplier=1.2, not when multiplier=1.5
+        agg = self._make_agg_with_durations(recent_mean_s=1.3, baseline_mean_s=1.0)
+        regs_strict = dashboard.detect_regressions(agg, threshold_multiplier=1.5)
+        regs_loose = dashboard.detect_regressions(agg, threshold_multiplier=1.2)
+        assert not [r for r in regs_strict if r.get("kind") == "duration_regression"]
+        assert [r for r in regs_loose if r.get("kind") == "duration_regression"]
+
+    def test_vm_pass_rate_below_floor_triggers(self):
+        # vm recent rate=0.70 < default floor 0.85
+        agg = self._make_agg_with_vm_rate(vm_recent_rate=0.70)
+        regs = dashboard.detect_regressions(agg, min_pass_rate=0.85)
+        vm_regs = [r for r in regs if r.get("kind") == "vm_pass_rate"]
+        assert len(vm_regs) >= 1
+        assert vm_regs[0]["vm"] == "vm-low"
+
+    def test_vm_pass_rate_above_floor_no_alert(self):
+        # vm recent rate=0.90 >= floor 0.85
+        agg = self._make_agg_with_vm_rate(vm_recent_rate=0.90)
+        regs = dashboard.detect_regressions(agg, min_pass_rate=0.85)
+        vm_regs = [r for r in regs if r.get("kind") == "vm_pass_rate"]
+        assert vm_regs == []
+
+    def test_regression_kind_field_present_for_pass_rate_drop(self):
+        now_ts = datetime.now(tz=timezone.utc).timestamp()
+        recent_ts = now_ts - 3 * 86400
+        base_ts = now_ts - 15 * 86400
+        per_vm = {
+            "vm1": {
+                "2026-04-28_functional": {
+                    "pass_rate": 0.60,
+                    "run_ts": datetime.fromtimestamp(recent_ts, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H%M%S"
+                    ),
+                    "passed": 6, "total": 10,
+                },
+                "2026-04-16_functional": {
+                    "pass_rate": 0.90,
+                    "run_ts": datetime.fromtimestamp(base_ts, tz=timezone.utc).strftime(
+                        "%Y-%m-%dT%H%M%S"
+                    ),
+                    "passed": 9, "total": 10,
+                },
+            }
+        }
+        per_step = {
+            "a step": {
+                "attempts": [1, 1], "passed": 15, "failed": 0,
+                "durations_s": [1.0, 1.0],
+                "run_ids": ["2026-04-28_functional", "2026-04-16_functional"],
+            }
+        }
+        agg = {"runs": [], "per_vm": per_vm, "per_step": per_step, "results_root": ""}
+        regs = dashboard.detect_regressions(agg)
+        pass_drops = [r for r in regs if r.get("kind") == "pass_rate_drop"]
+        assert pass_drops, "Expected a pass_rate_drop regression"
+        assert pass_drops[0]["kind"] == "pass_rate_drop"
+
+
+class TestBuildRegressionSummary:
+    def test_empty_returns_no_regressions(self):
+        msg = dashboard.build_regression_summary([])
+        assert "No regressions" in msg
+
+    def test_pass_rate_drop_in_summary(self):
+        reg = {
+            "kind": "pass_rate_drop", "step": "login", "vm": "",
+            "recent_rate": 0.70, "baseline_rate": 0.90, "drop_pp": 0.20,
+            "recent_mean_s": 0.0, "baseline_mean_s": 0.0, "duration_ratio": 0.0,
+            "recent_runs": 3, "baseline_runs": 5,
+        }
+        msg = dashboard.build_regression_summary([reg])
+        assert "pass-rate drop" in msg
+        assert "login" in msg
+        assert "20.0pp" in msg
+
+    def test_duration_regression_in_summary(self):
+        reg = {
+            "kind": "duration_regression", "step": "upload", "vm": "",
+            "recent_rate": 0.0, "baseline_rate": 0.0, "drop_pp": 0.0,
+            "recent_mean_s": 3.0, "baseline_mean_s": 1.0, "duration_ratio": 3.0,
+            "recent_runs": 2, "baseline_runs": 2,
+        }
+        msg = dashboard.build_regression_summary([reg])
+        assert "duration spike" in msg
+        assert "upload" in msg
+        assert "3.00x" in msg
+
+    def test_vm_pass_rate_in_summary(self):
+        reg = {
+            "kind": "vm_pass_rate", "step": "", "vm": "fedora-vm",
+            "recent_rate": 0.70, "baseline_rate": 0.0, "drop_pp": 0.0,
+            "recent_mean_s": 0.0, "baseline_mean_s": 0.0, "duration_ratio": 0.0,
+            "recent_runs": 3, "baseline_runs": 0,
+        }
+        msg = dashboard.build_regression_summary([reg])
+        assert "vm pass-rate" in msg
+        assert "fedora-vm" in msg
+
+
+class TestCLIAlertFlag:
+    """Tests for --alert, --threshold-multiplier, --min-pass-rate wiring."""
+
+    def _make_results_with_regression(self, tmp_path: Path) -> Path:
+        """Create a results dir that will produce a pass-rate regression."""
+        from datetime import datetime, timezone
+
+        now_ts = datetime.now(tz=timezone.utc).timestamp()
+        recent_ts = now_ts - 3 * 86400
+        base_ts = now_ts - 15 * 86400
+
+        recent_date = datetime.fromtimestamp(recent_ts, tz=timezone.utc).strftime(
+            "%Y-%m-%d_functional"
+        )
+        base_date = datetime.fromtimestamp(base_ts, tz=timezone.utc).strftime(
+            "%Y-%m-%d_functional"
+        )
+
+        functional = tmp_path / "results" / "functional"
+
+        # baseline run: high pass rate
+        _make_run(functional, base_date, "vm1",
+                  _step_events(1, "step", "passed", ts_base=base_ts)
+                  + _step_events(2, "step2", "passed", ts_base=base_ts + 10))
+
+        # recent run: poor pass rate (1 pass, 1 fail)
+        _make_run(functional, recent_date, "vm1",
+                  _step_events(1, "step", "passed", ts_base=recent_ts)
+                  + _step_events(2, "step2", "failed", ts_base=recent_ts + 10))
+
+        return tmp_path / "results"
+
+    def test_alert_without_webhook_is_noop(self, tmp_path: Path, monkeypatch, capsys):
+        """--alert with no NOTIFY_WEBHOOK/SMTP env → warning printed, no crash."""
+        monkeypatch.delenv("NOTIFY_WEBHOOK", raising=False)
+        monkeypatch.delenv("NOTIFY_EMAIL_SMTP", raising=False)
+
+        root = self._make_results_with_regression(tmp_path)
+        rc = dashboard.cli([
+            "--root", str(root),
+            "--output", str(tmp_path / "dashboard.html"),
+            "--alert",
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        # Warning should mention the no-op
+        assert "NOTIFY_WEBHOOK" in captured.err or "skipping" in captured.err.lower()
+
+    def test_alert_not_set_no_notify_called(self, tmp_path: Path, monkeypatch):
+        """Without --alert, notify is never imported/called even if regressions exist."""
+        monkeypatch.setenv("NOTIFY_WEBHOOK", "http://fake.webhook/")
+        root = self._make_results_with_regression(tmp_path)
+
+        calls: list[dict] = []
+
+        # Patch notify module in sys.modules to intercept import
+        import types
+        fake_notify = types.ModuleType("automation.notify")
+
+        def _fake_notify(*args, **kwargs) -> None:  # type: ignore[misc]
+            calls.append({"args": args, "kwargs": kwargs})
+
+        fake_notify.notify = _fake_notify
+        monkeypatch.setitem(sys.modules, "automation.notify", fake_notify)
+
+        rc = dashboard.cli([
+            "--root", str(root),
+            "--output", str(tmp_path / "dashboard.html"),
+            # No --alert flag
+        ])
+        assert rc == 0
+        assert calls == [], "notify() should not be called without --alert"
+
+    def test_alert_calls_notify_when_webhook_set(self, tmp_path: Path, monkeypatch):
+        """--alert + NOTIFY_WEBHOOK set + regressions → notify() is called with status=fail."""
+        monkeypatch.setenv("NOTIFY_WEBHOOK", "http://fake.webhook/")
+        monkeypatch.setenv("NOTIFY_CHANNEL", "slack")
+
+        root = self._make_results_with_regression(tmp_path)
+
+        calls: list[dict] = []
+
+        import types
+        fake_notify = types.ModuleType("automation.notify")
+
+        def _fake_notify(*args, **kwargs) -> None:  # type: ignore[misc]
+            calls.append({"args": args, "kwargs": kwargs})
+
+        fake_notify.notify = _fake_notify
+        monkeypatch.setitem(sys.modules, "automation.notify", fake_notify)
+
+        rc = dashboard.cli([
+            "--root", str(root),
+            "--output", str(tmp_path / "dashboard.html"),
+            "--alert",
+        ])
+        assert rc == 0
+        # If regressions were found, notify() must have been called
+        if calls:
+            assert calls[0]["kwargs"]["status"] == "fail"

@@ -59,3 +59,38 @@ agg = aggregate_runs(Path("results"))
 regressions = detect_regressions(agg, recent_days=7, baseline_days=30)
 render_dashboard(agg, Path("results/functional/dashboard.html"))
 ```
+
+## Regression alerts (`--alert`)
+
+Pass `--alert` to send a notification via `automation/notify.py` whenever regressions
+are detected. Notifications are sent only when at least one of `NOTIFY_WEBHOOK` (Slack
+or Discord) or `NOTIFY_EMAIL_SMTP` (email) is present in the environment.
+
+```bash
+NOTIFY_WEBHOOK=https://hooks.slack.com/... \
+  mosdat dashboard --root results/ --alert
+```
+
+Without a webhook/SMTP env var, `--alert` is a safe no-op — the flag is opt-in and
+default behavior is unchanged.
+
+### Configurable thresholds
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--threshold-multiplier N` | `1.5` | Alert when a step's recent mean duration exceeds baseline mean × N |
+| `--min-pass-rate R` | `0.85` | Alert when a VM's recent mean pass rate drops below R (0.0–1.0) |
+| `--report-url URL` | *(dashboard HTML path)* | URL included in the notification body |
+
+### What triggers an alert
+
+Three regression kinds are detected:
+
+- **pass_rate_drop** — a step's overall pass rate dropped >10 pp in the last 7 days vs
+  the prior 30-day baseline.
+- **duration_regression** — a step's mean duration in the last 7 days exceeded
+  `--threshold-multiplier` × the baseline mean.
+- **vm_pass_rate** — a VM's recent mean pass rate fell below `--min-pass-rate`.
+
+The notification body includes a plain-text summary listing each regression with its
+step/VM name and the measured change.
