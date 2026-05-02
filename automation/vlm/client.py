@@ -124,6 +124,28 @@ def _parse_coords(raw: str) -> dict:
         space = "pixel" if (cx > 1000 or cy > 1000) else "norm01k"
         return {"x": cx, "y": cy, "space": space}
 
+    # Bbox-as-two-ranges: {"x": [x1, x2], "y": [y1, y2]} or partial
+    # (some VLMs return a bounding box split across x/y keys instead of a
+    # scalar point; take midpoint of each range).  Also handles the degenerate
+    # case where only one axis is a list and the other is absent or scalar.
+    if isinstance(obj, dict) and ("x" in obj or "y" in obj):
+        raw_x = obj.get("x")
+        raw_y = obj.get("y")
+        if isinstance(raw_x, (list, tuple)) or isinstance(raw_y, (list, tuple)):
+            x = _to_scalar(raw_x) if raw_x is not None else 500
+            y = _to_scalar(raw_y) if raw_y is not None else 500
+            # Pixel-space detection: check max raw value across both axes —
+            # a range like [800, 1200] midpoints to 1000 which equals the
+            # norm01k ceiling, so check the raw extremes before collapsing.
+            def _raw_max(v):
+                if isinstance(v, (list, tuple)):
+                    return max(int(float(i)) for i in v)
+                return int(float(v)) if v is not None else 0
+            pixel = _raw_max(raw_x) > 1000 or _raw_max(raw_y) > 1000
+            if pixel:
+                return {"x": x, "y": y, "space": "pixel"}
+            return {"x": x, "y": y, "space": "norm01k"}
+
     # Point format.
     if not (isinstance(obj, dict) and "x" in obj and "y" in obj):
         raise VLMError(f"Unrecognized coord format: {obj!r}")

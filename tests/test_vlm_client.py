@@ -324,6 +324,25 @@ class TestParseCoords:
         r = _parse_coords('[{"bbox_2d": [100, 200, 300, 400], "label": "button"}]')
         assert r["x"] == 200 and r["y"] == 300
 
+    def test_bbox_as_xy_ranges_midpoint(self):
+        # VLM returns {"x": [407, 583], "y": [210, 390]} — bbox split across x/y keys.
+        # Both axes are lists; midpoint of each range should be taken.
+        r = _parse_coords('{"x": [407, 583], "y": [210, 390]}')
+        assert r["x"] == 495 and r["y"] == 300
+        assert r["space"] == "norm01k"
+
+    def test_bbox_as_xy_partial_x_only(self):
+        # VLM returns {"x": [407, 583]} with no y key — midpoint x, default y=500.
+        r = _parse_coords('{"x": [407, 583]}')
+        assert r["x"] == 495 and r["y"] == 500
+        assert r["space"] == "norm01k"
+
+    def test_bbox_as_xy_pixel_space(self):
+        # Large values indicate pixel space.
+        r = _parse_coords('{"x": [800, 1200], "y": [400, 600]}')
+        assert r["x"] == 1000 and r["y"] == 500
+        assert r["space"] == "pixel"
+
     def test_empty_string_raises(self):
         with pytest.raises(VLMError):
             _parse_coords("")
