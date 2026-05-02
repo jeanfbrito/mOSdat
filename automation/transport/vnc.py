@@ -256,13 +256,14 @@ class VncClient:
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
 
-        # vncproxy tickets are single-use; a stale session on the VM can make
-        # the first attempt fail at the WebSocket handshake ("did not receive
-        # a valid HTTP response"). Retry a few times with a fresh ticket.
+        # vncproxy tickets are single-use; under parallel load tickets may
+        # exhaust retries ("did not receive a valid HTTP response"). Retry
+        # with exponential backoff: 1s, 2s, 4s, 8s between attempts.
+        # Bumped from 4 to 6 attempts to absorb parallel-test ticket churn.
         last_err: Exception | None = None
-        for attempt in range(4):
+        for attempt in range(6):
             if attempt:
-                time.sleep(1.0 + attempt)
+                time.sleep(min(2 ** (attempt - 1), 8))
 
             vnc = self._proxmox.vncproxy(self._vmid)
             ticket = vnc.get("ticket")
