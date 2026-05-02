@@ -6,6 +6,8 @@ Automated testing infrastructure using Proxmox VMs with GPU passthrough to valid
 
 > Supersedes the archived [`electron-linux-testing`](https://github.com/jeanfbrito/electron-linux-testing) Vagrant prototype (Jan 2026).
 
+![Docker](https://img.shields.io/badge/docker-ready-blue)
+
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Linux-blue?style=for-the-badge&logo=linux" alt="Linux">
   <img src="https://img.shields.io/badge/Proxmox-VE%208.x-orange?style=for-the-badge&logo=proxmox" alt="Proxmox">
@@ -19,6 +21,33 @@ Automated testing infrastructure using Proxmox VMs with GPU passthrough to valid
 ```bash
 pip install -e .
 mosdat --help
+```
+
+---
+
+## Run via Docker
+
+A Dockerfile is provided for containerized execution:
+
+```bash
+# Build locally
+docker build -t mosdat:dev .
+
+# Run help
+docker run --rm mosdat:dev
+
+# Run with a config file
+docker run --rm -v $(pwd)/myconfig.toml:/app/myconfig.toml mosdat:dev functional /app/myconfig.toml
+```
+
+To use Docker images from the registry (when published):
+
+```bash
+# Pull from registry (forward-looking; not yet published)
+docker pull ghcr.io/jeanfbrito/mosdat:latest
+
+# Run the smoke test scenario
+docker run --rm jeanfbrito/mosdat:latest mosdat functional examples/rocketchat.toml --scenario shared/scenarios/functional/rocketchat-smoke-linux.yaml
 ```
 
 ---

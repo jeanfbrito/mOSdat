@@ -1,0 +1,13 @@
+{
+  "name": "mosdat",
+  "version": "0.2.0",
+  "description": "Multi-OS Desktop App Testing with GPU passthrough — VLM-driven UI verification.",
+  "author": "Jean Brito",
+  "commands": [
+    {
+      "name": "mosdat-smoke",
+      "description": "Run the canonical Rocket.Chat smoke scenario on a configured VM",
+      "command": "mosdat functional examples/rocketchat.toml --scenario shared/scenarios/functional/rocketchat-smoke-linux.yaml"
+    }
+  ]
+}
