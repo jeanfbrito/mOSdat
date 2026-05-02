@@ -187,13 +187,18 @@ Write-Output "launch:ok"
                 "pgrep -u \"$USER\" -x plasmashell || "
                 "pgrep -u \"$USER\" -x xfce4-session); "
                 "if [ -n \"$SESSION_PID\" ]; then "
-                "  ENV_ARGS=$(tr '\\0' '\\n' </proc/\"$SESSION_PID\"/environ "
+                # Export each KEY=VALUE directly into the current shell so
+                # word-splitting never mangles values that contain '=' (e.g.
+                # DBUS_SESSION_BUS_ADDRESS=unix:path=...). `xargs` + unquoted
+                # variable expansion was causing env to misparse those values.
+                "  while IFS= read -r _line; do export \"$_line\"; done < "
+                "    <(tr '\\0' '\\n' </proc/\"$SESSION_PID\"/environ "
                 "    | grep -E '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|"
-                "DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)=' | xargs); "
+                "DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XDG_SESSION_TYPE)='); "
                 "else "
-                "  ENV_ARGS='DISPLAY=:0'; "
+                "  export DISPLAY=:0; "
                 "fi; "
-                f"setsid env $ENV_ARGS sh -c '{escaped}' "
+                f"setsid sh -c '{escaped}' "
                 "</dev/null >/dev/null 2>&1 & disown"
             )
             self.ssh.run(launcher, timeout=10)

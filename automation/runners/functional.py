@@ -268,8 +268,9 @@ class FunctionalRunner:
                 process_present = False
                 window_present = False
                 deadline_launch = time.time() + launch_budget
-                # F1: cap VLM verify calls to prevent runaway with slow VLM
-                MAX_LAUNCH_VLM_CALLS = 2
+                # F1: cap VLM verify calls to prevent runaway with slow VLM.
+                # Cap scales with launch_budget: 1 call per 10s, minimum 2.
+                MAX_LAUNCH_VLM_CALLS = max(2, launch_budget // 10)
                 n_calls = 0
                 while time.time() < deadline_launch:
                     time.sleep(1)

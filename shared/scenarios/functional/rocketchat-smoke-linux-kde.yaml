@@ -35,12 +35,19 @@ steps:
       sleep 1
       # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
       # children. Loop until pgrep returns nothing or we've waited 8s.
+      # NOTE: pkill -x matches the comm field (max 15 chars on Linux).
+      # AppImage binary inside the mount is "rocketchat-desktop.bin" but the
+      # kernel truncates comm to "rocketchat-desk" (15 chars). RPM/deb installs
+      # use "/opt/Rocket.Chat/rocketchat-desktop" whose comm is also truncated.
+      # Kill both to cover RPM and AppImage installs.
+      pkill -9 -x rocketchat-desk 2>/dev/null || true
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       pkill -x update-manager 2>/dev/null || true
       pkill -x update-notifier 2>/dev/null || true
       for i in 1 2 3 4 5 6 7 8; do
         sleep 1
-        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pgrep -x rocketchat-desk >/dev/null || pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desk 2>/dev/null || true
         pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       done
       # Stage 2: nuke KWallet daemon FIRST so it can't write back stored tokens
@@ -128,7 +135,7 @@ steps:
     verify_timeout: 90
     retries: 3
 
-  - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+  - localize: "the white rectangular input box with placeholder text 'example@example.com' below the 'Email or username' label — this is the top input in the Login form, above the Password field"
     then_type: "{test_user}"
     verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
     retries: 3
