@@ -1,5 +1,23 @@
 # Known Issues
 
+## opensuse Leap KDE: xdotool not installed, SSH cannot authorize to :0
+- **Status**: Workaround in place
+- **Issue**: `xdotool` is not installed on opensuse Leap by default. Additionally,
+  the SSH session cannot authorize to the X11 display `:0` — the xauth cookie in
+  `/tmp/xauth_*` is not accepted by the SSH user context ("Authorization required,
+  but no authorization protocol specified"). All shell-step X11 commands
+  (xdotool, xdpyinfo, xset, qdbus) silently fail (exit 127 or connection refused).
+- **Workaround**: Use VNC-native input only. In scenario YAML, replace shell-based
+  xdotool calls with `key:`, `then_type:`, and `localize:` steps — these inject
+  via VNC and bypass the SSH/X11 authorization problem entirely. For KDE lock
+  screen dismissal, use `if_visible:` + `localize:` (password field) + `then_type`
+  + `then_key: return`.
+- **Affects**: `shared/scenarios/functional/rocketchat-smoke-linux-kde.yaml`.
+  Any future scenario targeting opensuse Leap KDE must avoid SSH-based X11 input.
+  The same likely applies to any KDE X11 VM where the X session is owned by a
+  different user/process than the SSH login.
+- **Ref**: Discovered during opensuse smoke iteration (iter 1-2, May 2026).
+
 ## Fedora 42: injector.launch() fails on GNOME Wayland (no WAYLAND_DISPLAY in gnome-shell proc env)
 - **Status**: Workaround in place
 - **Issue**: `InputInjector.launch()` reads env from gnome-shell's `/proc/PID/environ`. On
