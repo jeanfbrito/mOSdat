@@ -287,6 +287,22 @@ def cmd_functional(args) -> int:
         for pkg in vm.packages:
             if pkg.app_path:
                 vm_vars.setdefault("app_path", pkg.app_path)
+                # Resolve {file} in app_path by globbing the VM's temp dir.
+                # AppImage packages use app_path="/tmp/{file}" where {file} is
+                # the actual filename matched by file_glob. Glob via SSH so the
+                # runner gets a concrete path (e.g. /tmp/rocketchat-4.x-linux-x86_64.AppImage).
+                if "{file}" in vm_vars.get("app_path", "") and pkg.file_glob:
+                    try:
+                        temp_dir = vm.resolved_temp_dir
+                        result = ssh.run(f"ls {temp_dir}/{pkg.file_glob} 2>/dev/null | head -1")
+                        resolved_file = result.stdout.strip()
+                        if resolved_file:
+                            import os as _os
+                            vm_vars["app_path"] = vm_vars["app_path"].replace(
+                                "{file}", _os.path.basename(resolved_file)
+                            )
+                    except Exception:
+                        pass  # leave {file} unresolved; launch step will fail with a clear message
                 break
 
         with VncClient(proxmox, vmid=vm.vmid) as vnc:

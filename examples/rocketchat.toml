@@ -45,6 +45,7 @@ desktop = "GNOME Wayland"
 format = "rpm"
 install = "sudo dnf install -y /tmp/{file}"
 uninstall = "sudo dnf remove -y {app_name} 2>/dev/null || true"
+app_path = "/opt/Rocket.Chat/rocketchat-desktop"
 file_glob = "rocketchat-*.rpm"
 
 [[vm.package]]
@@ -131,6 +132,7 @@ desktop = "KDE X11"
 format = "rpm"
 install = "sudo zypper install -y --allow-unsigned-rpm /tmp/{file}"
 uninstall = "sudo zypper remove -y {app_name} 2>/dev/null || true"
+app_path = "/opt/Rocket.Chat/rocketchat-desktop"
 file_glob = "rocketchat-*.rpm"
 
 [[vm.package]]
