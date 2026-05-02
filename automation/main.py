@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import sys
 import urllib.request
 import urllib.error
@@ -347,6 +348,16 @@ def cmd_functional(args) -> int:
         if not passed:
             overall = False
 
+    # H2.1: notify on failure when NOTIFY_WEBHOOK is configured
+    if not overall and os.environ.get("NOTIFY_WEBHOOK"):
+        run_label = os.environ.get("MOSDAT_RUN_LABEL", "mosdat functional")
+        report_url = os.environ.get("MOSDAT_REPORT_URL", "")
+        try:
+            from .notify import notify
+            notify(run_label=run_label, status="fail", report_url=report_url)
+        except Exception as _notify_err:
+            print(f"[mOSdat] WARN: notification failed: {_notify_err}")
+
     return 0 if overall else 1
 
 
@@ -504,6 +515,13 @@ def main() -> int:
     report_p.add_argument("--output", type=Path, help="Output path for flakiness leaderboard (default: <results_dir>/functional/flake-leaderboard.md, or - for stdout)")
     report_p.add_argument("--root", type=Path, help="Root path for flakiness leaderboard search (defaults to results_dir)")
 
+    # mosdat dashboard  (H2.2: trend dashboard — appended after report block)
+    dash_p = sub.add_parser("dashboard", help="H2.2: Generate static HTML trend dashboard from functional runs")
+    dash_p.add_argument("--root", type=Path, default=Path("results"),
+                        help="Root results directory (must contain functional/ subdir). Default: results/")
+    dash_p.add_argument("--output", type=Path, default=None,
+                        help="Output HTML path. Default: <root>/functional/dashboard.html")
+
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
     visual_group = visual_p.add_mutually_exclusive_group(required=True)
@@ -534,6 +552,13 @@ def main() -> int:
         argv += ["--threshold", str(args.threshold)]
         return visual_cli(argv)
 
+    def cmd_dashboard(args) -> int:
+        from .reporting.dashboard import cli as dashboard_cli
+        argv = ["--root", str(args.root)]
+        if args.output:
+            argv += ["--output", str(args.output)]
+        return dashboard_cli(argv)
+
     handlers = {
         "run": cmd_run,
         "test": cmd_test,
@@ -542,6 +567,7 @@ def main() -> int:
         "list-vms": cmd_list_vms,
         "report": cmd_report,
         "visual": cmd_visual,
+        "dashboard": cmd_dashboard,
     }
 
     try:
