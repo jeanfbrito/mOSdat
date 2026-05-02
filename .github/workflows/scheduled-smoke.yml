@@ -1,0 +1,59 @@
+name: Scheduled Smoke
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [rc-release]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[functional]"
+
+      - name: Run smoke scenario
+        id: smoke
+        env:
+          MOSDAT_VLM_BASE_URL: ${{ secrets.MOSDAT_VLM_BASE_URL }}
+          MOSDAT_PROXMOX_HOST: ${{ secrets.MOSDAT_PROXMOX_HOST }}
+          MOSDAT_PROXMOX_USER: ${{ secrets.MOSDAT_PROXMOX_USER }}
+          MOSDAT_PROXMOX_PASSWORD: ${{ secrets.MOSDAT_PROXMOX_PASSWORD }}
+          MOSDAT_FUNCTIONAL_WORKSPACE_URL: ${{ secrets.MOSDAT_FUNCTIONAL_WORKSPACE_URL }}
+          MOSDAT_FUNCTIONAL_TEST_USER: ${{ secrets.MOSDAT_FUNCTIONAL_TEST_USER }}
+          MOSDAT_FUNCTIONAL_TEST_PASSWORD: ${{ secrets.MOSDAT_FUNCTIONAL_TEST_PASSWORD }}
+        run: |
+          mosdat functional examples/rocketchat.toml \
+            --scenario shared/scenarios/functional/rocketchat-smoke-linux.yaml \
+            --vm ubuntu2204
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          NOTIFY_CHANNEL: ${{ secrets.NOTIFY_CHANNEL }}
+          NOTIFY_WEBHOOK: ${{ secrets.NOTIFY_WEBHOOK }}
+          NOTIFY_EMAIL_SMTP: ${{ secrets.NOTIFY_EMAIL_SMTP }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+        run: |
+          python -m automation.notify \
+            --status fail \
+            --label "ubuntu2204 nightly" \
+            --report-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-results-${{ github.run_id }}
+          path: results/functional/
+          if-no-files-found: ignore
