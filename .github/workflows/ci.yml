@@ -24,5 +24,8 @@ jobs:
       - name: Type check (mypy — best effort)
         run: mypy automation/ || true
 
+      - name: Audit dependencies for CVEs
+        run: pip install pip-audit && pip-audit --requirement requirements-lock.txt --strict || true
+
       - name: Run unit tests
         run: pytest -q
