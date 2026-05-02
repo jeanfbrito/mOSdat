@@ -13,6 +13,14 @@ steps:
       # they float on top of Rocket.Chat and steal clicks.
       taskkill /F /IM msedge.exe 2>$null | Out-Null
       taskkill /F /IM Widgets.exe 2>$null | Out-Null
+      # Win11: dismiss "Let's finish setting up your PC" OOBE/setup wizard
+      # that can appear after reboot and cover the Rocket.Chat window.
+      # The dialog runs as WebExperienceHostApp (WebView2-based).
+      taskkill /F /IM UserOOBEBroker.exe 2>$null | Out-Null
+      taskkill /F /IM MusNotification.exe 2>$null | Out-Null
+      taskkill /F /IM MusNotificationUx.exe 2>$null | Out-Null
+      taskkill /F /IM WebExperienceHostApp.exe 2>$null | Out-Null
+      taskkill /F /IM msedgewebview2.exe 2>$null | Out-Null
       Start-Sleep -Seconds 2
       # Wipe the entire Electron userData dir — config.json/servers.json alone
       # leave Session Storage, Local Storage, IndexedDB, and Cookies behind,
