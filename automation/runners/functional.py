@@ -205,7 +205,12 @@ class FunctionalRunner:
                 self._vm_ops.delete_snapshot(self._vmid, name)
         except Exception as e:
             self.log(f"    → WARNING: could not list/delete existing snapshot '{name}': {e}")
-        self._vm_ops.snapshot(self._vmid, name)
+        # Guard snapshot() call — checkpointing is best-effort
+        try:
+            self._vm_ops.snapshot(self._vmid, name)
+        except Exception as e:
+            self.log(f"    → WARNING: could not create snapshot '{name}': {e}")
+            return
         self._checkpoints.append((name, step_num))
         self._created_snapshots.append(name)
         self._emit("checkpoint_created", step_num=step_num, name=name)

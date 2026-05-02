@@ -452,14 +452,6 @@ class TestChaosProxmoxLockTimeout(unittest.TestCase):
     _do_checkpoint wraps vm_ops.snapshot() in a try/except.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: _do_checkpoint does not catch exceptions from vm_ops.snapshot(). "
-            "ProxmoxLockTimeout propagates uncaught out of run_test. "
-            "Fix: wrap vm_ops.snapshot() in try/except in _do_checkpoint."
-        ),
-    )
     def test_lock_timeout_on_snapshot_is_nonfatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -476,19 +468,9 @@ class TestChaosProxmoxLockTimeout(unittest.TestCase):
                 FunctionalStep(checkpoint="pre-test"),
                 FunctionalStep(shell="echo done", retries=1),
             ]
-            try:
-                passed, log = runner.run_test(steps, "lock-timeout")
-            except _ProxmoxLockTimeout:
-                self.fail("ProxmoxLockTimeout must not propagate out of run_test")
+            passed, log = runner.run_test(steps, "lock-timeout")
+            self.assertTrue(passed, "run_test must return True when snapshot lock timeout is caught")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: _do_checkpoint does not catch exceptions from vm_ops.snapshot(). "
-            "The warning is never logged because the exception escapes the method. "
-            "Fix: wrap vm_ops.snapshot() in try/except in _do_checkpoint."
-        ),
-    )
     def test_lock_timeout_logged_as_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -504,12 +486,14 @@ class TestChaosProxmoxLockTimeout(unittest.TestCase):
             runner._vm_ops = vm_ops
             runner._vmid = 100
             steps = [FunctionalStep(checkpoint="pre-test")]
-            runner.run_test(steps, "lock-timeout-log")
+            passed, log = runner.run_test(steps, "lock-timeout-log")
             combined = " ".join(log_lines)
-            self.assertTrue(
-                "WARNING" in combined or "lock" in combined.lower() or "snapshot" in combined.lower(),
-                f"Warning about lock/snapshot failure must appear in log, got: {combined!r}",
+            self.assertIn(
+                "WARNING",
+                combined,
+                f"Warning about snapshot failure must appear in log, got: {combined!r}",
             )
+            self.assertTrue(passed, "run_test must succeed when checkpoint warning is logged")
 
 
 class TestChaosEventsJsonlPartialLine(unittest.TestCase):
