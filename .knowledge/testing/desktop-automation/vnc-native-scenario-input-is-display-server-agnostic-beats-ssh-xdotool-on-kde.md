@@ -13,6 +13,8 @@ kind: pattern
 scope: project-shared
 category: testing/desktop-automation
 confidence: high
+accessed: 2
+last_accessed: "2026-05-02"
 ---
 
 ## Pattern (2026-05-02, validated on opensuse Leap KDE X11 + manjaro KDE Wayland)

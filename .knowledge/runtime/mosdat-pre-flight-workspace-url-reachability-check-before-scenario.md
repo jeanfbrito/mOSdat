@@ -12,8 +12,8 @@ kind: lesson
 scope: project-shared
 category: runtime
 confidence: high
-accessed: 24
-last_accessed: "2026-05-01"
+accessed: 25
+last_accessed: "2026-05-02"
 ---
 
 ## Lesson (2026-05-01)
