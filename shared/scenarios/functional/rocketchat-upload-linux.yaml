@@ -1,0 +1,97 @@
+name: "Rocket.Chat file upload (Linux)"
+
+steps:
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      pkill -x update-manager 2>/dev/null || true
+      pkill -x update-notifier 2>/dev/null || true
+      for i in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      rm -f "$HOME"/.local/share/keyrings/*.keyring
+      rm -rf "$HOME"/.cache/keyring-* 2>/dev/null || true
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.config/Rocket.Chat Electron"
+      for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
+        [ -e "$d" ] && rm -rf "$d"
+      done
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
+      remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
+      if [ -n "$remaining" ]; then
+        echo "cleanup:FAILED — $remaining survived"
+        exit 1
+      fi
+      echo cleanup:ok
+
+  - key: "escape"
+    wait: 1
+
+  - launch: "{app_path} --no-sandbox"
+    wait: 30
+    launch_window: "Rocket.Chat"
+    verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
+    verify_not: "an Email/username input field, a Password input field, a chat history containing messages, or a 'Message #...' composer is visible inside the Rocket.Chat window"
+    verify_timeout: 20
+    retries: 2
+
+  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+
+  - localize: "the Enter your server URL input text field below the rocket.chat logo"
+    then_type: "{workspace_url}"
+    then_key: "enter"
+    verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
+    verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
+    verify_timeout: 25
+    retries: 3
+
+  - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+    then_type: "{test_user}"
+    verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
+    retries: 3
+
+  - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+    then_type: "{test_password}"
+    then_key: "enter"
+    verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+    verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
+    verify_timeout: 30
+    retries: 3
+
+  - localize: "the General channel in the left sidebar"
+    verify: "the General channel has finished loading and shows real text content or real messages, with no grey skeleton, shimmer placeholder, or loading dots"
+    verify_timeout: 60
+    retries: 3
+
+  - localize: "an icon or button in or near the message composer that represents file attachment (often a paperclip, plus icon, or 'Attach' label)"
+    verify: "an attachment or file upload icon is visible in the message composer area"
+    retries: 2
+
+  - localize: "an icon or button in or near the message composer that represents file attachment (often a paperclip, plus icon, or 'Attach' label)"
+    then:
+      - verify: "a file dialog or file picker interface has appeared, OR an 'upload' / 'browse files' button is now visible"
+        verify_timeout: 10
+        retries: 2
+
+  - shell: "touch /tmp/test_upload.txt && echo 'mosdat upload test' > /tmp/test_upload.txt"
+
+  - type: "/tmp/test_upload.txt"
+    verify: "the file has been attached or appears in the upload preview area, with filename 'test_upload.txt' visible"
+    verify_timeout: 15
+    retries: 2
+
+  - key: "enter"
+    verify: "the file 'test_upload.txt' now appears in the chat history as an uploaded attachment with a file icon or preview"
+    verify_not: "an error message, 'failed to upload', or 'network error' is visible"
+    verify_timeout: 30
+    retries: 3
