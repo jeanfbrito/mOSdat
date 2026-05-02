@@ -257,6 +257,7 @@ def cmd_functional(args) -> int:
     vars_.setdefault("workspace_url", config.functional.workspace_url)
     vars_.setdefault("test_user", config.functional.test_user)
     vars_.setdefault("test_password", config.functional.test_password)
+    vars_.setdefault("vm_password", os.environ.get("DEFAULT_VM_PASSWORD", os.environ.get("MOSDAT_VM_PASSWORD", "")))
     vars_["timestamp"] = dt.now().strftime("%Y%m%d_%H%M%S")
 
     if not config.proxmox.password:

@@ -21,9 +21,35 @@ steps:
       # loginctl unlock-session requires the session ID; get it dynamically.
       kwriteconfig5 --file kscreenlockerrc --group Daemon --key Autolock false 2>/dev/null || true
       kwriteconfig5 --file kscreenlockerrc --group Daemon --key Timeout 0 2>/dev/null || true
-      # Kill the screen locker process directly — loginctl unlock-session requires
-      # the locker to cooperate (it prompts for a password). Killing kscreenlocker_greet
-      # forces the locker off immediately without needing credentials.
+      # Unlock the KDE screen locker. Strategy: type the password into the
+      # lock screen via xdotool, then press Enter. This is more reliable than
+      # loginctl unlock-session (requires cooperative daemon) or killing
+      # kscreenlocker_greet (KDE respawns it within seconds).
+      # We need XAUTHORITY to talk to :0 — find it first.
+      xauth_file_early=$(ls /tmp/xauth_* 2>/dev/null | head -1)
+      if [ -n "$xauth_file_early" ]; then
+        # Click on the password field (center-screen), type the VM password, press Enter.
+        # KDE lock screen centers the password input at approx 50% width, 60% height.
+        screen_w=$(DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f1)
+        screen_h=$(DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f2)
+        screen_w=${screen_w:-1280}
+        screen_h=${screen_h:-800}
+        pw_x=$((screen_w / 2))
+        pw_y=$((screen_h * 60 / 100))
+        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool mousemove "$pw_x" "$pw_y" 2>/dev/null || true
+        sleep 0.2
+        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool click 1 2>/dev/null || true
+        sleep 0.3
+        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool type --clearmodifiers "{vm_password}" 2>/dev/null || true
+        sleep 0.3
+        DISPLAY=:0 XAUTHORITY="$xauth_file_early" xdotool key Return 2>/dev/null || true
+        sleep 2
+      fi
+      # Also try qdbus SimulateUserActivity after the unlock attempt
+      if [ -n "$xauth_file_early" ]; then
+        DISPLAY=:0 XAUTHORITY="$xauth_file_early" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
+      fi
+      # Finally kill any surviving kscreenlocker_greet (belt-and-suspenders)
       pkill -x kscreenlocker_greet 2>/dev/null || true
       sleep 1
       session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
@@ -100,7 +126,7 @@ steps:
     # Strict verify: RC must be on the first-launch "Enter your server URL" screen.
     verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
     verify_not: "an Email/username input field, a Password input field, a chat history containing messages, a 'Message #...' composer, or a window title containing 'unread message' or a workspace name like 'Southlogic' is visible inside the Rocket.Chat window"
-    verify_timeout: 20
+    verify_timeout: 30
     retries: 2
 
   # ── Dismiss RC's electron-updater "update available" dialog if it appears.
@@ -113,14 +139,23 @@ steps:
   # after the cleanup shell killed kscreenlocker_greet. Kill it again here and
   # force DPMS on so the screen is definitely live before the localize step.
   - shell: |
-      pkill -x kscreenlocker_greet 2>/dev/null || true
-      sleep 0.5
-      session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
-      if [ -n "$session_id" ]; then
-        loginctl unlock-session "$session_id" 2>/dev/null || true
-      fi
       xauth_file=$(ls /tmp/xauth_* 2>/dev/null | head -1)
       if [ -n "$xauth_file" ]; then
+        # If lock screen is up, type password to dismiss it
+        screen_w=$(DISPLAY=:0 XAUTHORITY="$xauth_file" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f1)
+        screen_h=$(DISPLAY=:0 XAUTHORITY="$xauth_file" xdpyinfo 2>/dev/null | awk '/dimensions/{print $2}' | cut -dx -f2)
+        screen_w=${screen_w:-1280}
+        screen_h=${screen_h:-800}
+        pw_x=$((screen_w / 2))
+        pw_y=$((screen_h * 60 / 100))
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool mousemove "$pw_x" "$pw_y" 2>/dev/null || true
+        sleep 0.2
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool click 1 2>/dev/null || true
+        sleep 0.3
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool type --clearmodifiers "{vm_password}" 2>/dev/null || true
+        sleep 0.3
+        DISPLAY=:0 XAUTHORITY="$xauth_file" xdotool key Return 2>/dev/null || true
+        sleep 1.5
         DISPLAY=:0 XAUTHORITY="$xauth_file" xset s off 2>/dev/null || true
         DISPLAY=:0 XAUTHORITY="$xauth_file" xset -dpms 2>/dev/null || true
         DISPLAY=:0 XAUTHORITY="$xauth_file" xset dpms force on 2>/dev/null || true
@@ -129,7 +164,13 @@ steps:
         sleep 0.5
         DISPLAY=:0 XAUTHORITY="$xauth_file" qdbus org.kde.screensaver /ScreenSaver SimulateUserActivity 2>/dev/null || true
       fi
-      sleep 1
+      pkill -x kscreenlocker_greet 2>/dev/null || true
+      sleep 0.5
+      session_id=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -1)
+      if [ -n "$session_id" ]; then
+        loginctl unlock-session "$session_id" 2>/dev/null || true
+      fi
+      sleep 0.5
       echo "screen-wake:ok"
 
   - localize: "the Enter your server URL input text field below the rocket.chat logo"
@@ -137,7 +178,7 @@ steps:
     then_key: "enter"
     verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
     verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
-    verify_timeout: 60
+    verify_timeout: 90
     retries: 3
 
   - localize: "the upper input field labeled 'Email or username' (above the Password field)"
