@@ -42,6 +42,7 @@ __pycache__/
 
 # Agent scratch (kept out of git)
 .sisyphus/
+.claude/
 
 # mastermind project store (.knowledge/) IS tracked — entries are
 # project-shared knowledge that travels with the repo. Sanitize content
@@ -62,3 +63,5 @@ results/**/*.snap
 results/**/*.exe
 results/**/*.msi
 results/**/*.dmg
+results/**/*.jsonl
+results/**/*.html
