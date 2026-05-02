@@ -14,9 +14,9 @@ Run: pytest tests/test_negative.py -q
 import sys
 import types
 import unittest
-import importlib.util as _ilu
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+import importlib.util as _ilu  # noqa: E402  # Must import after sys.path setup
+from pathlib import Path  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Stub heavy dependencies so we can import automation modules without
@@ -516,7 +516,7 @@ class TestNegativePreflightWorkspaceExitCode(unittest.TestCase):
 # Parametrized summary (for pytest -v readability)
 # ---------------------------------------------------------------------------
 
-import pytest
+import pytest  # noqa: E402  # Pytest import required after test class definitions
 
 @pytest.mark.parametrize("test_class,method,expected_behavior", [
     ("TestNegativeWorkspaceUnreachable", "test_unreachable_workspace_returns_false_and_detail",

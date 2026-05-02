@@ -774,7 +774,6 @@ class FunctionalRunner:
         self._checkpoints = []
         self._created_snapshots = []
 
-        passed = False
         # C2: step cursor — supports rewind by adjusting where we resume from
         step_index = 0
         while step_index < len(resolved):
@@ -829,7 +828,6 @@ class FunctionalRunner:
                     return False, "\n".join(log_lines)
 
         _log(f"  PASS: all {len(resolved)} steps completed")
-        passed = True
         self._cleanup_snapshots(self._checkpoints_retain)
         return True, "\n".join(log_lines)
 

@@ -33,7 +33,6 @@ from websockets.sync.client import connect
 
 if TYPE_CHECKING:
     from websockets.sync.client import ClientConnection
-    from websockets.typing import Subprotocol
     from ..proxmox.api import ProxmoxAPI
 
 

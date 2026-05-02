@@ -117,7 +117,6 @@ class ProxmoxAPI:
         run_id = self._run_id()
         overall_start = time.monotonic()
         last_exc: Optional[Exception] = None
-        last_status: Optional[int] = None
 
         max_attempts = _RETRY_TOTAL if idempotent else 1
 
@@ -131,7 +130,6 @@ class ProxmoxAPI:
                     method, url, headers=headers, cookies=cookies, **kwargs
                 )
                 status = response.status_code
-                last_status = status
 
                 entry = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),

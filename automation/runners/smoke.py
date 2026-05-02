@@ -145,7 +145,7 @@ class TestRunner:
         log(f"{'='*60}")
 
         try:
-            ip = self.gpu.attach_to_vm(vm.vmid, log)
+            self.gpu.attach_to_vm(vm.vmid, log)
             if not self.gpu.verify_gpu_visible(vm, log):
                 log("WARNING: GPU not visible, tests may fail")
         except Exception as e:

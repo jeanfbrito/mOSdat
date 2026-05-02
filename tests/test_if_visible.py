@@ -41,7 +41,7 @@ if str(_pkg_root) not in sys.path:
 
 # Import the module under test using its file path directly to avoid package
 # resolution issues when running standalone.
-import importlib.util as _ilu
+import importlib.util as _ilu  # noqa: E402  # Must import after sys.path setup
 
 _spec = _ilu.spec_from_file_location(
     "functional_runner",
