@@ -17,7 +17,7 @@ import os
 import posixpath
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -225,12 +225,20 @@ const KIND_ICON = {
   key:             '🔑',
   shell:           '🐚',
   verify:          '👁',
+  vlm_verify:      '👁',
   verify_localize: '👁',
   localize:        '🔍',
+  vlm_localize:    '🔍',
   screenshot:      '📷',
   step_end_ok:     '✅',
   step_end_fail:   '❌',
   wait:            '⏱',
+  retry:           '🔁',
+  launch_verify:   '🔎',
+  if_visible:      '👀',
+  popup_sweep:     '🧹',
+  checkpoint:      '🚩',
+  step_start:      '➡',
 };
 
 function kindIcon(kind) { return KIND_ICON[kind] || '▪'; }
@@ -473,6 +481,29 @@ es.onmessage = function(e) {
       kind: 'screenshot', label: '', status: null,
       body: null, url: msg.url,
     });
+
+  } else {
+    // Generic event bubble — covers vlm_localize, vlm_verify, click, type, key,
+    // shell, launch, wait, if_visible, retry, launch_verify, etc.
+    const id = nextId++;
+    let body = '';
+    if (event === 'click')      body = `(${msg.x}, ${msg.y})`;
+    else if (event === 'type')  body = msg.text_redacted || msg.text || '';
+    else if (event === 'key')   body = msg.key || '';
+    else if (event === 'launch') body = msg.app || '';
+    else if (event === 'shell') body = (msg.cmd || '').slice(0, 160);
+    else if (event === 'vlm_localize') body = (msg.prompt || msg.label || msg.target || '').slice(0, 200);
+    else if (event === 'vlm_verify')   body = (msg.prompt || msg.predicate || msg.text || '').slice(0, 200);
+    else if (event === 'launch_verify') body = `process=${msg.process} window=${msg.window}`;
+    else if (event === 'retry') body = `retry ${msg.attempt || ''}`;
+    else if (event === 'wait')  body = `${msg.seconds || msg.duration_ms || ''}`;
+    else                        body = JSON.stringify(msg).slice(0, 200);
+    appendBubble({
+      id, run, vm, ts: Date.now(),
+      stepNum: msg.step_num ?? null,
+      kind: event, label: '', status: null,
+      body, url: null,
+    });
   }
 
   updateTopbar();
@@ -609,16 +640,33 @@ class EventWatcher:
                     except OSError:
                         pass
 
-            # --- detect new PNGs ---
+            # --- detect new PNGs (only VLM-input frames) ---
+            # Filename pattern: <HHMMSS>_step<N>_<phase>.png. We want VLM-input
+            # frames only — verify polls and localize captures. Skip click
+            # overlays, final-fail snapshots, and other non-VLM-input frames.
+            VLM_INPUT_TOKENS = ("verify_poll", "localize", "verify_input", "_verify_")
             known = self._known_pngs.setdefault(key, set())
             try:
                 for entry in os.scandir(vm_path):
-                    if entry.name.endswith(".png") and entry.name not in known:
-                        known.add(entry.name)
-                        url = f"/png/{run}/{vm}/{entry.name}"
-                        self._bc.broadcast_event(
-                            {"event": "screenshot", "run": run, "vm": vm, "url": url}
-                        )
+                    if not entry.name.endswith(".png"):
+                        continue
+                    if entry.name in known:
+                        continue
+                    known.add(entry.name)
+                    if not any(tok in entry.name for tok in VLM_INPUT_TOKENS):
+                        continue  # not a VLM-input frame; skip emit
+                    # parse step_num from filename if possible
+                    step_num = None
+                    import re as _re
+                    m = _re.search(r"_step(\d+)_", entry.name)
+                    if m:
+                        step_num = int(m.group(1))
+                    url = f"/png/{run}/{vm}/{entry.name}"
+                    self._bc.broadcast_event(
+                        {"event": "screenshot", "run": run, "vm": vm,
+                         "url": url, "step_num": step_num,
+                         "filename": entry.name}
+                    )
             except OSError:
                 pass
 
@@ -782,7 +830,8 @@ def cli(args: Optional[list[str]] = None) -> int:
     _hb("watcher_thread_started")
 
     handler_cls = _make_handler(broadcaster, results_root)
-    server = HTTPServer(("", parsed.port), handler_cls)
+    server = ThreadingHTTPServer(("", parsed.port), handler_cls)
+    server.daemon_threads = True
 
     print(f"[mOSdat] Dashboard live at http://localhost:{parsed.port}")
     print(f"[mOSdat] Watching: {results_root}/functional/")

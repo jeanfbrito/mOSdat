@@ -159,11 +159,13 @@ class TestEventWatcher:
         watcher._poll_once()
         assert len(screenshot_events) == 0
 
-        # Create PNG
-        (run_dir / "step_01.png").write_bytes(b"\x89PNG")
+        # Create PNG with VLM-input filename pattern (verify_poll matches the
+        # filter; non-matching names like 'step_01.png' or '_click.png' are
+        # intentionally skipped — see VLM_INPUT_TOKENS in live_dashboard).
+        (run_dir / "120000_step1_verify_poll.png").write_bytes(b"\x89PNG")
         watcher._poll_once()
         assert len(screenshot_events) == 1
-        assert screenshot_events[0]["url"] == "/png/run1/vm1/step_01.png"
+        assert screenshot_events[0]["url"] == "/png/run1/vm1/120000_step1_verify_poll.png"
 
     def test_skips_malformed_json_line(self, tmp_path):
         """Watcher must not crash on mid-line garbage; valid lines after it still emit."""
