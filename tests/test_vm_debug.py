@@ -14,7 +14,6 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 import importlib as _importlib
 import PIL.Image as _pil_image_mod

@@ -31,7 +31,7 @@ _smod.loader.exec_module(_scenario_mod)
 
 ScenarioModel = _scenario_mod.ScenarioModel
 
-from pydantic import ValidationError
+from pydantic import ValidationError  # noqa: E402  # imported after spec-from-file-location loader setup
 
 
 # ---------------------------------------------------------------------------
