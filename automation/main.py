@@ -2,6 +2,7 @@
 import argparse
 import os
 import signal
+import subprocess
 import sys
 import urllib.request
 import urllib.error
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from .config import load_config
 from .state import StateManager
+from .issue_confirm import ConfirmInvocation, run_confirm
 
 
 def cmd_run(args) -> int:
@@ -475,6 +477,49 @@ def cmd_report(args) -> int:
     return 0
 
 
+def _git_rev_short() -> str | None:
+    """Return short git HEAD rev, or None on failure (e.g. git not available)."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+        return None
+    except Exception:
+        return None
+
+
+def cmd_confirm(args) -> int:
+    iterations = args.iterations or (3 if args.mode == "confirm" else 5)
+    repro = " ".join([
+        "mosdat", "confirm", args.issue,
+        "--vm", args.vm,
+        "--iterations", str(iterations),
+        "--mode", args.mode,
+    ])
+    git_rev = _git_rev_short()
+    inv = ConfirmInvocation(
+        issue_id_or_url=args.issue,
+        vm_name=args.vm,
+        iterations=iterations,
+        mode=args.mode,
+        scenario_path=args.scenario,
+        output_dir=args.output,
+        refresh_issue_context=args.refresh_issue_context,
+        emit_html=args.html,
+        skip_state_snapshot=args.no_state_snapshot,
+        repro_command=repro,
+        git_rev=git_rev,
+    )
+    artifacts = run_confirm(inv)
+    print(f"[mosdat] verdict: {artifacts.verdict}")
+    print(f"[mosdat] report:  {artifacts.report_md_path}")
+    print(f"[mosdat] comment: {artifacts.comment_md_path}")
+    return artifacts.exit_code
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mosdat",
@@ -546,6 +591,45 @@ def main() -> int:
     fn_p.add_argument("--canary", choices=["auto", "off", "on"],
                       default="auto", dest="canary_override",
                       help="Override scenario's canary setting globally (A/B testing)")
+
+    # mosdat confirm
+    confirm_p = sub.add_parser(
+        "confirm",
+        help="Confirm or verify-fix a tracked GitHub issue via a bug-confirmation scenario",
+    )
+    confirm_p.add_argument(
+        "issue",
+        help="Issue id or URL (e.g. 3308 or https://github.com/.../issues/3308)",
+    )
+    confirm_p.add_argument("--vm", required=True, help="VM name (e.g. fedora42)")
+    confirm_p.add_argument(
+        "--iterations", type=int, default=None,
+        help="Repeat count (default: 3 for confirm, 5 for verify-fix)",
+    )
+    confirm_p.add_argument(
+        "--mode", choices=["confirm", "verify-fix", "regression"], default="confirm",
+    )
+    confirm_p.add_argument(
+        "--scenario", type=Path, default=None,
+        help="Override scenario YAML path",
+    )
+    confirm_p.add_argument(
+        "--output", type=Path, default=None,
+        help="Override output directory",
+    )
+    confirm_p.add_argument(
+        "--refresh-issue-context", action="store_true", dest="refresh_issue_context",
+        help="Bypass cached issue body and re-fetch",
+    )
+    confirm_p.add_argument(
+        "--html", action="store_true",
+        help="Also emit HTML report",
+    )
+    confirm_p.add_argument(
+        "--no-state-snapshot", action="store_true", dest="no_state_snapshot",
+        help="Skip VM-side state collection",
+    )
+    confirm_p.set_defaults(func=cmd_confirm)
 
     # mosdat validate
     val_p = sub.add_parser("validate", help="Validate config file")
@@ -626,6 +710,7 @@ def main() -> int:
         "run": cmd_run,
         "test": cmd_test,
         "functional": cmd_functional,
+        "confirm": cmd_confirm,
         "validate": cmd_validate,
         "list-vms": cmd_list_vms,
         "report": cmd_report,

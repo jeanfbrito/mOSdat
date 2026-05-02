@@ -11,8 +11,19 @@ Loads functional.py directly by file path to avoid the broken __init__ chain.
 
 import sys
 import types
+import importlib
 import importlib.util
 from pathlib import Path
+
+# Other test modules (test_chaos, test_negative, test_if_visible) stub
+# PIL submodules in sys.modules at import-time. Those stubs persist into the
+# full pytest suite and break tests that exercise real PIL ops (verify_click_diff
+# crops + composite). Restore the real modules before this test file's tests run.
+for _pil_name in ("PIL", "PIL.Image", "PIL.ImageDraw"):
+    sys.modules.pop(_pil_name, None)
+import PIL  # noqa: E402,F401
+import PIL.Image  # noqa: E402,F401
+import PIL.ImageDraw  # noqa: E402,F401
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -58,6 +69,7 @@ _fmod = sys.modules["automation.runners.functional"]
 FunctionalRunner = _fmod.FunctionalRunner
 FunctionalStep = _fmod.FunctionalStep
 StepFailed = _fmod.StepFailed
+BugConfirmationResult = _fmod.BugConfirmationResult
 
 
 # ---------------------------------------------------------------------------
@@ -347,3 +359,143 @@ class TestCanaryVerify:
 
         # localize called twice (retry after canary failure)
         assert vlm.localize.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Bug-confirmation mode
+# ---------------------------------------------------------------------------
+
+class TestBugConfirmationMode:
+    """Tests for _run_bug_confirmation_scenario."""
+
+    def _make_bc_runner(self, tmp_path):
+        runner, vlm, ss, inj = _make_runner(screenshot_dir=tmp_path)
+        return runner, vlm, ss, inj
+
+    def _minimal_steps(self):
+        return [
+            FunctionalStep(shell="echo step1"),
+            FunctionalStep(shell="echo step2"),
+        ]
+
+    def test_precondition_yes_bug_yes_is_bug_confirmed(self, tmp_path):
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        # precondition_check=yes, bug_signal=yes
+        vlm.verify.side_effect = [True, True]
+        result = runner._run_bug_confirmation_scenario(
+            steps=self._minimal_steps(),
+            name="test",
+            bug_signal="is picker visible",
+            precondition_check="is main window visible",
+        )
+        assert result.verdict == "BUG_CONFIRMED"
+        assert result.precondition_met is True
+        assert result.bug_visible is True
+
+    def test_precondition_yes_bug_no_is_bug_not_visible(self, tmp_path):
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        # precondition_check=yes, bug_signal=no
+        vlm.verify.side_effect = [True, False]
+        result = runner._run_bug_confirmation_scenario(
+            steps=self._minimal_steps(),
+            name="test",
+            bug_signal="is picker visible",
+            precondition_check="is main window visible",
+        )
+        assert result.verdict == "BUG_NOT_VISIBLE"
+        assert result.precondition_met is True
+        assert result.bug_visible is False
+
+    def test_precondition_no_bug_yes_is_inconclusive(self, tmp_path):
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        # precondition_check=no, bug_signal=yes
+        vlm.verify.side_effect = [False, True]
+        result = runner._run_bug_confirmation_scenario(
+            steps=self._minimal_steps(),
+            name="test",
+            bug_signal="is picker visible",
+            precondition_check="is main window visible",
+        )
+        assert result.verdict == "INCONCLUSIVE"
+        assert result.precondition_met is False
+
+    def test_precondition_no_bug_no_is_inconclusive(self, tmp_path):
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        # precondition_check=no, bug_signal=no
+        vlm.verify.side_effect = [False, False]
+        result = runner._run_bug_confirmation_scenario(
+            steps=self._minimal_steps(),
+            name="test",
+            bug_signal="is picker visible",
+            precondition_check="is main window visible",
+        )
+        assert result.verdict == "INCONCLUSIVE"
+        assert result.precondition_met is False
+        assert result.bug_visible is False
+
+    def test_non_must_pass_step_failure_is_non_fatal(self, tmp_path):
+        """A step with must_pass=False that raises StepFailed does not abort the run."""
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        bad_step = FunctionalStep(
+            shell="echo ok",
+            must_pass=False,
+        )
+        # Patch run_step to raise StepFailed for this step — isolates BC error-handling logic
+        original_run_step = runner.run_step
+        call_count = [0]
+        def _failing_run_step(step, step_num):
+            call_count[0] += 1
+            if step.must_pass is False:
+                raise StepFailed(f"Step {step_num}: simulated failure")
+            return original_run_step(step, step_num)
+        runner.run_step = _failing_run_step
+
+        vlm.verify.side_effect = [True, False]  # precondition=yes, bug=no
+        result = runner._run_bug_confirmation_scenario(
+            steps=[bad_step],
+            name="test",
+            bug_signal="is picker visible",
+            precondition_check="is main window visible",
+        )
+        # Run continued — we get a result
+        assert isinstance(result, BugConfirmationResult)
+        assert len(result.step_failures) == 1
+        assert result.step_failures[0]["step_num"] == 1
+        assert result.step_failures[0]["reason"] == "StepFailed"
+
+    def test_must_pass_true_step_failure_raises(self, tmp_path):
+        """A step with must_pass=True (default) that fails raises StepFailed."""
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        bad_step = FunctionalStep(
+            verify="something that never appears",
+            verify_timeout=1,
+            retries=1,
+            must_pass=True,  # default — must raise
+        )
+        vlm.verify.return_value = False
+        with patch("time.sleep"):
+            with pytest.raises(StepFailed):
+                runner._run_bug_confirmation_scenario(
+                    steps=[bad_step],
+                    name="test",
+                    bug_signal="is picker visible",
+                    precondition_check="is main window visible",
+                )
+
+    def test_final_vlm_calls_emit_correct_kind_events(self, tmp_path):
+        """precondition_check and bug_signal VLM calls emit events with correct kind strings."""
+        import json
+        runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
+        vlm.verify.side_effect = [True, True]
+        runner._run_bug_confirmation_scenario(
+            steps=[],
+            name="test",
+            bug_signal="is picker visible",
+            precondition_check="is main window visible",
+        )
+        events_path = tmp_path / "events.jsonl"
+        assert events_path.exists()
+        events = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+        kinds = {e.get("kind") for e in events if e.get("event") == "vlm_verify"}
+        assert "precondition_check" in kinds
+        assert "bug_signal" in kinds

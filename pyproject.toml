@@ -29,3 +29,9 @@ functional = ["pillow>=10.0", "openai>=1.0", "pyyaml>=6.0", "websockets>=13.0", 
 
 [tool.hatch.build.targets.wheel]
 packages = ["automation"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: tests that require a real VM (skipped without --live)",
+    "issue: regression tests for tracked GitHub issues",
+]

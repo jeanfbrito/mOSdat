@@ -90,23 +90,23 @@
   Any Win11 scenario that launches a GUI app must kill these processes first.
 - **Ref**: Discovered during H1.1 windows11 smoke iteration (iter 1-3).
 
-## Issue 3308: screen-share picker does not reproduce on headless QEMU fedora42
+## Issue 3308: screen-share picker IS reproducible on first launch (clean install)
 
-- **Status**: Non-reproducible on this VM setup
-- **Issue**: RC.Electron 4.14.0 Flatpak reportedly shows the XDG ScreenCast portal picker
-  dialog unprompted on every launch (GitHub issue 3308). Bisect target: 4.14.0 → FAIL,
-  4.13.0 → PASS.
-- **Finding**: RC 4.14.0 Flatpak makes **zero ScreenCast portal requests** on the fedora42
-  VM (vmid=100, QEMU guest, no GPU passthrough, GNOME Wayland on llvmpipe). The portal
-  services (`xdg-desktop-portal`, `xdg-desktop-portal-gnome`) are running correctly but RC
-  never calls them. The bug likely requires real display/capture hardware or a specific RC
-  server configuration with video-call features enabled.
-- **Scenario**: `shared/scenarios/functional/rocketchat-no-screenshare-picker.yaml` is
-  correct and ready — cleanup wipes `~/.config/Rocket.Chat*/` (not just `~/.var/app/`),
-  full cleanup between launches, `if_visible` for URL screen, immediate `verify_not`
-  polling. Will correctly detect the picker if the portal request fires.
-- **Affects**: Bisect of issue 3308 requires bare-metal or GPU-passthrough fedora42.
-- **Ref**: Bisect attempt 2026-05-02. Full report: `results/functional/3308-bisect.md`.
+- **Status**: Confirmed on fedora42 VM via mosdat confirm 3308; tracked upstream in PR #3313.
+- **Issue**: RC.Electron 4.14.0 Flatpak opens the desktopCapturer screen-share picker
+  dialog immediately on launch, before any user interaction or server registration.
+- **Repro**: `mosdat confirm 3308 --vm fedora42 --mode confirm` produces a CONFIRMED
+  verdict; the bug fires on a clean install with no servers registered. Surprising
+  finding vs the issue body, which suggested the bug needed a prior connect+close
+  cycle: actually it fires on the very first launch.
+- **Env mismatch from reporter**: reporter ran Fedora 43 Wayland Flatpak with
+  ozone-platform=wayland; we ran Fedora 42 with the no-GPU x11 fallback. Bug
+  reproduced anyway, so the regression is independent of the ozone backend.
+- **Scenario**: `shared/scenarios/issues/3308.yaml` (kind: bug-confirmation).
+- **Regression test**: `tests/issues/test_3308.py` runs in `pytest -m issue --live`.
+  Will turn green once PR #3313 lands and is propagated to Flathub.
+- **Ref**: Bisect attempt 2026-05-02 (initial NOT_REPRODUCED was a faulty scenario);
+  re-confirmed 2026-05-02 with `mosdat confirm` harness.
 
 ## Fedora 42: RC Flatpak session data in ~/.config/Rocket.Chat (development)/, not ~/.var/app/
 
@@ -150,3 +150,32 @@
 - **Affects**: `automation/runners/functional.py::_check_canary`, any scenario
   step that relies on `type_text` for single shifted chars.
 - **Ref**: Discovered during canary-byte hardening, May 2026 (smoke iter 7-10).
+
+## mosdat confirm — config glob picks up pyproject.toml before examples/*.toml
+- **Status**: Workaround in place
+- **Issue**: `automation/issue_confirm.py` config-discovery does
+  `list(project_root.glob("*.toml")) + list(project_root.glob("examples/*.toml"))`,
+  but pyproject.toml lacks the `[app]` / `[[vm]]` tables that load_config expects,
+  triggering KeyError before any VM action runs.
+- **Workaround**: Set `MOSDAT_CONFIG=examples/rocketchat.toml` env var.
+- **Affects**: `mosdat confirm` invocations without explicit MOSDAT_CONFIG.
+- **Fix**: Filter the glob to TOML files containing `[[vm]]`, or look in
+  `examples/` first. One-line change in `automation/issue_confirm.py::run_confirm`.
+- **Ref**: Discovered during Phase F live validation, 2026-05-02.
+
+## Issue-context cache file can be overwritten by test_issue_fetch
+- **Status**: Workaround in place (use --refresh-issue-context)
+- **Issue**: `tests/test_issue_fetch.py::test_cache_miss_fetches_from_github`
+  monkeypatches `automation.issue_fetch.CACHE_DIR` to a tmp_path. When
+  module reloading from sibling test files (test_issue_confirm fixture)
+  rebinds the module reference, the patch may not take effect, and the
+  test's mocked GitHub response (title="New Title") gets written to the
+  real `shared/scenarios/issues/<id>.context.md` cache.
+- **Workaround**: Run `mosdat confirm <id> --refresh-issue-context` once
+  to repopulate the cache from real GitHub before the next confirm run.
+- **Affects**: `shared/scenarios/issues/<id>.context.md` after running
+  the full pytest suite.
+- **Fix**: Switch `test_cache_miss_fetches_from_github` to mock
+  `_cache_path` instead of `CACHE_DIR` so it can't accidentally write
+  outside tmp_path even if the module reference goes stale.
+- **Ref**: Observed during Phase F live validation, 2026-05-02.

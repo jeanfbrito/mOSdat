@@ -51,10 +51,36 @@ class FunctionalStep:
     canary: bool = False
     canary_verify: Optional[str] = None
     canary_char: str = "q"
+    # Bug-confirmation mode: if False, step failures are non-fatal
+    must_pass: bool = True
 
 
 class StepFailed(Exception):
     pass
+
+
+@dataclass
+class BugConfirmationResult:
+    """Outcome of a bug-confirmation scenario run.
+
+    Verdict mapping (for the orchestrator, not this dataclass):
+      precondition_met=False                    -> INCONCLUSIVE
+      precondition_met=True, bug_visible=True   -> BUG_CONFIRMED
+      precondition_met=True, bug_visible=False  -> BUG_NOT_VISIBLE
+    """
+    precondition_met: bool
+    bug_visible: bool
+    bug_signal_screenshot: Optional[Path]
+    precondition_screenshot: Optional[Path]
+    final_screenshot: Path
+    step_failures: list  # non-fatal step failures observed during the run
+    elapsed_ms: int
+
+    @property
+    def verdict(self) -> str:
+        if not self.precondition_met:
+            return "INCONCLUSIVE"
+        return "BUG_CONFIRMED" if self.bug_visible else "BUG_NOT_VISIBLE"
 
 
 class FunctionalRunner:
@@ -1093,6 +1119,137 @@ class FunctionalRunner:
         except Exception as e:
             self.log(f"  [vm-debug] WARNING: RC log collection (Windows) failed: {e}")
 
+    def _run_bug_confirmation_scenario(
+        self,
+        steps: list[FunctionalStep],
+        name: str,
+        bug_signal: str,
+        precondition_check: str,
+        vars: Optional[dict] = None,
+    ) -> "BugConfirmationResult":
+        """Execute a bug-confirmation scenario.
+
+        Steps run as in functional mode, BUT steps with must_pass=False treat
+        verify/verify_not failures as non-fatal — they are logged and appended
+        to step_failures. Steps with must_pass=True (default) retain the
+        existing fail-fast behaviour.
+
+        After all steps: capture final screenshot, fire precondition_check and
+        bug_signal as single short-budget VLM calls (<=8s each), return a
+        BugConfirmationResult.
+        """
+        t_start = time.perf_counter()
+        vars = vars or {}
+        step_failures: list[dict] = []
+
+        self.log(f"[bug-confirmation] {name}")
+        self.log(f"  {len(steps)} steps")
+
+        self._prepare_display()
+        resolved = _resolve_vars(steps, vars)
+        self._checkpoints = []
+        self._created_snapshots = []
+
+        for step_index, step in enumerate(resolved):
+            i = step_index + 1
+            must_pass = getattr(step, "must_pass", True)
+            try:
+                self.run_step(step, i)
+            except StepFailed as e:
+                if must_pass:
+                    raise
+                self.log(f"  Step {i}: non-fatal failure (must_pass=False): {e}")
+                step_failures.append({
+                    "step_num": i,
+                    "kind": "step_failed",
+                    "attempt": step.retries,
+                    "reason": "StepFailed",
+                    "error_text": str(e),
+                })
+            except Exception as e:
+                if must_pass:
+                    raise StepFailed(f"Step {i}: {e}") from e
+                self.log(f"  Step {i}: non-fatal error (must_pass=False): {e}")
+                step_failures.append({
+                    "step_num": i,
+                    "kind": "exception",
+                    "attempt": step.retries,
+                    "reason": "exception",
+                    "error_text": str(e),
+                })
+
+        # Capture final screenshot
+        try:
+            final_img, _ = self.screenshotter.capture()
+        except Exception:
+            final_img = None
+
+        final_screenshot_path: Optional[Path] = None
+        if self.screenshot_dir and final_img is not None:
+            self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%H%M%S")
+            final_screenshot_path = self.screenshot_dir / f"{ts}_final_screenshot.png"
+            final_img.save(final_screenshot_path)
+            self.log(f"  Final screenshot: {final_screenshot_path}")
+
+        # Fire precondition_check (short budget <=8s)
+        precondition_screenshot_path: Optional[Path] = None
+        precondition_met = False
+        try:
+            pre_img, _ = self.screenshotter.capture()
+            t0 = time.perf_counter()
+            precondition_met = self.vlm.verify(pre_img, precondition_check)
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            self._emit("vlm_verify", step_num="final", attempt=1,
+                       question=precondition_check[:80],
+                       answer="yes" if precondition_met else "no",
+                       latency_ms=latency_ms, kind="precondition_check")
+            if self.screenshot_dir and pre_img is not None:
+                self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%H%M%S")
+                precondition_screenshot_path = self.screenshot_dir / f"{ts}_precondition_screenshot.png"
+                pre_img.save(precondition_screenshot_path)
+                self.log(f"  Precondition screenshot: {precondition_screenshot_path}")
+        except Exception as e:
+            self.log(f"  precondition_check VLM call failed: {e}")
+            precondition_met = False
+
+        # Fire bug_signal (short budget <=8s)
+        bug_signal_screenshot_path: Optional[Path] = None
+        bug_visible = False
+        try:
+            bug_img, _ = self.screenshotter.capture()
+            t0 = time.perf_counter()
+            bug_visible = self.vlm.verify(bug_img, bug_signal)
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            self._emit("vlm_verify", step_num="final", attempt=1,
+                       question=bug_signal[:80],
+                       answer="yes" if bug_visible else "no",
+                       latency_ms=latency_ms, kind="bug_signal")
+            if self.screenshot_dir and bug_img is not None:
+                self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%H%M%S")
+                bug_signal_screenshot_path = self.screenshot_dir / f"{ts}_bug_signal_screenshot.png"
+                bug_img.save(bug_signal_screenshot_path)
+                self.log(f"  Bug signal screenshot: {bug_signal_screenshot_path}")
+        except Exception as e:
+            self.log(f"  bug_signal VLM call failed: {e}")
+            bug_visible = False
+
+        elapsed_ms = round((time.perf_counter() - t_start) * 1000)
+
+        result = BugConfirmationResult(
+            precondition_met=precondition_met,
+            bug_visible=bug_visible,
+            bug_signal_screenshot=bug_signal_screenshot_path,
+            precondition_screenshot=precondition_screenshot_path,
+            final_screenshot=final_screenshot_path,
+            step_failures=step_failures,
+            elapsed_ms=elapsed_ms,
+        )
+        self.log(f"  verdict: {result.verdict}")
+        return result
+
     def run_test(
         self,
         steps: list[FunctionalStep],
@@ -1242,6 +1399,7 @@ def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalSte
             canary=s.canary,
             canary_verify=_sub(s.canary_verify, vars) if s.canary_verify else None,
             canary_char=s.canary_char,
+            must_pass=s.must_pass,
         ))
     return resolved
 

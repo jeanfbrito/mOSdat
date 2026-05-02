@@ -23,6 +23,28 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
+# Bug-confirmation support models
+# ---------------------------------------------------------------------------
+
+class IssueRef(BaseModel):
+    """Reference to a tracked bug for kind=bug-confirmation scenarios."""
+    id: str  # "3308" or "RocketChat/Rocket.Chat.Electron#3308"
+    url: str  # full GitHub URL; using str (not HttpUrl) to avoid pydantic url-validator headaches
+    title: Optional[str] = None
+    suspected_pr: Optional[str] = None
+    reporter_version: Optional[str] = None  # e.g. "4.14.0"
+
+
+class ExpectedEnv(BaseModel):
+    """Reporter's claimed environment, used to render an env-delta table in the report."""
+    ozone: Optional[Literal["wayland", "x11", "auto"]] = None
+    display_server: Optional[Literal["wayland", "x11"]] = None
+    install: Optional[Literal["flatpak", "snap", "appimage", "deb", "rpm"]] = None
+    app_version: Optional[str] = None
+    os: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Shared step base — fields common to all step types
 # ---------------------------------------------------------------------------
 
@@ -48,6 +70,8 @@ class _StepBase(BaseModel):
     canary: bool = False
     canary_verify: Optional[str] = None
     canary_char: str = "q"
+    # Bug-confirmation mode: if False, step failures are non-fatal (default True → existing behaviour)
+    must_pass: bool = True
 
     @model_validator(mode="after")
     def _check_canary_config(self) -> "_StepBase":
@@ -183,6 +207,11 @@ class ScenarioModel(BaseModel):
 
     name: str = ""
     description: Optional[str] = None
+    kind: Literal["functional", "bug-confirmation"] = "functional"
+    issue: Optional[IssueRef] = None
+    bug_signal: Optional[str] = None              # yes/no VLM prompt; YES = bug visible
+    precondition_check: Optional[str] = None      # yes/no VLM prompt; YES = scenario reached the path
+    expected_env: Optional[ExpectedEnv] = None
     app: Optional[str] = None
     vars: Optional[dict[str, str]] = None
     checkpoints: Optional[dict[str, Any]] = None
@@ -195,3 +224,14 @@ class ScenarioModel(BaseModel):
         if isinstance(data, dict) and "steps" not in data:
             raise ValueError("scenario must contain a 'steps' list")
         return data
+
+    @model_validator(mode="after")
+    def _check_bug_confirmation(self) -> "ScenarioModel":
+        if self.kind == "bug-confirmation":
+            if not self.bug_signal:
+                raise ValueError("kind=bug-confirmation requires bug_signal (yes/no VLM prompt)")
+            if not self.precondition_check:
+                raise ValueError("kind=bug-confirmation requires precondition_check (yes/no VLM prompt)")
+            if not self.issue:
+                raise ValueError("kind=bug-confirmation requires issue.id and issue.url")
+        return self

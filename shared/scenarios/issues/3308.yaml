@@ -1,0 +1,79 @@
+name: "RC.Electron #3308 — screen-share picker on launch"
+kind: bug-confirmation
+description: >
+  Confirms https://github.com/RocketChat/Rocket.Chat.Electron/issues/3308:
+  RC.Electron 4.14.0 Flatpak opens the desktopCapturer screen-share picker
+  dialog ("Rocket.Chat wants to share your screen") immediately on launch,
+  before any user interaction. Reporter says reproducible on Fedora 43
+  Wayland Flatpak after a clean install. Locally reproduces on fedora42
+  (Wayland + QEMU x11-fallback + no-GPU) too — the bug is independent of
+  ozone backend; it's purely the Electron handler-registration regression
+  introduced by PR #3266.
+
+issue:
+  id: "3308"
+  url: "https://github.com/RocketChat/Rocket.Chat.Electron/issues/3308"
+  title: "Screen share picker opens on every app launch (regression since 4.14.0, likely PR #3266)"
+  suspected_pr: "3266"
+  reporter_version: "4.14.0"
+
+expected_env:
+  ozone: wayland           # reporter env; we'll likely run x11 — env-delta table will note ✗
+  display_server: wayland
+  install: flatpak
+  app_version: "4.14.0"
+  os: "Fedora 43"
+
+bug_signal: >
+  a desktop screen-share picker dialog is visible — text mentioning
+  'share your screen', 'Choose what to share', or 'Window' / 'Display'
+  tabs, plus Cancel/Share buttons or thumbnail tiles of windows or
+  screens. This is the bug.
+
+precondition_check: >
+  the Rocket.Chat application window is visible on screen — either the
+  server-URL entry form, a login form, or a chat UI is rendered. Anything
+  that proves RC actually launched on this VM, even if it's behind the
+  picker overlay.
+
+steps:
+  # ---- pre-test cleanup: clean-slate state, no servers registered ----
+  - shell: |
+      flatpak kill chat.rocket.RocketChat 2>/dev/null || true
+      sleep 1
+      pkill -9 -x rocketchat-desk 2>/dev/null || true
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      rm -f "$HOME"/.local/share/keyrings/*.keyring
+      rm -f "$HOME"/.local/share/keyrings/default
+      rm -f "$HOME"/.local/share/keyrings/login.keyring
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.var/app/chat.rocket.RocketChat"
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
+      remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
+      if [ -n "$remaining" ]; then echo "cleanup:FAILED — $remaining survived"; exit 1; fi
+      echo cleanup:ok
+    must_pass: true     # cleanup MUST succeed; no point in running otherwise
+
+  - key: "escape"
+    wait: 1
+    must_pass: false
+
+  # ---- launch RC via GNOME Activities ----
+  - key: "super"
+    wait: 2
+    must_pass: false
+
+  - then_type: "Rocket"
+    wait: 1
+    must_pass: false
+
+  - key: "enter"
+    wait: 8
+    must_pass: false
+    # No verify here on purpose: in bug-confirmation mode, the picker may
+    # overlay the RC window, so the regular "RC window is visible" verify
+    # would fail and confuse the runner. The bug_signal + precondition_check
+    # at end-of-scenario give us the verdict.

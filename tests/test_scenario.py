@@ -252,3 +252,67 @@ class TestLoadTestYamlExit4:
         name, steps, vars_, ckpts = load_test_yaml(str(good_yaml))
         assert name == "good"
         assert len(steps) == 1
+
+
+# ---------------------------------------------------------------------------
+# Bug-confirmation schema validation
+# ---------------------------------------------------------------------------
+
+class TestBugConfirmationSchema:
+    _VALID_BC = {
+        "name": "issue-3308-check",
+        "kind": "bug-confirmation",
+        "issue": {
+            "id": "3308",
+            "url": "https://github.com/RocketChat/Rocket.Chat.Electron/issues/3308",
+            "title": "ScreenCast portal picker shown on every launch",
+            "reporter_version": "4.14.0",
+        },
+        "bug_signal": "is there a screen-cast portal picker dialog visible",
+        "precondition_check": "is the Rocket.Chat main window fully visible",
+        "steps": [{"shell": "echo ok"}],
+    }
+
+    def test_valid_bug_confirmation_parses_clean(self):
+        model = _validate(self._VALID_BC)
+        assert model.kind == "bug-confirmation"
+        assert model.issue.id == "3308"
+        assert model.bug_signal is not None
+        assert model.precondition_check is not None
+
+    def test_missing_bug_signal_raises(self):
+        data = dict(self._VALID_BC)
+        data.pop("bug_signal")
+        with pytest.raises(ValidationError, match="bug_signal"):
+            _validate(data)
+
+    def test_missing_precondition_check_raises(self):
+        data = dict(self._VALID_BC)
+        data.pop("precondition_check")
+        with pytest.raises(ValidationError, match="precondition_check"):
+            _validate(data)
+
+    def test_missing_issue_raises(self):
+        data = dict(self._VALID_BC)
+        data.pop("issue")
+        with pytest.raises(ValidationError, match="issue"):
+            _validate(data)
+
+    def test_functional_kind_default_no_new_fields_needed(self):
+        """kind: functional (default) with no bug-confirmation fields validates clean."""
+        model = _validate({"name": "smoke", "steps": [{"shell": "echo ok"}]})
+        assert model.kind == "functional"
+        assert model.issue is None
+        assert model.bug_signal is None
+        assert model.precondition_check is None
+
+    def test_canonical_smoke_still_loads_clean(self):
+        """Existing canonical scenario still parses after schema extension."""
+        yaml_path = _PROJ / "shared" / "scenarios" / "functional" / "rocketchat-smoke-linux.yaml"
+        if not yaml_path.exists():
+            pytest.skip("rocketchat-smoke-linux.yaml not found")
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        model = _validate(data)
+        assert model.kind == "functional"
+        assert len(model.steps) > 0
