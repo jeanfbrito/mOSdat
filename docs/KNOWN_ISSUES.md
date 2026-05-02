@@ -60,6 +60,18 @@
   Any code on the Linux host that parses Windows paths must use `ntpath`, not `os.path`.
 - **Ref**: Discovered during H1.1 windows10 smoke iteration (iter 1-4).
 
+## Windows 11: "Let's finish setting up your PC" OOBE dialog blocks app window
+- **Status**: Workaround in place
+- **Issue**: On first boot (or after VM snapshot restore), Windows 11 shows a
+  "Let's finish setting up your PC" setup wizard as a full-screen WebView2 dialog
+  (`WebExperienceHostApp.exe` + `msedgewebview2.exe`). This covers any app window
+  that launches behind it, causing `process=True, window=False` in launch verify.
+- **Workaround**: Kill `WebExperienceHostApp.exe` and `msedgewebview2.exe` in the
+  pre-test cleanup shell step before launching the app under test.
+- **Affects**: `shared/scenarios/functional/rocketchat-smoke.yaml` cleanup step.
+  Any Win11 scenario that launches a GUI app must kill these processes first.
+- **Ref**: Discovered during H1.1 windows11 smoke iteration (iter 1-3).
+
 ## Fedora 42: RC relaunches with X11 when GPU unavailable (--disable-gpu workaround)
 - **Status**: Not needed with GNOME Activities launcher workaround
 - **Issue**: When launched via SSH with `WAYLAND_DISPLAY` set, Electron probes GPU and on
