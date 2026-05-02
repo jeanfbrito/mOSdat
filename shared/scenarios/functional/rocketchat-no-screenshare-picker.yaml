@@ -1,0 +1,145 @@
+name: rocketchat-no-screenshare-picker
+description: >
+  Negative test: verify that the screen-share picker does NOT open unprompted on
+  every launch (regression for RocketChat/Rocket.Chat.Electron#3308, v4.14.0+,
+  Flatpak on Wayland).  A PASS means the picker stayed hidden — the bug is absent.
+  A FAIL means the picker appeared — the bug is present.
+app: Rocket.Chat
+
+steps:
+  # 1. Kill any running instance, wipe ALL RC state so it starts fresh
+  #    (unauthenticated). RC Flatpak on fedora42 persists session data to
+  #    ~/.config/Rocket.Chat*/ (bind-mounted into the Flatpak sandbox), NOT
+  #    to ~/.var/app/chat.rocket.RocketChat. Both paths must be wiped.
+  #    Also wipe ~/.local/share/keyrings/ (libsecret token cache) and
+  #    user.keystore so no cached login token can survive.
+  #    The screen-share portal request only fires during the startup sequence
+  #    of a fresh (unauthenticated) session.
+  - shell: |
+      flatpak kill chat.rocket.RocketChat 2>/dev/null || true
+      sleep 1
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      rm -rf ~/.var/app/chat.rocket.RocketChat
+      rm -rf ~/.config/Rocket.Chat*/
+      rm -rf ~/.config/rocketchat*/
+      rm -f ~/.local/share/keyrings/*.keyring \
+            ~/.local/share/keyrings/default \
+            ~/.local/share/keyrings/login.keyring \
+            ~/.local/share/keyrings/user.keystore 2>/dev/null || true
+      echo "cleanup:ok"
+
+  # 2. Launch via GNOME Activities launcher (Super → type → Enter).
+  #    Must NOT use launch: "{app_path}" on Fedora 42 / GNOME Wayland because
+  #    injector.launch() reads env from gnome-shell's /proc environ which omits
+  #    WAYLAND_DISPLAY, causing the Flatpak RC to force X11 and segfault.
+  #    The Activities launcher inherits the full graphical session env.
+  - key: "escape"
+    wait: 1
+
+  - key: "super"
+    wait: 2
+
+  - then_type: "Rocket.Chat"
+    wait: 1
+
+  - key: "enter"
+    wait: 5
+
+  # 3. RC may show either the server URL entry screen (cold start, no config)
+  #    or the login screen (config survived, server remembered). Handle both:
+  #    if the server URL screen is visible, type the URL and connect; otherwise
+  #    fall through to login directly.
+  #    The screen-share portal request fires during server connection / startup.
+  - if_visible: "the Rocket.Chat server URL entry screen — a text input field for entering a server URL and a Connect button below the rocket.chat logo"
+    then:
+      - localize: "the server URL input field below the rocket.chat logo"
+        then_type: "{workspace_url}"
+        then_key: "Return"
+        wait: 2
+
+  # 4. Negative verify: the screen-share picker must NOT be visible.
+  #    The bug (issue 3308) causes the XDG portal screen-share picker to appear
+  #    unprompted during the startup sequence on 4.14.0 — either immediately
+  #    after connecting to the server OR after the login screen renders.
+  #    Polling starts immediately (no pre-wait) to catch transient picker dialogs.
+  #    verify_timeout:60 covers connection + login screen render.
+  #    retries:1 — two consecutive detections = genuine failure.
+  - verify: "the Rocket.Chat application window is visible — showing the login screen with email/username and password fields, OR a loading spinner, OR the main chat interface"
+    verify_not: >
+      a screen share picker dialog is visible — text saying
+      'Choose what to share' OR 'Rocket.Chat wants to share your screen'
+      OR a grid of display or window thumbnails OR a 'Share Screen' modal
+    verify_timeout: 60
+    retries: 1
+
+  # 5. Log in: click the Login form directly with the Login button to avoid
+  #    Tab-navigation issues. Use localize on each field individually.
+  - localize: "the Email or username input field"
+    then_type: "{test_user}"
+    wait: 1
+
+  - localize: "the Password input field"
+    then_type: "{test_password}"
+    wait: 1
+
+  - localize: "the Login button"
+    wait: 2
+
+  # 6. Verify main chat interface loaded (no picker during full login sequence).
+  - verify: "the Rocket.Chat main chat interface is visible — showing a channel list or messages"
+    verify_not: >
+      a screen share picker dialog is visible — text saying
+      'Choose what to share' OR 'Rocket.Chat wants to share your screen'
+      OR a grid of display or window thumbnails OR a 'Share Screen' modal
+    verify_timeout: 45
+    retries: 1
+
+  # 7. Close and relaunch to confirm the bug repeats per launch, not just
+  #    on the very first cold start. Second launch should remember the server
+  #    but still trigger the portal on 4.14.0 (bug is per-launch, not one-time).
+  # 7b. Between launches: wipe ALL RC state again so the second launch is
+  #     also a fresh session. Without this, config.json (written by RC
+  #     during the first login) causes RC to skip the server URL screen
+  #     on relaunch and go straight to the workspace — bypassing the
+  #     startup sequence that triggers the screen-share portal.
+  - shell: |
+      flatpak kill chat.rocket.RocketChat 2>/dev/null || true
+      sleep 1
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      rm -rf ~/.var/app/chat.rocket.RocketChat
+      rm -rf ~/.config/Rocket.Chat*/
+      rm -rf ~/.config/rocketchat*/
+      rm -f ~/.local/share/keyrings/*.keyring \
+            ~/.local/share/keyrings/default \
+            ~/.local/share/keyrings/login.keyring \
+            ~/.local/share/keyrings/user.keystore 2>/dev/null || true
+      echo "cleanup2:ok"
+
+  - key: "super"
+    wait: 2
+
+  - then_type: "Rocket.Chat"
+    wait: 1
+
+  - key: "enter"
+    wait: 5
+
+  # 8a. Same server URL / login handling for second launch.
+  - if_visible: "the Rocket.Chat server URL entry screen — a text input field for entering a server URL and a Connect button below the rocket.chat logo"
+    then:
+      - localize: "the server URL input field below the rocket.chat logo"
+        then_type: "{workspace_url}"
+        then_key: "Return"
+        wait: 2
+
+  # 8. Second-launch negative verify: picker must not appear on relaunch either.
+  #    Same immediate-poll strategy — no pre-wait so transient picker is caught.
+  - verify: "the Rocket.Chat application window is visible — showing the main chat interface or the login screen"
+    verify_not: >
+      a screen share picker dialog is visible — text saying
+      'Choose what to share' OR 'Rocket.Chat wants to share your screen'
+      OR a grid of display or window thumbnails OR a 'Share Screen' modal
+    verify_timeout: 45
+    retries: 1

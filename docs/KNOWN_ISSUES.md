@@ -90,6 +90,41 @@
   Any Win11 scenario that launches a GUI app must kill these processes first.
 - **Ref**: Discovered during H1.1 windows11 smoke iteration (iter 1-3).
 
+## Issue 3308: screen-share picker does not reproduce on headless QEMU fedora42
+
+- **Status**: Non-reproducible on this VM setup
+- **Issue**: RC.Electron 4.14.0 Flatpak reportedly shows the XDG ScreenCast portal picker
+  dialog unprompted on every launch (GitHub issue 3308). Bisect target: 4.14.0 → FAIL,
+  4.13.0 → PASS.
+- **Finding**: RC 4.14.0 Flatpak makes **zero ScreenCast portal requests** on the fedora42
+  VM (vmid=100, QEMU guest, no GPU passthrough, GNOME Wayland on llvmpipe). The portal
+  services (`xdg-desktop-portal`, `xdg-desktop-portal-gnome`) are running correctly but RC
+  never calls them. The bug likely requires real display/capture hardware or a specific RC
+  server configuration with video-call features enabled.
+- **Scenario**: `shared/scenarios/functional/rocketchat-no-screenshare-picker.yaml` is
+  correct and ready — cleanup wipes `~/.config/Rocket.Chat*/` (not just `~/.var/app/`),
+  full cleanup between launches, `if_visible` for URL screen, immediate `verify_not`
+  polling. Will correctly detect the picker if the portal request fires.
+- **Affects**: Bisect of issue 3308 requires bare-metal or GPU-passthrough fedora42.
+- **Ref**: Bisect attempt 2026-05-02. Full report: `results/functional/3308-bisect.md`.
+
+## Fedora 42: RC Flatpak session data in ~/.config/Rocket.Chat (development)/, not ~/.var/app/
+
+- **Status**: Documented; cleanup scripts updated
+- **Issue**: RC Flatpak on fedora42 writes ALL session data (cookies, localStorage, config.json,
+  IndexedDB) to the HOST filesystem at `~/.config/Rocket.Chat (development)/` via Electron's
+  `app.getPath('userData')`. The Flatpak manifest has no `filesystem=` restrictions so the
+  sandbox passes through `~/.config` directly. The canonical Flatpak data path
+  `~/.var/app/chat.rocket.RocketChat/` contains only empty scaffolding (cache/config/data
+  dirs, no RC data).
+- **Workaround**: Any scenario or cleanup script that needs to wipe RC state must delete
+  BOTH `~/.var/app/chat.rocket.RocketChat` AND `~/.config/Rocket.Chat*/` (glob catches
+  both `Rocket.Chat` and `Rocket.Chat (development)`). Also wipe
+  `~/.local/share/keyrings/` to clear libsecret token cache.
+- **Affects**: Any scenario targeting fedora42 Flatpak RC that needs a fresh (unauthenticated)
+  session. The `rocketchat-no-screenshare-picker.yaml` scenario implements the correct cleanup.
+- **Ref**: Discovered during issue 3308 bisect attempt, 2026-05-02.
+
 ## Fedora 42: RC relaunches with X11 when GPU unavailable (--disable-gpu workaround)
 - **Status**: Not needed with GNOME Activities launcher workaround
 - **Issue**: When launched via SSH with `WAYLAND_DISPLAY` set, Electron probes GPU and on
