@@ -25,13 +25,15 @@ import ssl
 import struct
 import time
 import urllib.parse
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from Crypto.Cipher import DES
 from PIL import Image
 from websockets.sync.client import connect
 
 if TYPE_CHECKING:
+    from websockets.sync.client import ClientConnection
+    from websockets.typing import Subprotocol
     from ..proxmox.api import ProxmoxAPI
 
 
@@ -138,7 +140,7 @@ class VncClient:
         self._proxmox = proxmox
         self._vmid = vmid
         self._timeout = timeout
-        self._ws = None
+        self._ws: Optional[ClientConnection] = None
         self._reader: _Reader | None = None
         self._width = 0
         self._height = 0
@@ -206,11 +208,12 @@ class VncClient:
         self._require_open()
         parts = [p.strip().lower() for p in name.split("+")]
         mods, main = parts[:-1], parts[-1]
-        mod_syms = []
+        mod_syms: list[int] = []
         for m in mods:
             if m not in _MODIFIERS:
                 raise VncClientError(f"Unknown modifier: {m!r}")
             mod_syms.append(_MODIFIERS[m])
+        main_sym: int
         if main in _KEYSYMS:
             main_sym = _KEYSYMS[main]
         elif main in _MODIFIERS:
@@ -219,13 +222,13 @@ class VncClient:
             main_sym = _char_keysym(main)
         else:
             raise VncClientError(f"Unknown key: {name!r}")
-        for m in mod_syms:
-            self._key_event(m, True)
+        for sym in mod_syms:
+            self._key_event(sym, True)
         self._key_event(main_sym, True)
         time.sleep(0.02)
         self._key_event(main_sym, False)
-        for m in reversed(mod_syms):
-            self._key_event(m, False)
+        for sym in reversed(mod_syms):
+            self._key_event(sym, False)
 
     # ---- low-level RFB messages ----
 
@@ -280,7 +283,7 @@ class VncClient:
                     uri,
                     ssl=ssl_ctx,
                     additional_headers={"Cookie": f"PVEAuthCookie={pveticket}"},
-                    subprotocols=["binary"],
+                    subprotocols=["binary"],  # type: ignore[list-item]  # websockets stub in tests lacks Subprotocol; str is valid at runtime
                     open_timeout=self._timeout,
                     max_size=None,
                     compression=None,
@@ -347,14 +350,14 @@ class VncClient:
 
         (result,) = struct.unpack(">I", r.read(4))
         if result != 0:
-            reason = b""
+            auth_reason: bytes = b""
             try:
                 (reason_len,) = struct.unpack(">I", r.read(4))
-                reason = r.read(reason_len)
+                auth_reason = r.read(reason_len)
             except Exception:
                 pass
             raise VncClientError(
-                f"VNC authentication failed (code {result}): {reason.decode('utf-8', 'replace')}"  # type: ignore[attr-defined]  # reason is bytes (b"" or r.read()); mypy loses track after try/except reassignment
+                f"VNC authentication failed (code {result}): {auth_reason.decode('utf-8', 'replace')}"
             )
 
         self._send(b"\x01")  # ClientInit shared=1
