@@ -1,0 +1,150 @@
+name: "Rocket.Chat smoke test (Fedora 42)"
+# Fork of rocketchat-smoke-linux.yaml for Fedora 42 / GNOME Wayland.
+#
+# Key divergence from smoke-linux:
+#   The injector.launch() mechanism reads env from gnome-shell's /proc environ,
+#   which on Fedora 42 / GNOME Wayland does NOT include WAYLAND_DISPLAY. The
+#   RC wrapper script (rocketchat-desktop) requires WAYLAND_DISPLAY to take the
+#   Wayland path; without it, it forces --ozone-platform=x11 which segfaults
+#   because there is no Xauthority in the SSH session.
+#
+#   Fix: use the GNOME Activities launcher (Super → type "Rocket" → Enter).
+#   This inherits the full graphical session env from gnome-shell, including
+#   WAYLAND_DISPLAY=wayland-0, so RC starts correctly under Wayland.
+#
+#   Additional Fedora-specific items:
+#   - A "Critical Updates Ready to Install" system popup appears on launch.
+#     Handled by the if_visible block (same pattern as the RC update dialog).
+#   - Cleanup is identical to smoke-linux (same paths, same process names).
+
+steps:
+  # ── Pre-test cleanup: clean-slate Rocket.Chat, dismiss stale dialogs ────
+  - shell: |
+      # IMPORTANT: every pkill/pgrep below uses `-x` (exact process name).
+      # Do NOT use `-f` (cmdline regex) — the bash script body contains the
+      # literal strings "rocketchat-desktop", "update-manager", etc., so
+      # `pkill -f <those>` matches its own /proc/<pid>/cmdline and SIGKILLs
+      # the script after one command. See git log: 780481f, 3d705e4.
+      #
+      # Stage 1: kill RC + helper popups, hard-kill any zygote/renderer/GPU
+      # children. Loop until pgrep returns nothing or we've waited 8s.
+      # Fedora: Linux truncates comm to 15 chars in /proc/PID/comm.
+      # rocketchat-desktop.bin → "rocketchat-desk" (15 chars) is what pgrep/pkill -x sees.
+      # Use the truncated name; the full name >15 chars produces zero matches on this procps.
+      pkill -9 -x rocketchat-desk 2>/dev/null || true
+      pkill -x update-manager 2>/dev/null || true
+      pkill -x update-notifier 2>/dev/null || true
+      for i in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        pgrep -x rocketchat-desk >/dev/null || break
+        pkill -9 -x rocketchat-desk 2>/dev/null || true
+      done
+      # Stage 2: nuke keyring daemon FIRST so it can't write back stored tokens
+      # while we delete files. RC stores login tokens in libsecret via keytar;
+      # a userData wipe alone leaves the session intact. Daemon will respawn
+      # empty on next desktop login or libsecret access.
+      pkill -9 gnome-keyring-d 2>/dev/null || true
+      sleep 1
+      # Delete ALL keyring files — including 'default' (no .keyring extension).
+      rm -f "$HOME"/.local/share/keyrings/*.keyring
+      rm -f "$HOME"/.local/share/keyrings/default
+      rm -f "$HOME"/.local/share/keyrings/login.keyring
+      rm -rf "$HOME"/.cache/keyring-* 2>/dev/null || true
+      # Stage 3: nuke Electron userData — release, dev build, Electron suffix.
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.config/Rocket.Chat Electron"
+      # Snap confines its own userData under ~/snap/rocketchat-desktop/<rev>/.config/;
+      # GNOME's launcher prefers the snap over the deb when both installed.
+      for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
+        [ -e "$d" ] && rm -rf "$d"
+      done
+      # Stage 4: Chromium cache + IndexedDB + alt-share-path caches (Electron
+      # writes some data here, not just .config/).
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.local/share/Rocket.Chat (development)" 2>/dev/null || true
+      # Stage 5: confirm clean. Fail loudly if anything survived so the test
+      # halts here instead of running on a half-stale session.
+      remaining=$(ls -d "$HOME"/.config/Rocket.Chat* 2>/dev/null | head -1)
+      if [ -n "$remaining" ]; then
+        echo "cleanup:FAILED — $remaining survived"
+        exit 1
+      fi
+      echo cleanup:ok
+
+  # Reset desktop — Escape collapses any leftover GNOME overview or menu.
+  - key: "escape"
+    wait: 1
+
+  # Launch Rocket.Chat via GNOME Activities launcher.
+  # Using Super → type → Enter because injector.launch() (SSH-based) does NOT
+  # work on Fedora 42 Wayland: gnome-shell's /proc environ omits WAYLAND_DISPLAY,
+  # causing the RC wrapper to force X11 which then segfaults (no Xauthority).
+  # The Activities launcher inherits the full graphical session env.
+  - key: "super"
+    wait: 2
+
+  - then_type: "Rocket"
+    wait: 1
+
+  - key: "enter"
+    verify: "the Rocket.Chat window is open and an input field labeled 'Enter your server URL' is visible under the rocket.chat logo"
+    verify_not: "an Email/username input field, a Password input field, a chat history containing messages, a 'Message #...' composer, or a window title containing 'unread message' or a workspace name like 'Southlogic' is visible inside the Rocket.Chat window"
+    verify_timeout: 30
+    retries: 2
+
+  # ── Dismiss system update popup if present (Fedora: "Critical Updates Ready to Install").
+  - if_visible: "button with visible text 'Later', 'Dismiss', 'Not now', 'Close', OR an X close icon in the top-right corner of a notification banner or update dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', 'Not now', 'Close', OR an X close icon in the top-right corner of a notification banner or update dialog"
+
+  # ── Dismiss RC's electron-updater "update available" dialog if it appears.
+  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+    then:
+      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+
+  # ── Rest is identical to smoke-linux ──────────────────────────────────────
+  - localize: "the Enter your server URL input text field below the rocket.chat logo"
+    then_type: "{workspace_url}"
+    then_key: "enter"
+    verify: "a form with both an Email or username input field AND a labeled Password input field is visible — this is the login page (not the server URL page)"
+    verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
+    verify_timeout: 25
+    retries: 3
+
+  - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+    then_type: "{test_user}"
+    verify_input: "the Email or username field contains the text 'jean' (visible as plain text, not dots), and the Password field below it is still empty"
+    retries: 3
+
+  - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+    then_type: "{test_password}"
+    then_key: "enter"
+    verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+    verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
+    verify_timeout: 30
+    retries: 3
+
+  # ── Dismiss the "Update your Rocket.Chat" in-app banner if present.
+  #    On Fedora, this banner persists at the top of the window after login
+  #    and can intercept clicks intended for the sidebar.
+  - if_visible: "an 'Update your Rocket.Chat' banner or bar at the top of the application with a close or X button"
+    then:
+      - localize: "the X or close button on the 'Update your Rocket.Chat' top banner"
+
+  - localize: "the General channel in the left sidebar"
+    verify: "the General channel chat is open and shows a message composer/input box at the bottom and chat messages, NOT a Home screen or documentation panel"
+    verify_not: "a 'Home' panel, 'Documentation' section, 'Customize content' button, or 'Not visible to workspace' text is shown in the main area"
+    verify_timeout: 60
+    retries: 3
+
+  - localize: "the message input box or composer at the bottom of the chat"
+    then_type: "mosdat functional test {timestamp}"
+    then_key: "enter"
+    verify: "a message containing 'mosdat functional test' appears in the chat history"
+    verify_not: "the message composer still shows 'mosdat functional test' as unsent, or an error is visible"
+    verify_timeout: 30
+    retries: 3
