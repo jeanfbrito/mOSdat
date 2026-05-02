@@ -16,6 +16,57 @@ _LOCK_DIR_FALLBACK = "/tmp"
 _LOCK_STALE_SECONDS = 30 * 60  # 30 minutes
 _LOCK_TIMEOUT_SECONDS = 35 * 60  # 35 minutes (> stale TTL)
 
+# VM-lock directory — override with MOSDAT_LOCK_DIR env var (e.g. in tests)
+_VM_LOCK_DIR = os.environ.get("MOSDAT_LOCK_DIR", "/tmp")
+
+
+class ProxmoxLockTimeout(Exception):
+    """Raised when an advisory VM or GPU lock cannot be acquired within the timeout.
+
+    Hint: check ``lsof /tmp/mosdat-gpu-<host>.lock`` (or the VM equivalent)
+    to identify the process holding the lock.
+    """
+
+
+@contextmanager
+def _host_gpu_lock(host: str, timeout: int = 300):
+    """Exclusive per-Proxmox-host GPU lock using fcntl.flock (LOCK_EX|LOCK_NB).
+
+    Serializes GPU passthrough operations (attach/detach) across concurrent
+    callers targeting the same Proxmox node.  Lock file:
+    ``<MOSDAT_LOCK_DIR>/mosdat-gpu-<host>.lock``
+
+    Raises ProxmoxLockTimeout if the lock cannot be acquired within *timeout*
+    seconds (default 300 s / 5 min).
+    """
+    lock_dir = os.environ.get("MOSDAT_LOCK_DIR", _VM_LOCK_DIR)
+    safe_host = host.replace("/", "_").replace(":", "_")
+    lock_path = os.path.join(lock_dir, f"mosdat-gpu-{safe_host}.lock")
+    lock_fd = open(lock_path, "w")
+    acquired = False
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ProxmoxLockTimeout(
+                        f"Could not acquire GPU lock for host '{host}' within {timeout}s; "
+                        f"another mosdat process holds the lock — check "
+                        f"`lsof {lock_path}`"
+                    )
+                time.sleep(1)
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        yield lock_path
+    finally:
+        if acquired:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
 
 def _gpu_lock_path(pci_address: str) -> str:
     safe = pci_address.replace(":", "_").replace("/", "_")
@@ -71,9 +122,9 @@ def gpu_lock(pci_address: str, timeout: int = _LOCK_TIMEOUT_SECONDS):
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(
+                    raise ProxmoxLockTimeout(
                         f"Could not acquire GPU lock for {pci_address} "
-                        f"within {timeout}s"
+                        f"within {timeout}s; check `lsof {lock_path}`"
                     )
                 time.sleep(1)
 
@@ -107,57 +158,14 @@ class GPUManager:
 
     def detach_from_current(self, log_fn=print) -> Optional[int]:
         pci = self.config.gpu_pci_address
-        with gpu_lock(pci):
-            current_owner = self.find_current_owner()
-            if current_owner is None:
-                log_fn("GPU not attached to any VM")
-                return None
+        host = self.api.config.node
+        with _host_gpu_lock(host):
+            with gpu_lock(pci):
+                current_owner = self.find_current_owner()
+                if current_owner is None:
+                    log_fn("GPU not attached to any VM")
+                    return None
 
-            log_fn(f"Detaching GPU from VM {current_owner}")
-
-            status = self.api.get_vm_status(current_owner)
-            if status == "running":
-                log_fn(f"  Stopping VM {current_owner}...")
-                self.api.stop_vm(current_owner)
-                if not self.api.wait_for_status(current_owner, "stopped", timeout=60):
-                    raise GPUError(f"VM {current_owner} did not stop in time")
-
-            log_fn(f"  Removing GPU config from VM {current_owner}")
-            self.api.detach_gpu(current_owner)
-
-            log_fn(f"  Starting VM {current_owner} without GPU...")
-            self.api.start_vm(current_owner)
-
-            return current_owner
-
-    def attach_to_vm(self, vmid: int, log_fn=print) -> str:
-        """Attach GPU to vmid.
-
-        Critical section (held under gpu_lock):
-          - find_current_owner()
-          - detach from current owner (stop VM, detach_gpu, restart)
-          - stop target VM if running
-          - attach_gpu to target VM
-          - start target VM
-          - wait_for_ip (GPU online verification)
-        """
-        pci = self.config.gpu_pci_address
-        with gpu_lock(pci):
-            log_fn(f"Attaching GPU to VM {vmid}")
-
-            if self.api.has_gpu_attached(vmid):
-                log_fn(f"  GPU already attached to VM {vmid}")
-                status = self.api.get_vm_status(vmid)
-                if status != "running":
-                    log_fn(f"  Starting VM {vmid}...")
-                    self.api.start_vm(vmid)
-                ip = self.api.wait_for_ip(vmid, timeout=120)
-                if not ip:
-                    raise GPUError(f"Could not get IP for VM {vmid}")
-                return ip
-
-            current_owner = self.find_current_owner()
-            if current_owner is not None:
                 log_fn(f"Detaching GPU from VM {current_owner}")
 
                 status = self.api.get_vm_status(current_owner)
@@ -173,28 +181,75 @@ class GPUManager:
                 log_fn(f"  Starting VM {current_owner} without GPU...")
                 self.api.start_vm(current_owner)
 
-                time.sleep(2)
+                return current_owner
 
-            status = self.api.get_vm_status(vmid)
-            if status == "running":
-                log_fn(f"  Stopping VM {vmid} to attach GPU...")
-                self.api.stop_vm(vmid)
-                if not self.api.wait_for_status(vmid, "stopped", timeout=60):
-                    raise GPUError(f"VM {vmid} did not stop in time")
+    def attach_to_vm(self, vmid: int, log_fn=print) -> str:
+        """Attach GPU to vmid.
 
-            log_fn(f"  Adding GPU config to VM {vmid}")
-            self.api.attach_gpu(vmid, pci)
+        Critical section (held under _host_gpu_lock + gpu_lock):
+          - find_current_owner()
+          - detach from current owner (stop VM, detach_gpu, restart)
+          - stop target VM if running
+          - attach_gpu to target VM
+          - start target VM
+          - wait_for_ip (GPU online verification)
+        """
+        pci = self.config.gpu_pci_address
+        host = self.api.config.node
+        with _host_gpu_lock(host):
+            with gpu_lock(pci):
+                log_fn(f"Attaching GPU to VM {vmid}")
 
-            log_fn(f"  Starting VM {vmid} with GPU...")
-            self.api.start_vm(vmid)
+                if self.api.has_gpu_attached(vmid):
+                    log_fn(f"  GPU already attached to VM {vmid}")
+                    status = self.api.get_vm_status(vmid)
+                    if status != "running":
+                        log_fn(f"  Starting VM {vmid}...")
+                        self.api.start_vm(vmid)
+                    ip = self.api.wait_for_ip(vmid, timeout=120)
+                    if not ip:
+                        raise GPUError(f"Could not get IP for VM {vmid}")
+                    return ip
 
-            log_fn(f"  Waiting for VM {vmid} to get IP...")
-            ip = self.api.wait_for_ip(vmid, timeout=120)
-            if not ip:
-                raise GPUError(f"Could not get IP for VM {vmid}")
+                current_owner = self.find_current_owner()
+                if current_owner is not None:
+                    log_fn(f"Detaching GPU from VM {current_owner}")
 
-            log_fn(f"  VM {vmid} IP: {ip}")
-            return ip
+                    status = self.api.get_vm_status(current_owner)
+                    if status == "running":
+                        log_fn(f"  Stopping VM {current_owner}...")
+                        self.api.stop_vm(current_owner)
+                        if not self.api.wait_for_status(current_owner, "stopped", timeout=60):
+                            raise GPUError(f"VM {current_owner} did not stop in time")
+
+                    log_fn(f"  Removing GPU config from VM {current_owner}")
+                    self.api.detach_gpu(current_owner)
+
+                    log_fn(f"  Starting VM {current_owner} without GPU...")
+                    self.api.start_vm(current_owner)
+
+                    time.sleep(2)
+
+                status = self.api.get_vm_status(vmid)
+                if status == "running":
+                    log_fn(f"  Stopping VM {vmid} to attach GPU...")
+                    self.api.stop_vm(vmid)
+                    if not self.api.wait_for_status(vmid, "stopped", timeout=60):
+                        raise GPUError(f"VM {vmid} did not stop in time")
+
+                log_fn(f"  Adding GPU config to VM {vmid}")
+                self.api.attach_gpu(vmid, pci)
+
+                log_fn(f"  Starting VM {vmid} with GPU...")
+                self.api.start_vm(vmid)
+
+                log_fn(f"  Waiting for VM {vmid} to get IP...")
+                ip = self.api.wait_for_ip(vmid, timeout=120)
+                if not ip:
+                    raise GPUError(f"Could not get IP for VM {vmid}")
+
+                log_fn(f"  VM {vmid} IP: {ip}")
+                return ip
 
     def verify_gpu_visible(self, vm: VMConfig, log_fn=print) -> bool:
         log_fn(f"  Verifying GPU visible in VM {vm.name}...")

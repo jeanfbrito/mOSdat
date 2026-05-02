@@ -214,6 +214,23 @@ def cmd_functional(args) -> int:
                 print(f"[mOSdat]   Fix the workspace server (or pass --skip-workspace-check) and retry.")
                 return 2
 
+    # H2.3: probe VLM model identity before per-VM loop
+    if not getattr(args, "skip_model_check", False):
+        try:
+            served_model = vlm.probe_model()
+            expected = config.vlm.expected_model
+            if expected:
+                if served_model != expected:
+                    print(f"[mOSdat] ERROR: VLM model mismatch: configured {expected!r}, endpoint serving {served_model!r}")
+                    print(f"[mOSdat]   Check your llama-swap config or pass --skip-model-check to bypass.")
+                    return 3
+                print(f"[mOSdat] VLM model identity OK: {served_model!r}")
+            else:
+                print(f"[mOSdat] VLM model probe (no enforcement): endpoint serving {served_model!r}")
+        except Exception as probe_err:
+            print(f"[mOSdat] WARNING: VLM model probe failed: {probe_err}")
+            print(f"[mOSdat]   Proceeding — pass --skip-model-check to suppress this warning.")
+
     name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file)
 
     # C2: resolve checkpoint config (YAML wins unless --no-checkpoints overrides)
@@ -464,6 +481,8 @@ def main() -> int:
                       help="Skip VLM warmup phase (faster startup; first scenario step may be slow if endpoint cold)")
     fn_p.add_argument("--skip-workspace-check", action="store_true", dest="skip_workspace_check",
                       help="Skip workspace URL preflight (faster startup; scenario will burn VLM budget if server is down)")
+    fn_p.add_argument("--skip-model-check", action="store_true", dest="skip_model_check",
+                      help="H2.3: skip VLM model identity check (bypass expected_model enforcement)")
     fn_p.add_argument("--record", action="store_true",
                       help="C3: interactive authoring mode — open VNC viewer, capture clicks, generate YAML")
     fn_p.add_argument("--output", type=str, default=None,
@@ -485,11 +504,35 @@ def main() -> int:
     report_p.add_argument("--output", type=Path, help="Output path for flakiness leaderboard (default: <results_dir>/functional/flake-leaderboard.md, or - for stdout)")
     report_p.add_argument("--root", type=Path, help="Root path for flakiness leaderboard search (defaults to results_dir)")
 
+    # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
+    visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
+    visual_group = visual_p.add_mutually_exclusive_group(required=True)
+    visual_group.add_argument("--capture", metavar="SCENARIO_DIR",
+                              help="Capture *.png files in SCENARIO_DIR as references (sorted, 0-indexed)")
+    visual_group.add_argument("--check", metavar="SCENARIO_DIR",
+                              help="Check *.png files in SCENARIO_DIR against stored references")
+    visual_p.add_argument("--refs-dir", metavar="DIR", default=None,
+                          help="Root dir for reference images (default: shared/references/)")
+    visual_p.add_argument("--threshold", type=float, default=0.95, metavar="T",
+                          help="SSIM threshold [0,1] below which a check fails (default: 0.95)")
+
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
         return 0
+
+    def cmd_visual(args) -> int:
+        from .visual import cli as visual_cli
+        argv = []
+        if args.capture:
+            argv += ["--capture", args.capture]
+        elif args.check:
+            argv += ["--check", args.check]
+        if args.refs_dir:
+            argv += ["--refs-dir", args.refs_dir]
+        argv += ["--threshold", str(args.threshold)]
+        return visual_cli(argv)
 
     handlers = {
         "run": cmd_run,
@@ -498,6 +541,7 @@ def main() -> int:
         "validate": cmd_validate,
         "list-vms": cmd_list_vms,
         "report": cmd_report,
+        "visual": cmd_visual,
     }
 
     try:

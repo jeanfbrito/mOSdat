@@ -1,14 +1,62 @@
+import fcntl
+import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
 from ..config import VMConfig, Package, ProjectConfig
 from .api import ProxmoxAPI, ProxmoxAPIError
+from .gpu import ProxmoxLockTimeout  # noqa: F401 — re-exported for callers
 from ..transport.ssh import SSHClient, wait_for_ssh
+
+# Lock directory — override with MOSDAT_LOCK_DIR env var (e.g. in tests)
+_LOCK_DIR = os.environ.get("MOSDAT_LOCK_DIR", "/tmp")
 
 
 class VMError(Exception):
     pass
+
+
+@contextmanager
+def _vm_lock(vmid: int, timeout: int = 300):
+    """Exclusive per-VMID advisory lock using fcntl.flock (LOCK_EX|LOCK_NB).
+
+    Polls every 1 s until *timeout* seconds elapse, then raises
+    ProxmoxLockTimeout.  Lock file lives in ``_LOCK_DIR``
+    (default /tmp, overridable via MOSDAT_LOCK_DIR).
+
+    Usage::
+
+        with _vm_lock(vmid):
+            # snapshot / rollback / reset_vm / delete_snapshot
+    """
+    lock_dir = os.environ.get("MOSDAT_LOCK_DIR", _LOCK_DIR)
+    lock_path = os.path.join(lock_dir, f"mosdat-vm-{vmid}.lock")
+    lock_fd = open(lock_path, "w")
+    acquired = False
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ProxmoxLockTimeout(
+                        f"Could not acquire VM lock for VMID {vmid} within {timeout}s; "
+                        f"another mosdat process holds the lock — check "
+                        f"`lsof {lock_path}`"
+                    )
+                time.sleep(1)
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        yield lock_path
+    finally:
+        if acquired:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
 
 
 class VMOperations:
@@ -150,9 +198,10 @@ class VMOperations:
         Uses POST /nodes/{node}/qemu/{vmid}/status/reset.
         Non-idempotent — no retry.
         """
-        endpoint = f"/nodes/{self.api.config.node}/qemu/{self.vm.vmid}/status/reset"
-        self.api.post(endpoint)
-        log_fn(f"VM {self.vm.name} reset issued")
+        with _vm_lock(self.vm.vmid):
+            endpoint = f"/nodes/{self.api.config.node}/qemu/{self.vm.vmid}/status/reset"
+            self.api.post(endpoint)
+            log_fn(f"VM {self.vm.name} reset issued")
 
     # ---- C2: Snapshot / checkpoint operations ----
 
@@ -182,29 +231,32 @@ class VMOperations:
 
     def snapshot(self, vmid: int, name: str) -> None:
         """Create a disk-only snapshot (vmstate=0) and wait for completion."""
-        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot"
-        response = self.api.post(endpoint, data={"snapname": name, "vmstate": 0})
-        upid = response.get("data", "")
-        if not upid:
-            raise VMError(f"snapshot: no UPID returned for VM {vmid} snap '{name}'")
-        self._wait_for_task(upid)
+        with _vm_lock(vmid):
+            endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot"
+            response = self.api.post(endpoint, data={"snapname": name, "vmstate": 0})
+            upid = response.get("data", "")
+            if not upid:
+                raise VMError(f"snapshot: no UPID returned for VM {vmid} snap '{name}'")
+            self._wait_for_task(upid)
 
     def rollback(self, vmid: int, name: str) -> None:
         """Rollback VM to a named snapshot and wait for completion."""
-        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}/rollback"
-        response = self.api.post(endpoint)
-        upid = response.get("data", "")
-        if not upid:
-            raise VMError(f"rollback: no UPID returned for VM {vmid} snap '{name}'")
-        self._wait_for_task(upid)
+        with _vm_lock(vmid):
+            endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}/rollback"
+            response = self.api.post(endpoint)
+            upid = response.get("data", "")
+            if not upid:
+                raise VMError(f"rollback: no UPID returned for VM {vmid} snap '{name}'")
+            self._wait_for_task(upid)
 
     def delete_snapshot(self, vmid: int, name: str) -> None:
         """Delete a named snapshot and wait for completion."""
-        endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}"
-        response = self.api.delete(endpoint)
-        upid = response.get("data", "")
-        if upid:
-            self._wait_for_task(upid)
+        with _vm_lock(vmid):
+            endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}"
+            response = self.api.delete(endpoint)
+            upid = response.get("data", "")
+            if upid:
+                self._wait_for_task(upid)
 
     def list_snapshots(self, vmid: int) -> list:
         """Return list of snapshot names, excluding the always-present 'current' entry."""

@@ -126,6 +126,7 @@ class VLMConfig:
     base_url: str = field(default_factory=lambda: os.environ.get("VLM_BASE_URL", ""))
     model: str = field(default_factory=lambda: os.environ.get("VLM_MODEL", "holo2-4b"))
     verify_model: str = field(default_factory=lambda: os.environ.get("VLM_VERIFY_MODEL", ""))  # general VLM for yes/no state checks; empty → reuse `model`
+    expected_model: Optional[str] = None  # H2.3: if set, probe_model() result must match; mismatch → exit 3
 
 
 @dataclass
@@ -322,6 +323,7 @@ def load_config(config_path: Path) -> ProjectConfig:
         base_url=vlm_raw.get("base_url", os.environ.get("VLM_BASE_URL", "")),
         model=vlm_raw.get("model", os.environ.get("VLM_MODEL", "holo2-4b")),
         verify_model=vlm_raw.get("verify_model", os.environ.get("VLM_VERIFY_MODEL", "")),
+        expected_model=vlm_raw.get("expected_model") or None,  # H2.3: None → log-only mode
     )
 
     # Functional test config

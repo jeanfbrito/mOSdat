@@ -222,6 +222,45 @@ class VLMClient:
             "All VLM endpoints exhausted: " + ", ".join(self._urls)
         )
 
+    def probe_model(self) -> str:
+        """H2.3: Query the endpoint's /v1/models and return the first model id.
+
+        Uses the primary URL directly via requests to avoid the chat.completions
+        call shape (models.list() exists on the OpenAI SDK but returns a paged
+        iterator that may not be supported by all llama-swap-compatible servers).
+
+        Returns:
+            The ``id`` field of the first model entry.
+
+        Raises:
+            VLMError: On connection failure, timeout, or unexpected response shape.
+        """
+        import requests as _requests
+
+        primary_url = self._urls[self._primary_idx]
+        # Strip trailing /v1 if present, then re-append to build a clean URL.
+        base = primary_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+        url = base.rstrip("/") + "/v1/models"
+        try:
+            resp = _requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            models = data.get("data", [])
+            if not models:
+                raise VLMError(f"probe_model: /v1/models returned empty list from {url}")
+            return models[0]["id"]
+        except (
+            _requests.exceptions.ConnectionError,
+            _requests.exceptions.Timeout,
+        ) as exc:
+            raise VLMError(f"probe_model: connection failed to {url}: {exc}") from exc
+        except VLMError:
+            raise
+        except Exception as exc:
+            raise VLMError(f"probe_model: unexpected error from {url}: {exc}") from exc
+
     def localize(
         self,
         screenshot: Image.Image,
