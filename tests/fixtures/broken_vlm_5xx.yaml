@@ -1,0 +1,10 @@
+name: vlm-5xx-smoke
+vars:
+  workspace_url: "https://example.com"
+  test_user: "admin"
+  test_password: "pass"
+
+steps:
+  - localize: "the login button"
+    verify: "login form is visible"
+    retries: 1

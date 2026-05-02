@@ -1,0 +1,11 @@
+name: ssh-refused-smoke
+vars:
+  workspace_url: "https://example.com"
+  test_user: "admin"
+  test_password: "pass"
+
+steps:
+  - shell: "echo health_ping"
+  - localize: "the login button"
+    verify: "login form is visible"
+    retries: 1

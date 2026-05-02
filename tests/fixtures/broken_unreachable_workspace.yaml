@@ -1,0 +1,10 @@
+name: unreachable-workspace-smoke
+# workspace_url points to RFC5737 TEST-NET-3 — guaranteed unreachable
+vars:
+  workspace_url: "https://10.255.255.1/"
+  test_user: "admin"
+  test_password: "pass"
+
+steps:
+  - localize: "the login button"
+    verify: "login form is visible"

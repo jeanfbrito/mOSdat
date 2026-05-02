@@ -1,0 +1,23 @@
+# Fixture: app_path points to a non-existent binary.
+[app]
+name = "rocketchat"
+version = "0.0.0"
+binary = "rocketchat"
+
+[app.packages.deb]
+format = "deb"
+app_path = "/nonexistent/rocketchat"
+
+[proxmox]
+host = "10.0.0.1"
+port = 8006
+user = "root@pam"
+password = "test"
+
+[[vms]]
+name = "ubuntu24"
+vmid = 100
+ip = "10.0.0.2"
+user = "user"
+desktop = "gnome"
+packages = ["deb"]

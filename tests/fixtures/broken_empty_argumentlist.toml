@@ -1,0 +1,24 @@
+# Fixture: app with empty argumentlist — triggers validation / preflight error.
+[app]
+name = "rocketchat"
+version = "0.0.0"
+binary = "rocketchat"
+
+[app.packages.deb]
+format = "deb"
+app_path = "/usr/bin/rocketchat"
+argumentlist = ""
+
+[proxmox]
+host = "10.0.0.1"
+port = 8006
+user = "root@pam"
+password = "test"
+
+[[vms]]
+name = "ubuntu24"
+vmid = 100
+ip = "10.0.0.2"
+user = "user"
+desktop = "gnome"
+packages = ["deb"]

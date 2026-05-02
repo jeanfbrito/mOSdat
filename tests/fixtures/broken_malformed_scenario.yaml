@@ -1,0 +1,11 @@
+name: malformed-scenario
+# Missing required 'steps' key — load_test_yaml returns empty step list,
+# which is valid structurally but the test verifies the scenario signals
+# the absence of executable steps.
+vars:
+  workspace_url: "https://example.com"
+
+# 'steps' key is intentionally absent; the test mocks load_test_yaml to
+# raise ValueError to simulate a loader that enforces steps presence.
+not_steps:
+  - localize: "something"
