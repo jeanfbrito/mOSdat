@@ -28,6 +28,38 @@
   other RPM distros).
 - **Ref**: Discovered during H1.1 fedora42 smoke iteration (iter 4).
 
+## Windows: process_running must use _ps_encoded (not raw powershell -Command)
+- **Status**: Fixed in input.py
+- **Issue**: Windows OpenSSH's default shell strips `$_` before PowerShell sees it.
+  A raw `powershell.exe -Command "... | Where-Object {$_.Name -like ...}"` sent over
+  SSH arrives as `... | Where-Object {.Name -like ...}` — `.Name` is not recognized,
+  matching nothing. Every `process_running` call returned False regardless of whether
+  the process was running.
+- **Workaround**: Encode all PowerShell scripts via `_ps_encoded()` (base64 UTF-16-LE
+  `-EncodedCommand`) so the SSH shell never touches the script body.
+- **Affects**: `automation/vlm/input.py` `process_running`. Any new Windows SSH calls
+  that use `$_`, `${...}`, or other PS special vars must use `_ps_encoded`.
+- **Ref**: Discovered during H1.1 windows10 smoke iteration (iter 1-4).
+
+## Windows: Get-Process Name has no .exe extension
+- **Status**: Fixed in input.py
+- **Issue**: `Get-Process` returns `Name` without the `.exe` extension. Searching for
+  `*Rocket.Chat.exe*` never matches the process named `Rocket.Chat`.
+- **Workaround**: Strip `.exe` suffix before building the wildcard pattern.
+- **Affects**: `automation/vlm/input.py` `process_running`. Any new process name checks
+  on Windows must account for this.
+- **Ref**: Discovered during H1.1 windows10 smoke iteration (iter 1-4).
+
+## Windows: os.path.basename fails on backslash paths when running on Linux host
+- **Status**: Fixed in functional.py
+- **Issue**: `os.path.basename("C:\\Users\\...\\Rocket.Chat.exe")` on Linux returns
+  the full string (no `/` to split on). The full Windows path was passed to
+  `process_running`, producing a wildcard pattern that never matched any process name.
+- **Workaround**: Use `ntpath.basename` when `injector.is_windows` is True.
+- **Affects**: `automation/runners/functional.py` launch step basename extraction.
+  Any code on the Linux host that parses Windows paths must use `ntpath`, not `os.path`.
+- **Ref**: Discovered during H1.1 windows10 smoke iteration (iter 1-4).
+
 ## Fedora 42: RC relaunches with X11 when GPU unavailable (--disable-gpu workaround)
 - **Status**: Not needed with GNOME Activities launcher workaround
 - **Issue**: When launched via SSH with `WAYLAND_DISPLAY` set, Electron probes GPU and on
