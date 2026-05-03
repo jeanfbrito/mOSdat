@@ -69,3 +69,4 @@ results/**/report.md
 results/**/comment.md
 results/**/summary.json
 results/**/vm-state.json
+.gitnexus
