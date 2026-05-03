@@ -28,16 +28,28 @@ def build_dashboard_state(
 
     for run_dir in sorted((p for p in functional_root.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True):
         vms = []
+        latest_ts = None
         for vm_dir in sorted((p for p in run_dir.iterdir() if p.is_dir()), key=lambda p: p.name):
             vm_state = _build_vm_state(run_dir.name, vm_dir, now, warn_after, stale_after)
             vms.append(vm_state)
+            vm_latest_ts = _parse_ts(vm_state.get("latest_ts"))
+            if vm_latest_ts and (latest_ts is None or vm_latest_ts > latest_ts):
+                latest_ts = vm_latest_ts
             totals["vms"] += 1
             totals[vm_state["status"]] = totals.get(vm_state["status"], 0) + 1
             failures.extend(vm_state["failures"])
         run_status = _rollup_status([vm["status"] for vm in vms])
-        runs.append({"name": run_dir.name, "status": run_status, "vms": vms})
+        age = max(0, int((now - latest_ts).total_seconds())) if latest_ts else None
+        runs.append({
+            "name": run_dir.name,
+            "status": run_status,
+            "latest_ts": latest_ts.isoformat() if latest_ts else None,
+            "age_seconds": age,
+            "vms": vms,
+        })
         totals["runs"] += 1
 
+    runs.sort(key=lambda run: (run.get("latest_ts") or run["name"]), reverse=True)
     failures.sort(key=lambda failure: failure.get("ts", ""), reverse=True)
     return {
         "generated_at": now.isoformat(),

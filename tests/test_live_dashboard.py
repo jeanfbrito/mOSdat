@@ -223,6 +223,8 @@ class TestHTTPHandler:
             assert "text/html" in ct
             body = resp.read().decode("utf-8")
             assert "mOSdat Live Triage" in body
+            assert "run-filter" in body
+            assert "freshness" in body
         finally:
             server.shutdown()
 
@@ -338,6 +340,23 @@ class TestDashboardState:
         assert vm["status"] == "fail"
         assert state["failures"][0]["question"] == "logged in?"
         assert state["failures"][0]["screenshot"]["url"] == "/png/run1/fedora/120000_step2_verify_poll.png"
+
+    def test_runs_sorted_by_latest_event(self, tmp_path):
+        old_dir = tmp_path / "functional" / "old-run" / "ubuntu"
+        new_dir = tmp_path / "functional" / "new-run" / "ubuntu"
+        old_dir.mkdir(parents=True)
+        new_dir.mkdir(parents=True)
+        _write_events(old_dir / "events.jsonl", [
+            {"ts": "2026-05-03T09:00:00", "event": "step_start", "step_num": 1},
+        ])
+        _write_events(new_dir / "events.jsonl", [
+            {"ts": "2026-05-03T10:00:00", "event": "step_start", "step_num": 1},
+        ])
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 3, 10, 1, 0))
+
+        assert state["runs"][0]["name"] == "new-run"
+        assert state["runs"][0]["age_seconds"] == 60
 
     def test_stale_classification(self, tmp_path):
         run_dir = tmp_path / "functional" / "run1" / "opensuse"
