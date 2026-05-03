@@ -1,11 +1,11 @@
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
 from ..config import ProjectConfig
 from ..state import State, TestStatus
+from .report_data import collect_screenshots, extract_meta, group_by_step, load_events
 
 
 def generate_report(state: State, config: ProjectConfig) -> None:
@@ -224,136 +224,14 @@ def generate_html_report(run_dir: Path) -> Path:
         Path to the written report.html.
     """
     events_path = run_dir / "events.jsonl"
-    events = _load_events(events_path)
-    screenshots = _collect_screenshots(run_dir)
-    steps = _group_by_step(events)
-    meta = _extract_meta(events, run_dir)
+    events = load_events(events_path)
+    screenshots = collect_screenshots(run_dir)
+    steps = group_by_step(events)
+    meta = extract_meta(events, run_dir)
     html = _render_html(meta, steps, screenshots, run_dir, events_path)
     out = run_dir / "report.html"
     out.write_text(html, encoding="utf-8")
     return out
-
-
-def _load_events(path: Path) -> list:
-    if not path.exists():
-        return []
-    events = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return events
-
-
-def _collect_screenshots(run_dir: Path) -> set:
-    """Return set of screenshot filenames (name only, no dir) present on disk."""
-    return {p.name for p in run_dir.glob("*.png")}
-
-
-def _group_by_step(events: list) -> dict:
-    """Group events by step_num. Returns ordered dict step_num -> list of events."""
-    steps: dict = {}
-    for ev in events:
-        sn = ev.get("step_num")
-        if sn is None:
-            continue
-        key = str(sn)
-        if key not in steps:
-            steps[key] = []
-        steps[key].append(ev)
-    # Sort numerically where possible (handles "1.1", "2", etc.)
-    def _sort_key(k):
-        parts = str(k).split(".")
-        return tuple(int(p) if p.isdigit() else p for p in parts)
-    return dict(sorted(steps.items(), key=lambda x: _sort_key(x[0])))
-
-
-def _extract_meta(events: list, run_dir: Path) -> dict:
-    """Pull top-level run metadata from events."""
-    start_ts = None
-    end_ts = None
-    scenario_name = run_dir.name  # fallback: use dir name
-
-    step_starts = {}
-    step_ends = {}
-    retried_steps = set()
-
-    for ev in events:
-        ts = ev.get("ts", "")
-        etype = ev.get("event", "")
-        sn = ev.get("step_num")
-
-        if start_ts is None and ts:
-            start_ts = ts
-        if ts:
-            end_ts = ts
-
-        if etype == "step_start" and sn is not None:
-            step_starts[str(sn)] = ev
-        if etype == "step_end" and sn is not None:
-            step_ends[str(sn)] = ev
-        if etype == "retry" and sn is not None:
-            retried_steps.add(str(sn))
-
-    total = len(step_starts)
-    passed = sum(1 for e in step_ends.values() if e.get("status") == "ok")
-    failed = sum(1 for e in step_ends.values() if e.get("status") == "failed")
-    retried = len(retried_steps)
-
-    # Determine overall status
-    if failed > 0:
-        overall = "FAIL"
-    elif total > 0 and passed == total:
-        overall = "PASS"
-    else:
-        overall = "PARTIAL"
-
-    # Duration
-    duration_str = ""
-    if start_ts and end_ts:
-        try:
-            t0 = datetime.fromisoformat(start_ts)
-            t1 = datetime.fromisoformat(end_ts)
-            secs = (t1 - t0).total_seconds()
-            duration_str = f"{secs:.1f}s"
-        except Exception:
-            pass
-
-    # Git commit
-    commit = _get_git_commit(run_dir)
-
-    return {
-        "scenario_name": scenario_name,
-        "start_ts": start_ts or "",
-        "end_ts": end_ts or "",
-        "duration": duration_str,
-        "overall": overall,
-        "total": total,
-        "passed": passed,
-        "failed": failed,
-        "retried": retried,
-        "commit": commit,
-    }
-
-
-def _get_git_commit(run_dir: Path) -> str:
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=3,
-            cwd=run_dir,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except Exception:
-        pass
-    return ""
 
 
 def _esc(text: str) -> str:

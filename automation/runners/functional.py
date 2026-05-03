@@ -1,10 +1,7 @@
 """Functional UI test runner using VLM for element localization and verification."""
 
 import json
-import ntpath
-import os
 import re
-import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,76 +13,17 @@ from PIL import Image
 from automation.vlm.client import VLMClient
 from automation.vlm.input import InputInjector
 from automation.vlm.screenshot import Screenshotter
+from automation.runners.launch import launch_probe_name, natural_window_name
+from automation.runners.scenario_loader import (
+    FunctionalStep,
+    load_test_yaml,
+    parse_on_failure_agent as _parse_on_failure_agent,
+    parse_step as _parse_step,
+    resolve_vars as _resolve_vars,
+)
 
 # Regex for redacting sensitive text values in event log
 _SENSITIVE_RE = re.compile(r"password|token|secret", re.IGNORECASE)
-
-
-def _launch_probe_name(launch: str, launch_window: Optional[str], is_windows: bool) -> str:
-    """Return the process/window name used to verify a launch step."""
-    if launch_window:
-        return launch_window
-
-    try:
-        parts = shlex.split(launch, posix=not is_windows)
-    except ValueError:
-        parts = launch.split()
-    if not parts:
-        return ""
-
-    if len(parts) >= 3 and parts[0] == "flatpak" and parts[1] == "run":
-        return parts[2].rsplit(".", 1)[-1]
-
-    launch_first = parts[0]
-    if is_windows:
-        return ntpath.basename(launch_first)
-    return os.path.basename(launch_first)
-
-
-def _natural_window_name(probe_name: str) -> str:
-    """Strip common binary suffixes for natural-language VLM verification."""
-    natural = probe_name
-    for suffix in ("-desktop", "-bin", ".exe", "-electron", ".AppImage"):
-        if natural.lower().endswith(suffix.lower()):
-            return natural[: -len(suffix)]
-    return natural
-
-
-@dataclass
-class FunctionalStep:
-    localize: Optional[str] = None         # element description to find and click (optional if launch-only)
-    then_type: Optional[str] = None        # text to type after clicking
-    then_key: Optional[str] = None         # key to press after typing (enter/tab/etc.)
-    then_key_pre: Optional[str] = None    # key to press BEFORE typing (e.g. ctrl+a to clear field)
-    verify: Optional[str] = None           # yes/no question that must be TRUE (post-step)
-    verify_not: Optional[str] = None       # yes/no question that must be FALSE (catches error banners, hallucinated success)
-    verify_input: Optional[str] = None     # yes/no check that fires AFTER then_type and BEFORE then_key — blocks Enter until typing actually landed in the right field
-    verify_click: Optional[str] = None     # yes/no check that fires AFTER click+0.4s delay and BEFORE then_key_pre/then_type — catches VLM mis-localize before typing leaks into wrong field
-    verify_timeout: int = 10               # seconds to wait for the expected state
-    retries: int = 3                       # attempts before the step is marked failed
-    launch: Optional[str] = None           # executable path/command to launch before localizing
-    wait: int = 0                          # seconds to wait after launch before proceeding
-    focus: Optional[str] = None           # window title to bring to front after launch+wait
-    shell: Optional[str] = None            # arbitrary shell/PowerShell command to run on the VM (one-shot)
-    if_visible: Optional[str] = None      # VLM visibility check; if True → execute `then_steps`, if False → skip silently
-    then_steps: Optional[list] = None     # steps to execute when if_visible is True (list of FunctionalStep)
-    verify_consistent: bool = False        # A2: if True, use 3-sample quorum vote for verify calls
-    precheck_click: bool = False           # A4: if True, use localize_verified (pre-click crop verify)
-    localize_consistent: bool = False      # C5: if True, use 3-sample coord cluster for localize
-    launch_window: Optional[str] = None   # B6: window name hint for launch verification (derived from launch basename if omitted)
-    launch_timeout: Optional[int] = None  # B6: polling budget for launch verification (defaults to step.wait)
-    on_failure_agent: Optional[dict] = None  # C1: agent fallback on retry exhaustion
-    checkpoint: Optional[str] = None      # C2: snapshot VM at this step; value is the snapshot name
-    # Diff-based click verification
-    verify_click_diff: bool = False
-    verify_click_diff_prompt: Optional[str] = None
-    verify_click_diff_crop: int = 80
-    # Canary-byte typing verification
-    canary: bool = False
-    canary_verify: Optional[str] = None
-    canary_char: str = "q"
-    # Bug-confirmation mode: if False, step failures are non-fatal
-    must_pass: bool = True
 
 
 class StepFailed(Exception):
@@ -455,7 +393,7 @@ class FunctionalRunner:
         # Launch is a one-shot action — do it before the retry loop
         if step.launch:
             self.log(f"  Step {step_num}: launch '{step.launch[:80]}'")
-            app_basename = _launch_probe_name(
+            app_basename = launch_probe_name(
                 step.launch,
                 step.launch_window,
                 self.injector.is_windows,
@@ -465,7 +403,7 @@ class FunctionalRunner:
 
             # B6: Replace blind sleep with polling loop for process + window presence
             launch_budget = step.launch_timeout if step.launch_timeout is not None else step.wait
-            window_name = _natural_window_name(app_basename)
+            window_name = natural_window_name(app_basename)
             if launch_budget > 0:
                 self.log(f"    → waiting up to {launch_budget}s for '{app_basename}' to start…")
                 t_launch = time.perf_counter()
@@ -1386,164 +1324,3 @@ class FunctionalRunner:
         self._cleanup_snapshots(self._checkpoints_retain)
         return True, "\n".join(log_lines)
 
-
-def _resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep]:
-    """Substitute {key} placeholders in step fields."""
-    resolved = []
-    for s in steps:
-        resolved.append(FunctionalStep(
-            localize=_sub(s.localize, vars) if s.localize else None,
-            then_type=_sub(s.then_type, vars) if s.then_type else None,
-            then_key=s.then_key,
-            then_key_pre=s.then_key_pre,
-            verify=_sub(s.verify, vars) if s.verify else None,
-            verify_not=_sub(s.verify_not, vars) if s.verify_not else None,
-            verify_input=_sub(s.verify_input, vars) if s.verify_input else None,
-            verify_click=_sub(s.verify_click, vars) if s.verify_click else None,
-            verify_timeout=s.verify_timeout,
-            retries=s.retries,
-            launch=_sub(s.launch, vars) if s.launch else None,
-            wait=s.wait,
-            focus=s.focus,
-            shell=_sub(s.shell, vars) if s.shell else None,
-            if_visible=_sub(s.if_visible, vars) if s.if_visible else None,
-            then_steps=_resolve_vars(s.then_steps, vars) if s.then_steps else None,
-            verify_consistent=s.verify_consistent,
-            precheck_click=s.precheck_click,
-            localize_consistent=s.localize_consistent,
-            launch_window=s.launch_window,
-            launch_timeout=s.launch_timeout,
-            on_failure_agent=_resolve_agent_vars(s.on_failure_agent, vars),
-            checkpoint=s.checkpoint,
-            verify_click_diff=s.verify_click_diff,
-            verify_click_diff_prompt=s.verify_click_diff_prompt,
-            verify_click_diff_crop=s.verify_click_diff_crop,
-            canary=s.canary,
-            canary_verify=_sub(s.canary_verify, vars) if s.canary_verify else None,
-            canary_char=s.canary_char,
-            must_pass=s.must_pass,
-        ))
-    return resolved
-
-
-def _sub(text: Optional[str], vars: dict) -> Optional[str]:
-    if not text:
-        return text
-    for k, v in vars.items():
-        text = text.replace(f"{{{k}}}", v)
-    return text
-
-
-def _resolve_agent_vars(agent: Optional[dict], vars: dict) -> Optional[dict]:
-    """C1: Substitute {key} placeholders in on_failure_agent dict string values."""
-    if not agent:
-        return agent
-    result = dict(agent)
-    for field_name in ("goal", "success_check"):
-        if isinstance(result.get(field_name), str):
-            result[field_name] = _sub(result[field_name], vars)
-    return result
-
-
-def _parse_on_failure_agent(raw: Optional[dict]) -> Optional[dict]:
-    """C1: Validate and normalize an on_failure_agent dict from YAML.
-
-    Requires 'goal' (str). Applies defaults: budget_turns=10, success_check=None.
-    Returns None if raw is None or falsy.
-    Raises ValueError if goal is missing.
-    """
-    if not raw:
-        return None
-    if "goal" not in raw or not isinstance(raw["goal"], str):
-        raise ValueError("on_failure_agent requires a 'goal' string field")
-    return {
-        "goal": raw["goal"],
-        "budget_turns": int(raw.get("budget_turns", 10)),
-        "success_check": raw.get("success_check"),
-    }
-
-
-def load_test_yaml(path, _unused=None) -> tuple[str, list[FunctionalStep], dict, dict]:
-    """Load a YAML functional test file.
-
-    Returns (name, steps, vars, checkpoints_config).
-
-    checkpoints_config is the optional top-level ``checkpoints:`` dict from the
-    YAML, defaulting to ``{}`` if absent. The caller applies ``enabled``,
-    ``retain``, and ``rewind_on_failure`` from this dict.
-
-    The ``_unused`` positional parameter is accepted (but ignored) for
-    backward-compatibility with call sites that passed extra args.
-
-    I3: After loading YAML, validate against ScenarioModel. On ValidationError,
-    print a clear message pointing at the offending key and sys.exit(4).
-    """
-    import sys as _sys
-    import yaml  # optional dep
-
-    path = Path(path)
-    with open(path) as f:
-        data = yaml.safe_load(f)
-
-    # I3: pydantic schema validation — catches typos like verfy_timeout before
-    # the step parser runs. Exit 4 with a human-readable message on failure.
-    try:
-        from automation.scenario import ScenarioModel
-        ScenarioModel.model_validate(data)
-    except ImportError:
-        pass  # pydantic not installed — skip validation (shouldn't happen; it's a dep)
-    except Exception as _val_err:
-        _sys.stderr.write(
-            f"[scenario] Validation error in {path}:\n{_val_err}\n"
-        )
-        _sys.exit(4)
-
-    name = data.get("name", path.stem)
-    vars = data.get("vars", {})
-    checkpoints_config = data.get("checkpoints", {}) or {}
-    steps = []
-    for raw in data.get("steps", []):
-        steps.append(_parse_step(raw))
-    return name, steps, vars, checkpoints_config
-
-
-def _parse_step(raw: dict) -> "FunctionalStep":
-    """Parse a single raw YAML step dict into a FunctionalStep."""
-    # C2: checkpoint step — shorthand {checkpoint: "name"} with no other fields
-    if "checkpoint" in raw and len(raw) == 1:
-        return FunctionalStep(checkpoint=str(raw["checkpoint"]))
-
-    then_steps = None
-    if "then" in raw:
-        then_steps = [_parse_step(s) for s in raw["then"]]
-    return FunctionalStep(
-        localize=raw.get("localize"),
-        then_type=raw.get("then_type") or raw.get("type"),
-        then_key=raw.get("then_key") or raw.get("key"),
-        then_key_pre=raw.get("then_key_pre") or raw.get("key_pre"),
-        verify=raw.get("verify"),
-        verify_not=raw.get("verify_not"),
-        verify_input=raw.get("verify_input"),
-        verify_click=raw.get("verify_click"),
-        verify_timeout=int(raw.get("verify_timeout", 10)),
-        retries=int(raw.get("retries", 3)),
-        launch=raw.get("launch"),
-        wait=int(raw.get("wait", 0)),
-        focus=raw.get("focus"),
-        shell=raw.get("shell"),
-        if_visible=raw.get("if_visible"),
-        then_steps=then_steps,
-        verify_consistent=bool(raw.get("verify_consistent", False)),
-        precheck_click=bool(raw.get("precheck_click", False)),
-        localize_consistent=bool(raw.get("localize_consistent", False)),
-        launch_window=raw.get("launch_window"),
-        launch_timeout=int(raw["launch_timeout"]) if "launch_timeout" in raw else None,
-        on_failure_agent=_parse_on_failure_agent(raw.get("on_failure_agent")),
-        checkpoint=raw.get("checkpoint"),
-        verify_click_diff=bool(raw.get("verify_click_diff", False)),
-        verify_click_diff_prompt=raw.get("verify_click_diff_prompt"),
-        verify_click_diff_crop=int(raw.get("verify_click_diff_crop", 80)),
-        canary=bool(raw.get("canary", False)),
-        canary_verify=raw.get("canary_verify"),
-        canary_char=raw.get("canary_char", "q"),
-    )

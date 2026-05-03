@@ -12,8 +12,6 @@ Architecture:
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import posixpath
 import threading
 import time
@@ -21,6 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+
+from automation.live_events import EventWatcher, SSEBroadcaster
 
 # ---------------------------------------------------------------------------
 # Heartbeat log (for phase signalling in tests)
@@ -523,167 +523,6 @@ es.onerror = function() {
 
 
 # ---------------------------------------------------------------------------
-# SSEBroadcaster
-# ---------------------------------------------------------------------------
-class SSEBroadcaster:
-    """Thread-safe fan-out of SSE messages to all connected clients."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._queues: list[list[str]] = []
-
-    def subscribe(self) -> list[str]:
-        """Register a new subscriber; returns its shared queue."""
-        q: list[str] = []
-        with self._lock:
-            self._queues.append(q)
-        return q
-
-    def unsubscribe(self, q: list[str]) -> None:
-        with self._lock:
-            try:
-                self._queues.remove(q)
-            except ValueError:
-                pass
-
-    def push(self, payload: str) -> None:
-        """Push raw SSE payload string to all subscribers."""
-        with self._lock:
-            for q in self._queues:
-                q.append(payload)
-
-    def broadcast_event(self, data: dict) -> None:
-        """Serialize dict to SSE event and fan out."""
-        payload = f"data: {json.dumps(data)}\n\n"
-        self.push(payload)
-
-    def heartbeat(self) -> None:
-        self.push(": heartbeat\n\n")
-
-
-# ---------------------------------------------------------------------------
-# EventWatcher
-# ---------------------------------------------------------------------------
-class EventWatcher:
-    """Polls results/functional/<run>/<vm>/events.jsonl for new lines.
-
-    Also scans for new PNG files in the same directory.
-    Emits discovered events to an SSEBroadcaster.
-    """
-
-    def __init__(
-        self,
-        results_root: Path,
-        broadcaster: SSEBroadcaster,
-        refresh_ms: int = 500,
-    ) -> None:
-        self._root = results_root
-        self._bc = broadcaster
-        self._refresh = refresh_ms / 1000.0
-        # per-(run,vm) state
-        self._positions: dict[tuple[str, str], int] = {}   # byte offset in events.jsonl
-        self._mtimes: dict[tuple[str, str], float] = {}    # last seen mtime
-        self._known_pngs: dict[tuple[str, str], set[str]] = {}  # seen PNG basenames
-        self._stop = threading.Event()
-
-    def _functional_dir(self) -> Path:
-        return self._root / "functional"
-
-    def _iter_vms(self):
-        """Yield (run_name, vm_name, vm_path) for all active run/vm dirs."""
-        fn_dir = self._functional_dir()
-        if not fn_dir.exists():
-            return
-        try:
-            for run_entry in os.scandir(fn_dir):
-                if not run_entry.is_dir():
-                    continue
-                try:
-                    for vm_entry in os.scandir(run_entry.path):
-                        if not vm_entry.is_dir():
-                            continue
-                        yield run_entry.name, vm_entry.name, Path(vm_entry.path)
-                except OSError:
-                    pass
-        except OSError:
-            pass
-
-    def _poll_once(self) -> None:
-        for run, vm, vm_path in self._iter_vms():
-            key = (run, vm)
-            events_file = vm_path / "events.jsonl"
-
-            # --- tail events.jsonl ---
-            if events_file.exists():
-                try:
-                    mtime = events_file.stat().st_mtime
-                except OSError:
-                    mtime = 0.0
-                if mtime != self._mtimes.get(key, -1.0):
-                    self._mtimes[key] = mtime
-                    offset = self._positions.get(key, 0)
-                    try:
-                        with events_file.open("rb") as fh:
-                            fh.seek(offset)
-                            chunk = fh.read()
-                            new_offset = offset + len(chunk)
-                        self._positions[key] = new_offset
-                        for raw_line in chunk.split(b"\n"):
-                            raw_line = raw_line.strip()
-                            if not raw_line:
-                                continue
-                            try:
-                                evt = json.loads(raw_line)
-                            except json.JSONDecodeError:
-                                continue  # skip malformed mid-line
-                            evt["run"] = run
-                            evt["vm"] = vm
-                            self._bc.broadcast_event(evt)
-                    except OSError:
-                        pass
-
-            # --- detect new PNGs (only VLM-input frames) ---
-            # Filename pattern: <HHMMSS>_step<N>_<phase>.png. We want VLM-input
-            # frames only — verify polls and localize captures. Skip click
-            # overlays, final-fail snapshots, and other non-VLM-input frames.
-            VLM_INPUT_TOKENS = ("verify_poll", "localize", "verify_input", "verify_click", "verify_click_diff", "canary_verify", "_verify_")
-            known = self._known_pngs.setdefault(key, set())
-            try:
-                for entry in os.scandir(vm_path):
-                    if not entry.name.endswith(".png"):
-                        continue
-                    if entry.name in known:
-                        continue
-                    known.add(entry.name)
-                    if not any(tok in entry.name for tok in VLM_INPUT_TOKENS):
-                        continue  # not a VLM-input frame; skip emit
-                    # parse step_num from filename if possible
-                    step_num = None
-                    import re as _re
-                    m = _re.search(r"_step(\d+)_", entry.name)
-                    if m:
-                        step_num = int(m.group(1))
-                    url = f"/png/{run}/{vm}/{entry.name}"
-                    self._bc.broadcast_event(
-                        {"event": "screenshot", "run": run, "vm": vm,
-                         "url": url, "step_num": step_num,
-                         "filename": entry.name}
-                    )
-            except OSError:
-                pass
-
-    def run_forever(self) -> None:
-        _hb("watcher_start")
-        while not self._stop.is_set():
-            self._poll_once()
-            self._stop.wait(self._refresh)
-        _hb("watcher_stop")
-
-    def stop(self) -> None:
-        self._stop.set()
-
-
-# ---------------------------------------------------------------------------
 # HTTP Handler
 # ---------------------------------------------------------------------------
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -825,7 +664,7 @@ def cli(args: Optional[list[str]] = None) -> int:
     _hb("cli_start")
 
     broadcaster = SSEBroadcaster()
-    watcher = EventWatcher(results_root, broadcaster, refresh_ms=parsed.refresh_ms)
+    watcher = EventWatcher(results_root, broadcaster, refresh_ms=parsed.refresh_ms, debug_hook=_hb)
 
     watcher_thread = threading.Thread(target=watcher.run_forever, daemon=True, name="event-watcher")
     watcher_thread.start()
