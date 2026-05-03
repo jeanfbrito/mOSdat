@@ -1,7 +1,10 @@
 """Functional UI test runner using VLM for element localization and verification."""
 
 import json
+import ntpath
+import os
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +19,36 @@ from ..vlm.screenshot import Screenshotter
 
 # Regex for redacting sensitive text values in event log
 _SENSITIVE_RE = re.compile(r"password|token|secret", re.IGNORECASE)
+
+
+def _launch_probe_name(launch: str, launch_window: Optional[str], is_windows: bool) -> str:
+    """Return the process/window name used to verify a launch step."""
+    if launch_window:
+        return launch_window
+
+    try:
+        parts = shlex.split(launch, posix=not is_windows)
+    except ValueError:
+        parts = launch.split()
+    if not parts:
+        return ""
+
+    if len(parts) >= 3 and parts[0] == "flatpak" and parts[1] == "run":
+        return parts[2].rsplit(".", 1)[-1]
+
+    launch_first = parts[0]
+    if is_windows:
+        return ntpath.basename(launch_first)
+    return os.path.basename(launch_first)
+
+
+def _natural_window_name(probe_name: str) -> str:
+    """Strip common binary suffixes for natural-language VLM verification."""
+    natural = probe_name
+    for suffix in ("-desktop", "-bin", ".exe", "-electron", ".AppImage"):
+        if natural.lower().endswith(suffix.lower()):
+            return natural[: -len(suffix)]
+    return natural
 
 
 @dataclass
@@ -422,28 +455,17 @@ class FunctionalRunner:
         # Launch is a one-shot action — do it before the retry loop
         if step.launch:
             self.log(f"  Step {step_num}: launch '{step.launch[:80]}'")
-            import os as _os
-            import ntpath as _ntpath
-            # Use ntpath.basename for Windows paths (backslash separators) so
-            # that os.path.basename on Linux doesn't return the full path when
-            # the launch string uses backslashes (e.g. C:\...\Rocket.Chat.exe).
-            _launch_first = step.launch.split()[0]
-            if self.injector.is_windows:
-                app_basename = _ntpath.basename(_launch_first)
-            else:
-                app_basename = _os.path.basename(_launch_first)
+            app_basename = _launch_probe_name(
+                step.launch,
+                step.launch_window,
+                self.injector.is_windows,
+            )
             self._emit("launch", step_num=step_num, app=step.launch[:80], args="")
             self.injector.launch(step.launch)
 
             # B6: Replace blind sleep with polling loop for process + window presence
-            # F4: strip common suffixes from app_basename for natural-language VLM question
-            NATURAL = app_basename
-            for _sfx in ("-desktop", "-bin", ".exe", "-electron", ".AppImage"):
-                if NATURAL.lower().endswith(_sfx.lower()):
-                    NATURAL = NATURAL[: -len(_sfx)]
-                    break
             launch_budget = step.launch_timeout if step.launch_timeout is not None else step.wait
-            window_name = step.launch_window or NATURAL
+            window_name = _natural_window_name(app_basename)
             if launch_budget > 0:
                 self.log(f"    → waiting up to {launch_budget}s for '{app_basename}' to start…")
                 t_launch = time.perf_counter()

@@ -1,20 +1,24 @@
 usage: mosdat [-h]
-              {run,test,functional,validate,list-vms,report,dashboard,visual}
+              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,visual}
               ...
 
 mOSdat - Multi-OS Desktop App Testing with GPU passthrough
 
 positional arguments:
-  {run,test,functional,validate,list-vms,report,dashboard,visual}
+  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,visual}
     run                 Full test matrix run
     test                Quick test with pre-built package
     functional          Run VLM functional UI tests
+    confirm             Confirm or verify-fix a tracked GitHub issue via a
+                        bug-confirmation scenario
     validate            Validate config file
     list-vms            Show configured VMs
     report              Regenerate report from existing results or generate
                         flakiness leaderboard
     dashboard           H2.2: Generate static HTML trend dashboard from
                         functional runs
+    live                Live event-stream dashboard — stream smoke test events
+                        in real time
     visual              Visual regression: capture or check step screenshots
                         via SSIM
 

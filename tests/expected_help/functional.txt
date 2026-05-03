@@ -5,6 +5,8 @@ usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
                          [--no-checkpoints] [--skip-warmup]
                          [--skip-workspace-check] [--skip-model-check]
                          [--timeout SECONDS] [--record] [--output OUTPUT]
+                         [--click-verify {auto,off,yesno,diff,diff+yesno}]
+                         [--canary {auto,off,on}]
                          config
 
 positional arguments:
@@ -42,3 +44,9 @@ options:
   --record              C3: interactive authoring mode — open VNC viewer,
                         capture clicks, generate YAML
   --output OUTPUT       (--record) path to write the generated YAML
+  --click-verify {auto,off,yesno,diff,diff+yesno}
+                        Override scenario's verify_click mode globally (A/B
+                        testing)
+  --canary {auto,off,on}
+                        Override scenario's canary setting globally (A/B
+                        testing)
