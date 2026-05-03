@@ -23,6 +23,8 @@ from datetime import datetime
 from http.client import HTTPConnection
 from pathlib import Path
 
+from PIL import Image
+
 # ---------------------------------------------------------------------------
 # Module loader (mirrors pattern from test_dashboard.py)
 # ---------------------------------------------------------------------------
@@ -40,6 +42,7 @@ def _load_live():
 
 
 live = _load_live()
+from automation.authoring import AuthorManager, AuthorSession
 from automation.dashboard_state import build_dashboard_state
 
 
@@ -57,6 +60,53 @@ def _write_events(path: Path, events: list[dict]) -> None:
 def _append_event(path: Path, evt: dict) -> None:
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(evt) + "\n")
+
+
+class FakeVNC:
+    def capture(self):
+        return Image.new("RGB", (20, 10), "white"), (20, 10)
+
+
+class FakeVLM:
+    def localize(self, image, prompt, size):
+        return 5, 6
+
+    def verify(self, image, question):
+        return "ready" in question
+
+
+class FakeInjector:
+    def __init__(self):
+        self.calls = []
+
+    def click(self, x, y):
+        self.calls.append(("click", x, y))
+
+    def type_text(self, text):
+        self.calls.append(("type", text))
+
+    def key(self, key):
+        self.calls.append(("key", key))
+
+    def shell(self, cmd, timeout=60):
+        self.calls.append(("shell", cmd))
+
+
+class FakeAuthorManager(AuthorManager):
+    def __init__(self):
+        super().__init__(config_path=None)
+        self.injector = FakeInjector()
+
+    def create_session(self, vm_name, model=None, verify_model=None):
+        session = AuthorSession(
+            id="session-1",
+            vm_name=vm_name,
+            vnc=FakeVNC(),
+            vlm=FakeVLM(),
+            injector=self.injector,
+        )
+        self.sessions[session.id] = session
+        return self.describe(session)
 
 
 # ---------------------------------------------------------------------------
@@ -199,11 +249,11 @@ class TestEventWatcher:
 # HTTP handler tests (using a live server on a random port)
 # ---------------------------------------------------------------------------
 
-def _start_server(broadcaster: live.SSEBroadcaster, results_root: Path):
+def _start_server(broadcaster: live.SSEBroadcaster, results_root: Path, author_manager=None):
     """Start dashboard server on a free port; return (server, port)."""
     from http.server import HTTPServer
 
-    handler_cls = live._make_handler(broadcaster, results_root)
+    handler_cls = live._make_handler(broadcaster, results_root, author_manager=author_manager)
     server = HTTPServer(("127.0.0.1", 0), handler_cls)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -321,6 +371,90 @@ class TestHTTPHandler:
             resp = conn.getresponse()
             resp.read()
             assert resp.status == 404
+        finally:
+            server.shutdown()
+
+
+class TestAuthorAPI:
+    def _post(self, port, path, payload):
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            path,
+            body=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        return resp.status, data
+
+    def test_author_session_screenshot_vlm_and_export(self, tmp_path):
+        manager = FakeAuthorManager()
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path, author_manager=manager)
+        try:
+            status, data = self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
+            assert status == 200
+            assert data["session_id"] == "session-1"
+
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/author/screenshot?session=session-1")
+            resp = conn.getresponse()
+            shot = json.loads(resp.read().decode("utf-8"))
+            assert resp.status == 200
+            assert shot["width"] == 20
+            assert shot["height"] == 10
+            assert shot["image"]
+
+            status, loc = self._post(
+                port,
+                "/api/author/vlm/localize",
+                {"session_id": "session-1", "prompt": "login button"},
+            )
+            assert status == 200
+            assert (loc["x"], loc["y"]) == (5, 6)
+
+            status, verify = self._post(
+                port,
+                "/api/author/vlm/verify",
+                {"session_id": "session-1", "question": "is ready?"},
+            )
+            assert status == 200
+            assert verify["answer"] == "yes"
+
+            status, action = self._post(
+                port,
+                "/api/author/action",
+                {"session_id": "session-1", "action": "click", "confirm": True, "x": 5, "y": 6, "prompt": "login button"},
+            )
+            assert status == 200
+            assert manager.injector.calls == [("click", 5, 6)]
+            assert action["draft_steps"][0]["localize"] == "login button"
+
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/author/export?session=session-1&name=demo")
+            resp = conn.getresponse()
+            text = resp.read().decode("utf-8")
+            assert resp.status == 200
+            assert "name: demo" in text
+            assert "login button" in text
+        finally:
+            server.shutdown()
+
+    def test_author_action_requires_confirm(self, tmp_path):
+        manager = FakeAuthorManager()
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path, author_manager=manager)
+        try:
+            self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
+            status, data = self._post(
+                port,
+                "/api/author/action",
+                {"session_id": "session-1", "action": "click", "x": 5, "y": 6},
+            )
+            assert status == 400
+            assert "confirm" in data["error"]
+            assert manager.injector.calls == []
         finally:
             server.shutdown()
 

@@ -19,8 +19,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+from automation.authoring import AuthorManager
 from automation.dashboard_state import build_dashboard_state
 from automation.live_events import EventWatcher, SSEBroadcaster
 
@@ -540,16 +541,19 @@ table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1p
 .thumb{width:74px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:#05070a;cursor:zoom-in}
 .fail-list{padding:10px;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 150px);overflow:auto}.fail-card{border:1px solid rgba(255,107,107,.45);background:rgba(255,107,107,.08);border-radius:8px;padding:10px;cursor:pointer}.fail-card img{width:100%;max-height:160px;object-fit:contain;border:1px solid var(--border);border-radius:6px;margin-top:8px;background:#05070a}
 .drawer{position:fixed;right:0;top:0;bottom:0;width:min(720px,96vw);background:#0f151f;border-left:1px solid var(--border);z-index:30;transform:translateX(100%);transition:.18s transform;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-head{position:sticky;top:0;background:#0f151f;border-bottom:1px solid var(--border);padding:14px;display:flex;justify-content:space-between;gap:12px}.drawer-body{padding:14px}button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer}.event{border:1px solid var(--border);border-radius:6px;padding:8px;margin:8px 0;background:rgba(255,255,255,.025)}.shots{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.shots img{width:180px;height:110px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:#05070a;cursor:zoom-in}.empty{padding:28px;color:var(--muted);text-align:center}
+.author{margin:0 16px 16px 16px;padding:12px}.author-grid{display:grid;grid-template-columns:320px minmax(0,1fr) 360px;gap:12px}.author input,.author textarea,.author select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px}.author textarea{min-height:74px}.author-screen{position:relative;min-height:260px;background:#05070a;border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden}.author-screen img{max-width:100%;max-height:520px}.target{position:absolute;width:24px;height:24px;border:2px solid var(--fail);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}pre{white-space:pre-wrap;background:#070b11;border:1px solid var(--border);border-radius:6px;padding:8px;max-height:260px;overflow:auto}
 #lightbox{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.86);align-items:center;justify-content:center;padding:20px}#lightbox img{max-width:96vw;max-height:92vh;border:1px solid var(--border)}@media(max-width:980px){main{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <header><div class="top"><div class="title">mOSdat Live Triage</div><span id="conn" class="pill stale">connecting</span><span id="runs" class="pill">0 runs</span><span id="running" class="pill running">0 running</span><span id="pass" class="pill pass">0 pass</span><span id="fail" class="pill fail">0 fail</span><span id="stale" class="pill stale">0 stale</span><span id="updated" class="pill">updated never</span><label class="small">Run <select id="run-filter" onchange="setRunFilter(this.value)"><option value="latest">Latest</option><option value="all">All</option></select></label><button onclick="loadState()">Refresh</button></div><div id="freshness" class="small" style="margin-top:8px">No run loaded.</div></header>
 <main><section><div class="section-head"><h2>Matrix Overview</h2><span class="small">click a step for timeline</span></div><div id="matrix" class="matrix"><div class="empty">Loading state…</div></div></section><section><div class="section-head"><h2>Failures</h2><span id="failure-count" class="small">0</span></div><div id="failures" class="fail-list"><div class="empty">No failures</div></div></section></main>
+<section class="author"><div class="section-head"><h2>Author Workbench</h2><span id="author-status" class="small">no session</span></div><div class="author-grid"><div><label class="small">VM</label><input id="author-vm" placeholder="ubuntu2404"><button onclick="authorStart()">Start session</button><button onclick="authorCapture()">Capture</button><label class="small">Prompt / question</label><textarea id="author-prompt" placeholder="find the login button"></textarea><button onclick="authorLocalize()">Localize</button><button onclick="authorVerify()">Verify</button><div class="small">Actions require manual confirm.</div><button onclick="authorClick()">Run confirmed click</button><input id="author-type" placeholder="text to type"><button onclick="authorType()">Run confirmed type</button><input id="author-key" placeholder="key, e.g. enter"><button onclick="authorKey()">Run confirmed key</button></div><div class="author-screen" id="author-screen"><span class="small">capture appears here</span></div><div><div class="small">VLM result</div><pre id="author-result">{}</pre><div class="small">Draft YAML</div><pre id="author-draft">steps: []</pre><button onclick="authorExport()">Export YAML</button></div></div></section>
 <aside id="drawer" class="drawer"><div class="drawer-head"><div><strong id="drawer-title">Timeline</strong><div id="drawer-sub" class="small"></div></div><button onclick="closeDrawer()">Close</button></div><div id="drawer-body" class="drawer-body"></div></aside>
 <div id="lightbox" onclick="closeLightbox()"><img id="lightbox-img" src="" alt="screenshot"></div>
 <script>
 let state=null;let runFilter='latest';function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+let authorSession=null;let authorLast=null;let authorTarget=null;
 function fmtAge(sec){if(sec==null)return'-';if(sec<60)return`${sec}s`;return`${Math.floor(sec/60)}m ${sec%60}s`;}
 function cls(status){return['pass','fail','running','stale','partial','skipped'].includes(status)?status:''}
 async function loadState(){const res=await fetch('/api/state',{cache:'no-store'});state=await res.json();render();}
@@ -567,6 +571,18 @@ function openTimeline(runName,vmName,stepNum){const vm=findVm(runName,vmName);if
 function eventBody(e){const bits=[];if(e.question)bits.push(`Q: ${esc(e.question)}`);if(e.answer)bits.push(`A: ${esc(e.answer)}`);if(e.status)bits.push(`status: ${esc(e.status)}`);if(e.latency_ms)bits.push(`latency: ${esc(e.latency_ms)}ms`);return bits.length?`<div>${bits.join('<br>')}</div>`:''}
 function closeDrawer(){document.getElementById('drawer').classList.remove('open')}function openLightbox(url){document.getElementById('lightbox-img').src=url;document.getElementById('lightbox').style.display='flex'}function closeLightbox(){document.getElementById('lightbox').style.display='none';document.getElementById('lightbox-img').src=''}
 const es=new EventSource('/stream');es.onopen=()=>{const c=document.getElementById('conn');c.textContent='connected';c.className='pill pass'};es.onerror=()=>{const c=document.getElementById('conn');c.textContent='disconnected';c.className='pill fail'};es.onmessage=()=>loadState();loadState();setInterval(loadState,5000);
+async function postJson(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok||data.error)throw new Error(data.error||res.statusText);return data}
+function authorSetStatus(text){document.getElementById('author-status').textContent=text}
+function authorShow(obj){document.getElementById('author-result').textContent=JSON.stringify(obj,null,2)}
+function authorDraft(steps){document.getElementById('author-draft').textContent='steps:\\n'+(steps||[]).map(s=>'  - '+JSON.stringify(s)).join('\\n')}
+async function authorStart(){try{const vm=document.getElementById('author-vm').value.trim();const data=await postJson('/api/author/session',{vm});authorSession=data.session_id;authorSetStatus(`session ${authorSession} · ${data.vm}`);authorDraft(data.draft_steps);await authorCapture()}catch(e){authorSetStatus(e.message)}}
+async function authorCapture(){if(!authorSession)return authorSetStatus('start a session first');try{const res=await fetch(`/api/author/screenshot?session=${encodeURIComponent(authorSession)}`);const data=await res.json();authorLast=data;const screen=document.getElementById('author-screen');screen.innerHTML=`<img id="author-img" src="data:${data.content_type};base64,${data.image}">`;authorShow({width:data.width,height:data.height})}catch(e){authorSetStatus(e.message)}}
+async function authorLocalize(){try{const prompt=document.getElementById('author-prompt').value;const data=await postJson('/api/author/vlm/localize',{session_id:authorSession,prompt});authorTarget=data;authorShow(data);const img=document.getElementById('author-img');if(img){const rect=img.getBoundingClientRect();const dot=document.createElement('div');dot.className='target';dot.style.left=`${(data.x/data.width)*100}%`;dot.style.top=`${(data.y/data.height)*100}%`;document.getElementById('author-screen').appendChild(dot)}}catch(e){authorSetStatus(e.message)}}
+async function authorVerify(){try{const question=document.getElementById('author-prompt').value;authorShow(await postJson('/api/author/vlm/verify',{session_id:authorSession,question}))}catch(e){authorSetStatus(e.message)}}
+async function authorClick(){try{if(!authorTarget)throw new Error('localize first');const data=await postJson('/api/author/action',{session_id:authorSession,action:'click',confirm:true,x:authorTarget.x,y:authorTarget.y,prompt:authorTarget.prompt});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
+async function authorType(){try{const text=document.getElementById('author-type').value;const data=await postJson('/api/author/action',{session_id:authorSession,action:'type',confirm:true,text});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
+async function authorKey(){try{const key=document.getElementById('author-key').value;const data=await postJson('/api/author/action',{session_id:authorSession,action:'key',confirm:true,key});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
+async function authorExport(){if(!authorSession)return;const text=await (await fetch(`/api/author/export?session=${encodeURIComponent(authorSession)}`)).text();document.getElementById('author-draft').textContent=text}
 </script></body></html>
 """
 
@@ -582,6 +598,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     results_root: Path
     warn_after: int
     stale_after: int
+    author_manager: AuthorManager
 
     def log_message(self, fmt: str, *args: object) -> None:  # type: ignore[override]
         # Suppress noisy request log; uncomment for debugging
@@ -597,15 +614,69 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_state()
         elif path == "/stream":
             self._serve_sse()
+        elif path == "/api/author/screenshot":
+            self._serve_author_screenshot(parsed.query)
+        elif path == "/api/author/export":
+            self._serve_author_export(parsed.query)
         elif path.startswith("/png/"):
             self._serve_png(path)
         else:
             self.send_error(404, "Not Found")
 
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        body = self._read_json()
+        try:
+            if parsed.path == "/api/author/session":
+                result = self.author_manager.create_session(
+                    body["vm"],
+                    model=body.get("model"),
+                    verify_model=body.get("verify_model"),
+                )
+            elif parsed.path == "/api/author/vlm/localize":
+                session = self.author_manager.get(body["session_id"])
+                result = session.localize(body["prompt"])
+            elif parsed.path == "/api/author/vlm/verify":
+                session = self.author_manager.get(body["session_id"])
+                result = session.verify(body["question"])
+            elif parsed.path == "/api/author/action":
+                session = self.author_manager.get(body["session_id"])
+                result = session.run_action(body["action"], body)
+            elif parsed.path == "/api/author/step":
+                session = self.author_manager.get(body["session_id"])
+                if "steps" in body:
+                    result = session.update_steps(body["steps"])
+                else:
+                    result = session.append_step(body["step"])
+            elif parsed.path == "/api/author/close":
+                result = self.author_manager.close(body["session_id"])
+            else:
+                self.send_error(404, "Not Found")
+                return
+            self._send_json(result)
+        except (KeyError, ValueError) as exc:
+            self._send_json({"error": str(exc)}, status=400)
+
     def _serve_html(self) -> None:
         body = _TRIAGE_HTML.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0:
+            return {}
+        raw = self.rfile.read(length)
+        return json.loads(raw.decode("utf-8"))
+
+    def _send_json(self, data: dict, status: int = 200) -> None:
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -620,6 +691,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_author_screenshot(self, query: str) -> None:
+        params = parse_qs(query)
+        session_id = params.get("session", [""])[0]
+        try:
+            payload = self.author_manager.get(session_id).capture()
+            self._send_json(payload)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=400)
+
+    def _serve_author_export(self, query: str) -> None:
+        params = parse_qs(query)
+        session_id = params.get("session", [""])[0]
+        name = params.get("name", ["authored-scenario"])[0]
+        try:
+            yaml_text = self.author_manager.get(session_id).export_yaml(name=name)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=400)
+            return
+        body = yaml_text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/yaml; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -709,6 +805,7 @@ def _make_handler(
     results_root: Path,
     warn_after: int = 90,
     stale_after: int = 180,
+    author_manager: Optional[AuthorManager] = None,
 ):
     """Return a DashboardHandler subclass with broadcaster + results_root bound."""
 
@@ -719,6 +816,7 @@ def _make_handler(
     BoundHandler.results_root = results_root
     BoundHandler.warn_after = warn_after
     BoundHandler.stale_after = stale_after
+    BoundHandler.author_manager = author_manager or AuthorManager()
     return BoundHandler
 
 
@@ -736,6 +834,8 @@ def cli(args: Optional[list[str]] = None) -> int:
                         help="Mark VM as warning/stale after N seconds without events (default: 90)")
     parser.add_argument("--stale-after", type=int, default=180, dest="stale_after",
                         help="Mark VM stale after N seconds without events (default: 180)")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="mosdat config path; enables browser authoring sessions")
     parsed = parser.parse_args(args)
 
     results_root = parsed.results.resolve()
@@ -753,6 +853,7 @@ def cli(args: Optional[list[str]] = None) -> int:
         results_root,
         warn_after=parsed.warn_after,
         stale_after=parsed.stale_after,
+        author_manager=AuthorManager(parsed.config),
     )
     server = ThreadingHTTPServer(("", parsed.port), handler_cls)
     server.daemon_threads = True

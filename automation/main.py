@@ -662,6 +662,12 @@ def main() -> int:
                         help="Results root directory to watch (default: results/)")
     live_p.add_argument("--refresh-ms", type=int, default=500, dest="refresh_ms",
                         help="Poll interval in ms (default: 500)")
+    live_p.add_argument("--warn-after", type=int, default=90, dest="warn_after",
+                        help="Mark VM warning/stale after N seconds without events (default: 90)")
+    live_p.add_argument("--stale-after", type=int, default=180, dest="stale_after",
+                        help="Mark VM stale after N seconds without events (default: 180)")
+    live_p.add_argument("--config", type=Path, default=None,
+                        help="mosdat config path; enables browser authoring sessions")
 
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
@@ -684,7 +690,11 @@ def main() -> int:
     def cmd_live(args) -> int:
         from automation.live_dashboard import cli as live_cli
         argv = ["--port", str(args.port), "--results", str(args.results),
-                "--refresh-ms", str(args.refresh_ms)]
+                "--refresh-ms", str(args.refresh_ms),
+                "--warn-after", str(args.warn_after),
+                "--stale-after", str(args.stale_after)]
+        if args.config:
+            argv += ["--config", str(args.config)]
         return live_cli(argv)
 
     def cmd_visual(args) -> int:
