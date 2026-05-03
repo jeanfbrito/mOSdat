@@ -379,6 +379,24 @@ class TestDashboardState:
         assert state["runs"][0]["vms"][0]["status"] == "stale"
         assert state["runs"][0]["vms"][0]["duration_seconds"] == 240
 
+    def test_skipped_step_does_not_make_run_fail(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "fedora"
+        run_dir.mkdir(parents=True)
+        _write_events(run_dir / "events.jsonl", [
+            {"ts": "2026-05-03T10:00:00", "event": "step_start", "step_num": 1, "kind": "if_visible"},
+            {"ts": "2026-05-03T10:00:01", "event": "vlm_verify", "step_num": 1, "question": "banner?", "answer": "no"},
+            {"ts": "2026-05-03T10:00:02", "event": "step_end", "step_num": 1, "status": "skipped"},
+            {"ts": "2026-05-03T10:00:03", "event": "step_start", "step_num": 2, "kind": "verify"},
+            {"ts": "2026-05-03T10:00:04", "event": "step_end", "step_num": 2, "status": "ok"},
+        ])
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 3, 10, 0, 5))
+
+        vm = state["runs"][0]["vms"][0]
+        assert vm["status"] == "pass"
+        assert vm["steps"][0]["status"] == "skipped"
+        assert state["failures"] == []
+
     def test_screenshot_only_failure_is_not_running(self, tmp_path):
         run_dir = tmp_path / "functional" / "old-run" / "windows11"
         run_dir.mkdir(parents=True)

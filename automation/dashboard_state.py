@@ -142,7 +142,7 @@ def _group_steps(events: list[dict], screenshots: dict[str, list[dict]]) -> list
             step["label"] = event.get("label", "") or step["label"]
             step["kind"] = event.get("kind", "") or step["kind"]
         if event.get("event") == "step_end":
-            step["status"] = "pass" if event.get("status") == "ok" else "fail"
+            step["status"] = _step_status(event.get("status"))
             step["duration_ms"] = event.get("duration_ms")
             step["attempts"] = event.get("attempts")
     for key, shots in screenshots.items():
@@ -169,7 +169,7 @@ def _extract_failures(run: str, vm: str, events: list[dict], screenshots: dict[s
         step_key = str(event.get("step_num")) if event.get("step_num") is not None else None
         if step_key and event.get("event") in {"vlm_verify", "launch_verify", "vlm_localize"}:
             last_vlm_by_step[step_key] = event
-        if event.get("event") == "step_end" and event.get("status") != "ok" and step_key:
+        if event.get("event") == "step_end" and event.get("status") in {"fail", "failed"} and step_key:
             shot = screenshots.get(step_key, [])[-1:] or []
             vlm = last_vlm_by_step.get(step_key, {})
             failures.append({
@@ -209,14 +209,14 @@ def _classify_status(steps: list[dict], latest_event: Optional[dict], failures: 
                      age: Optional[int], warn_after: int, stale_after: int) -> str:
     if failures:
         return "fail"
+    if not steps:
+        return "pending"
+    if steps and all(step["status"] in {"pass", "skipped"} for step in steps):
+        return "pass"
     if latest_event is None and steps:
         return "partial"
     if age is not None and age >= stale_after:
         return "stale"
-    if not steps:
-        return "pending"
-    if steps and all(step["status"] == "pass" for step in steps):
-        return "pass"
     if latest_event and latest_event.get("event") == "step_end":
         return "partial"
     if age is not None and age >= warn_after:
@@ -246,6 +246,14 @@ def _event_summary(event: dict) -> dict:
     keys = ("ts", "event", "step_num", "kind", "label", "status", "duration_ms", "attempts",
             "question", "answer", "latency_ms", "process", "window")
     return {key: event[key] for key in keys if key in event}
+
+
+def _step_status(raw_status: Optional[str]) -> str:
+    if raw_status == "ok":
+        return "pass"
+    if raw_status == "skipped":
+        return "skipped"
+    return "fail"
 
 
 def _failure_cause(event: dict, vlm: dict, screenshot: Optional[dict]) -> str:
