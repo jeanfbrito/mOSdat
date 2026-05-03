@@ -54,10 +54,13 @@ def _build_vm_state(run: str, vm_dir: Path, now: datetime, warn_after: int, stal
     screenshots = _collect_screenshots(run, vm_dir)
     steps = _group_steps(events, screenshots)
     latest_event = events[-1] if events else None
+    first_event = events[0] if events else None
+    first_ts = _parse_ts(first_event.get("ts")) if first_event else None
     latest_ts = _parse_ts(latest_event.get("ts")) if latest_event else None
     age = max(0, int((now - latest_ts).total_seconds())) if latest_ts else None
     failures = _extract_failures(run, vm_dir.name, events, screenshots)
     status = _classify_status(steps, latest_event, failures, age, warn_after, stale_after)
+    duration = _duration_seconds(first_ts, latest_ts, now, status)
     current_step = _current_step(steps)
 
     return {
@@ -68,6 +71,7 @@ def _build_vm_state(run: str, vm_dir: Path, now: datetime, warn_after: int, stal
         "latest_event": latest_event.get("event") if latest_event else None,
         "latest_ts": latest_event.get("ts") if latest_event else None,
         "age_seconds": age,
+        "duration_seconds": duration,
         "steps": steps,
         "failures": failures,
     }
@@ -236,6 +240,20 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _duration_seconds(
+    first_ts: Optional[datetime],
+    latest_ts: Optional[datetime],
+    now: datetime,
+    status: str,
+) -> Optional[int]:
+    if first_ts is None:
+        return None
+    end_ts = now if status in {"running", "stale"} else latest_ts
+    if end_ts is None:
+        return None
+    return max(0, int((end_ts - first_ts).total_seconds()))
 
 
 def _step_from_filename(filename: str) -> Optional[int]:

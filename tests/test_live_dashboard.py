@@ -354,6 +354,7 @@ class TestDashboardState:
         )
 
         assert state["runs"][0]["vms"][0]["status"] == "stale"
+        assert state["runs"][0]["vms"][0]["duration_seconds"] == 240
 
     def test_screenshot_only_failure_is_not_running(self, tmp_path):
         run_dir = tmp_path / "functional" / "old-run" / "windows11"
