@@ -55,6 +55,16 @@ uninstall = "rm -f /tmp/{file}"
 app_path = "/tmp/{file}"
 file_glob = "rocketchat-*-linux-x86_64.AppImage"
 
+[[vm.package]]
+format = "flatpak"
+appid = "chat.rocket.RocketChat"
+remote = "flathub"
+install = "flatpak install --user --noninteractive --or-update flathub chat.rocket.RocketChat//{version}"
+uninstall = "flatpak uninstall --user --noninteractive chat.rocket.RocketChat -y || true"
+app_path = "flatpak run chat.rocket.RocketChat"
+process_name = "rocketchat-desktop"
+data_dir = "~/.var/app/chat.rocket.RocketChat"
+
 [[vm]]
 name = "ubuntu2204"
 vmid = 101
@@ -109,6 +119,16 @@ uninstall = "sudo snap remove rocketchat-desktop 2>/dev/null || true"
 app_path = "/snap/bin/rocketchat-desktop"
 file_glob = "rocketchat-*.snap"
 
+[[vm.package]]
+format = "flatpak"
+appid = "chat.rocket.RocketChat"
+remote = "flathub"
+install = "flatpak install --user --noninteractive --or-update flathub chat.rocket.RocketChat//{version}"
+uninstall = "flatpak uninstall --user --noninteractive chat.rocket.RocketChat -y || true"
+app_path = "flatpak run chat.rocket.RocketChat"
+process_name = "rocketchat-desktop"
+data_dir = "~/.var/app/chat.rocket.RocketChat"
+
 [[vm]]
 name = "manjaro"
 vmid = 103
@@ -121,6 +141,16 @@ install = "chmod +x /tmp/{file}"
 uninstall = "rm -f /tmp/{file}"
 app_path = "/tmp/{file}"
 file_glob = "rocketchat-*-linux-x86_64.AppImage"
+
+[[vm.package]]
+format = "flatpak"
+appid = "chat.rocket.RocketChat"
+remote = "flathub"
+install = "flatpak install --user --noninteractive --or-update flathub chat.rocket.RocketChat//{version}"
+uninstall = "flatpak uninstall --user --noninteractive chat.rocket.RocketChat -y || true"
+app_path = "flatpak run chat.rocket.RocketChat"
+process_name = "rocketchat-desktop"
+data_dir = "~/.var/app/chat.rocket.RocketChat"
 
 [[vm]]
 name = "opensuse"

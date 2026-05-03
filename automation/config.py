@@ -80,11 +80,21 @@ class Package:
     app_path: Optional[str] = None
     process_name: Optional[str] = None
     file_glob: str = ""
+    # Flatpak-specific fields (all optional; only populated when format == "flatpak")
+    appid: Optional[str] = None
+    remote: Optional[str] = None
+    data_dir: Optional[str] = None
+    # J3: per-package version override; substituted into install_cmd as {version}
+    version: Optional[str] = None
 
     def get_file_glob(self, app_name: str, version: str) -> str:
         if self.file_glob:
             return self.file_glob
         return f"{app_name}-*.{self.format}"
+
+    def effective_version(self, app_version: str) -> str:
+        """Return per-package version if set, else fall back to global app.version."""
+        return self.version if self.version else app_version
 
 
 @dataclass
@@ -271,6 +281,10 @@ def load_config(config_path: Path) -> ProjectConfig:
                 app_path=pkg_raw.get("app_path"),
                 process_name=pkg_raw.get("process_name"),
                 file_glob=pkg_raw.get("file_glob", ""),
+                appid=pkg_raw.get("appid"),
+                remote=pkg_raw.get("remote"),
+                data_dir=pkg_raw.get("data_dir"),
+                version=pkg_raw.get("version"),
             )
             # Resolve {app_name} templates
             if "{app_name}" in pkg.uninstall_cmd:
