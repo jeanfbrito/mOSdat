@@ -55,6 +55,16 @@ dist/
 .eggs/
 
 # Test result artifacts (rebuildable / reproducible — see results/README.md)
+results/functional/
+results/smoke/*/
+!results/smoke/2026-01-16_fedora42/
+!results/smoke/2026-01-16_ubuntu2204/
+!results/smoke/2026-01-19_opensuse-leap/
+!results/smoke/2026-01-19_ubuntu2404/
+!results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2/
+!results/smoke/2026-04-09_fedora42-test/
+!results/smoke/2026-04-09_full-matrix-4.12.0-alpha.2/
+!results/smoke/2026-04-14_full-matrix-4.12.0-alpha.2/
 results/**/*.png
 results/**/*.deb
 results/**/*.rpm

@@ -9,9 +9,9 @@ import urllib.error
 import time as _time
 from pathlib import Path
 
-from .config import load_config
-from .state import StateManager
-from .issue_confirm import ConfirmInvocation, run_confirm
+from automation.config import load_config
+from automation.state import StateManager
+from automation.issue_confirm import ConfirmInvocation, run_confirm
 
 
 def cmd_run(args) -> int:
@@ -23,7 +23,7 @@ def cmd_run(args) -> int:
     if args.results_dir:
         config.results_dir = args.results_dir
 
-    from .runners.smoke import TestRunner
+    from automation.runners.smoke import TestRunner
     runner = TestRunner(config)
 
     try:
@@ -48,7 +48,7 @@ def cmd_test(args) -> int:
 
     config.vms = [config.vm_by_name[name] for name in vm_names]
 
-    from .runners.smoke import TestRunner
+    from automation.runners.smoke import TestRunner
     runner = TestRunner(config)
 
     try:
@@ -77,9 +77,9 @@ def cmd_record(args) -> int:
         print("[mOSdat] ERROR: Proxmox password required for VNC. Set MOSDAT_PROXMOX_PASSWORD or [proxmox].password.")
         return 1
 
-    from .vlm.client import VLMClient
-    from .transport.vnc import VncClient
-    from .proxmox.api import ProxmoxAPI
+    from automation.vlm.client import VLMClient
+    from automation.transport.vnc import VncClient
+    from automation.proxmox.api import ProxmoxAPI
 
     vlm = VLMClient(
         base_url=config.vlm.base_url,
@@ -92,7 +92,7 @@ def cmd_record(args) -> int:
 
     # QApplication must be created here, not at import time (keeps headless imports safe).
     from PyQt6.QtWidgets import QApplication
-    from .record import RecorderWindow
+    from automation.record import RecorderWindow
 
     app = QApplication(sys.argv)
 
@@ -198,10 +198,10 @@ def cmd_functional(args) -> int:
         print(f"[mOSdat] ERROR: Test file not found: {test_file}")
         return 1
 
-    from .vlm.client import VLMClient
-    from .vlm.screenshot import Screenshotter
-    from .vlm.input import InputInjector
-    from .runners.functional import FunctionalRunner, load_test_yaml
+    from automation.vlm.client import VLMClient
+    from automation.vlm.screenshot import Screenshotter
+    from automation.vlm.input import InputInjector
+    from automation.runners.functional import FunctionalRunner, load_test_yaml
 
     vlm = VLMClient(
         base_url=config.vlm.base_url,
@@ -274,7 +274,7 @@ def cmd_functional(args) -> int:
     if not config.proxmox.password:
         print("[mOSdat] ERROR: Proxmox password required for VNC screenshots. Set MOSDAT_PROXMOX_PASSWORD or [proxmox].password in config.")
         return 1
-    from .proxmox.api import ProxmoxAPI
+    from automation.proxmox.api import ProxmoxAPI
     proxmox = ProxmoxAPI(config.proxmox)
 
     if args.timeout > 0:
@@ -294,8 +294,8 @@ def cmd_functional(args) -> int:
                 ts = dt.now().strftime("%Y-%m-%d_%H%M%S")
                 screenshot_dir = config.framework_path / "results" / "functional" / f"{ts}_functional" / vm.name
 
-            from .transport.ssh import SSHClient
-            from .transport.vnc import VncClient
+            from automation.transport.ssh import SSHClient
+            from automation.transport.vnc import VncClient
             ssh = SSHClient(vm.ip, vm.user)
 
             # Inject per-VM app_path (first package with a non-empty app_path)
@@ -325,7 +325,7 @@ def cmd_functional(args) -> int:
                 screenshotter = Screenshotter(vnc)
                 injector = InputInjector(vnc, ssh, vm.is_windows)
                 # C2: vm_ops needed only when checkpoints are enabled
-                from .proxmox.vm import VMOperations
+                from automation.proxmox.vm import VMOperations
                 _vm_ops_for_ckpt = None
                 if checkpoint_config.get("enabled"):
                     _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
@@ -349,7 +349,7 @@ def cmd_functional(args) -> int:
                     healthy = runner._probe_vm_health()
                     if not healthy:
                         print("[mOSdat]   WARNING: VM appears frozen — attempting reset...")
-                        from .proxmox.vm import VMOperations
+                        from automation.proxmox.vm import VMOperations
                         vm_ops = VMOperations(proxmox, vm, config)
                         vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
                         # Wait for VM to come back
@@ -371,7 +371,7 @@ def cmd_functional(args) -> int:
 
                 # B1: Generate HTML report for this run
                 try:
-                    from .reporting.report import generate_html_report
+                    from automation.reporting.report import generate_html_report
                     report_path = generate_html_report(screenshot_dir)
                     print(f"[mOSdat] Report: file://{report_path.absolute()}")
                 except Exception as e:
@@ -393,7 +393,7 @@ def cmd_functional(args) -> int:
         run_label = os.environ.get("MOSDAT_RUN_LABEL", "mosdat functional")
         report_url = os.environ.get("MOSDAT_REPORT_URL", "")
         try:
-            from .notify import notify
+            from automation.notify import notify
             notify(run_label=run_label, status="fail", report_url=report_url)
         except Exception as _notify_err:
             print(f"[mOSdat] WARN: notification failed: {_notify_err}")
@@ -441,7 +441,7 @@ def cmd_list_vms(args) -> int:
 def cmd_report(args) -> int:
     # Handle --flakes flag (B5)
     if getattr(args, "flakes", False):
-        from .reporting.aggregate import flake_leaderboard
+        from automation.reporting.aggregate import flake_leaderboard
 
         results_root = args.root if hasattr(args, "root") and args.root else args.results_dir
         output_path = args.output if hasattr(args, "output") and args.output else (results_root / "functional" / "flake-leaderboard.md")
@@ -472,7 +472,7 @@ def cmd_report(args) -> int:
 
     state_manager = StateManager(state_file, config.app.version)
     with state_manager:
-        from .reporting.report import generate_report
+        from automation.reporting.report import generate_report
         generate_report(state_manager.state, config)
     return 0
 
@@ -682,13 +682,13 @@ def main() -> int:
         return 0
 
     def cmd_live(args) -> int:
-        from .live_dashboard import cli as live_cli
+        from automation.live_dashboard import cli as live_cli
         argv = ["--port", str(args.port), "--results", str(args.results),
                 "--refresh-ms", str(args.refresh_ms)]
         return live_cli(argv)
 
     def cmd_visual(args) -> int:
-        from .visual import cli as visual_cli
+        from automation.visual import cli as visual_cli
         argv = []
         if args.capture:
             argv += ["--capture", args.capture]
@@ -700,7 +700,7 @@ def main() -> int:
         return visual_cli(argv)
 
     def cmd_dashboard(args) -> int:
-        from .reporting.dashboard import cli as dashboard_cli
+        from automation.reporting.dashboard import cli as dashboard_cli
         argv = ["--root", str(args.root)]
         if args.output:
             argv += ["--output", str(args.output)]

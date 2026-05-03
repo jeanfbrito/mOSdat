@@ -15,6 +15,13 @@ class ScreenshotError(Exception):
     pass
 
 
+def _image_pixels(image: Image.Image) -> list[int]:
+    get_flattened_data = getattr(image, "get_flattened_data", None)
+    if get_flattened_data is not None:
+        return list(get_flattened_data())
+    return list(image.getdata())
+
+
 class Screenshotter:
     def __init__(self, vnc: VncClient):
         self._vnc = vnc
@@ -67,8 +74,8 @@ class Screenshotter:
 
             if prev_thumb is not None:
                 # Compute mean absolute difference per pixel.
-                prev_pixels = list(prev_thumb.getdata())
-                curr_pixels = list(thumb.getdata())
+                prev_pixels = _image_pixels(prev_thumb)
+                curr_pixels = _image_pixels(thumb)
                 total_diff = sum(abs(a - b) for a, b in zip(prev_pixels, curr_pixels))
                 mean_diff = total_diff / len(curr_pixels)
                 if mean_diff < hash_tolerance:

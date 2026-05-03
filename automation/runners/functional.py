@@ -13,9 +13,9 @@ from typing import Callable, Optional
 
 from PIL import Image
 
-from ..vlm.client import VLMClient
-from ..vlm.input import InputInjector
-from ..vlm.screenshot import Screenshotter
+from automation.vlm.client import VLMClient
+from automation.vlm.input import InputInjector
+from automation.vlm.screenshot import Screenshotter
 
 # Regex for redacting sensitive text values in event log
 _SENSITIVE_RE = re.compile(r"password|token|secret", re.IGNORECASE)
