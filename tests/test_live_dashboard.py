@@ -19,6 +19,7 @@ import json
 import socket
 import sys
 import threading
+from datetime import datetime
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -39,6 +40,7 @@ def _load_live():
 
 
 live = _load_live()
+from automation.dashboard_state import build_dashboard_state
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +222,28 @@ class TestHTTPHandler:
             ct = resp.getheader("Content-Type", "")
             assert "text/html" in ct
             body = resp.read().decode("utf-8")
-            assert "mOSdat live" in body
+            assert "mOSdat Live Triage" in body
+        finally:
+            server.shutdown()
+
+    def test_api_state_served(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "ubuntu"
+        run_dir.mkdir(parents=True)
+        _write_events(run_dir / "events.jsonl", [
+            {"ts": "2026-05-03T10:00:00", "event": "step_start", "step_num": 1, "kind": "launch"},
+            {"ts": "2026-05-03T10:00:01", "event": "step_end", "step_num": 1, "status": "ok", "duration_ms": 1000, "attempts": 1},
+        ])
+
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path)
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/state")
+            resp = conn.getresponse()
+            payload = json.loads(resp.read().decode("utf-8"))
+            assert resp.status == 200
+            assert payload["runs"][0]["vms"][0]["vm"] == "ubuntu"
+            assert payload["runs"][0]["vms"][0]["steps"][0]["status"] == "pass"
         finally:
             server.shutdown()
 
@@ -296,3 +319,38 @@ class TestHTTPHandler:
             assert resp.status == 404
         finally:
             server.shutdown()
+
+
+class TestDashboardState:
+    def test_failure_summary_includes_vlm_and_screenshot(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "fedora"
+        run_dir.mkdir(parents=True)
+        (run_dir / "120000_step2_verify_poll.png").write_bytes(b"png")
+        _write_events(run_dir / "events.jsonl", [
+            {"ts": "2026-05-03T10:00:00", "event": "step_start", "step_num": 2, "kind": "verify"},
+            {"ts": "2026-05-03T10:00:02", "event": "vlm_verify", "step_num": 2, "question": "logged in?", "answer": "no"},
+            {"ts": "2026-05-03T10:00:05", "event": "step_end", "step_num": 2, "status": "failed", "duration_ms": 5000, "attempts": 3},
+        ])
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 3, 10, 0, 10))
+
+        vm = state["runs"][0]["vms"][0]
+        assert vm["status"] == "fail"
+        assert state["failures"][0]["question"] == "logged in?"
+        assert state["failures"][0]["screenshot"]["url"] == "/png/run1/fedora/120000_step2_verify_poll.png"
+
+    def test_stale_classification(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "opensuse"
+        run_dir.mkdir(parents=True)
+        _write_events(run_dir / "events.jsonl", [
+            {"ts": "2026-05-03T10:00:00", "event": "step_start", "step_num": 1, "kind": "launch"},
+        ])
+
+        state = build_dashboard_state(
+            tmp_path,
+            warn_after=90,
+            stale_after=180,
+            now=datetime(2026, 5, 3, 10, 4, 0),
+        )
+
+        assert state["runs"][0]["vms"][0]["status"] == "stale"

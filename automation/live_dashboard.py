@@ -12,6 +12,7 @@ Architecture:
 from __future__ import annotations
 
 import argparse
+import json
 import posixpath
 import threading
 import time
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+from automation.dashboard_state import build_dashboard_state
 from automation.live_events import EventWatcher, SSEBroadcaster
 
 # ---------------------------------------------------------------------------
@@ -521,6 +523,46 @@ es.onerror = function() {
 </html>
 """
 
+_TRIAGE_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>mOSdat Live Triage</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121821;--panel2:#182130;--text:#e8eef6;--muted:#9aa7b8;--border:#2a3547;--ok:#3fb950;--fail:#ff6b6b;--run:#58a6ff;--stale:#f0b429}
+*{box-sizing:border-box}body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}
+header{position:sticky;top:0;z-index:10;background:rgba(11,15,20,.96);border-bottom:1px solid var(--border);padding:12px 18px}
+.top{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.title{font-weight:750;font-size:18px;margin-right:8px}
+.pill{border:1px solid var(--border);border-radius:999px;padding:4px 10px;color:var(--muted);font-size:12px}.pill.pass{color:var(--ok);border-color:rgba(63,185,80,.45)}.pill.fail{color:var(--fail);border-color:rgba(255,107,107,.45)}.pill.running{color:var(--run);border-color:rgba(88,166,255,.45)}.pill.stale,.pill.partial{color:var(--stale);border-color:rgba(240,180,41,.45)}
+main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;padding:16px}section{background:var(--panel);border:1px solid var(--border);border-radius:8px;min-width:0}.section-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border)}h2{font-size:14px;margin:0}.matrix{overflow:auto}
+table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid var(--border);padding:8px;text-align:left;font-size:12px;vertical-align:middle}th{color:var(--muted);font-weight:650;background:var(--panel2);position:sticky;top:0}.vm-name{font-weight:700}.small{color:var(--muted);font-size:12px}
+.step-row{display:flex;gap:4px;flex-wrap:wrap}.cell{width:28px;height:28px;border-radius:6px;border:1px solid var(--border);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:11px;background:transparent}.cell.pass{background:rgba(63,185,80,.18);border-color:rgba(63,185,80,.55)}.cell.fail{background:rgba(255,107,107,.18);border-color:rgba(255,107,107,.65)}.cell.running{background:rgba(88,166,255,.18);border-color:rgba(88,166,255,.6)}.cell.stale,.cell.partial{background:rgba(240,180,41,.18);border-color:rgba(240,180,41,.6)}
+.fail-list{padding:10px;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 150px);overflow:auto}.fail-card{border:1px solid rgba(255,107,107,.45);background:rgba(255,107,107,.08);border-radius:8px;padding:10px;cursor:pointer}.fail-card img{width:100%;max-height:160px;object-fit:contain;border:1px solid var(--border);border-radius:6px;margin-top:8px;background:#05070a}
+.drawer{position:fixed;right:0;top:0;bottom:0;width:min(720px,96vw);background:#0f151f;border-left:1px solid var(--border);z-index:30;transform:translateX(100%);transition:.18s transform;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-head{position:sticky;top:0;background:#0f151f;border-bottom:1px solid var(--border);padding:14px;display:flex;justify-content:space-between;gap:12px}.drawer-body{padding:14px}button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer}.event{border:1px solid var(--border);border-radius:6px;padding:8px;margin:8px 0;background:rgba(255,255,255,.025)}.shots{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.shots img{width:180px;height:110px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:#05070a;cursor:zoom-in}.empty{padding:28px;color:var(--muted);text-align:center}
+#lightbox{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.86);align-items:center;justify-content:center;padding:20px}#lightbox img{max-width:96vw;max-height:92vh;border:1px solid var(--border)}@media(max-width:980px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div class="top"><div class="title">mOSdat Live Triage</div><span id="conn" class="pill stale">connecting</span><span id="runs" class="pill">0 runs</span><span id="running" class="pill running">0 running</span><span id="pass" class="pill pass">0 pass</span><span id="fail" class="pill fail">0 fail</span><span id="stale" class="pill stale">0 stale</span><span id="updated" class="pill">updated never</span><button onclick="loadState()">Refresh</button></div></header>
+<main><section><div class="section-head"><h2>Matrix Overview</h2><span class="small">click a step for timeline</span></div><div id="matrix" class="matrix"><div class="empty">Loading state…</div></div></section><section><div class="section-head"><h2>Failures</h2><span id="failure-count" class="small">0</span></div><div id="failures" class="fail-list"><div class="empty">No failures</div></div></section></main>
+<aside id="drawer" class="drawer"><div class="drawer-head"><div><strong id="drawer-title">Timeline</strong><div id="drawer-sub" class="small"></div></div><button onclick="closeDrawer()">Close</button></div><div id="drawer-body" class="drawer-body"></div></aside>
+<div id="lightbox" onclick="closeLightbox()"><img id="lightbox-img" src="" alt="screenshot"></div>
+<script>
+let state=null;function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmtAge(sec){if(sec==null)return'-';if(sec<60)return`${sec}s`;return`${Math.floor(sec/60)}m ${sec%60}s`;}
+function cls(status){return['pass','fail','running','stale','partial'].includes(status)?status:''}
+async function loadState(){const res=await fetch('/api/state',{cache:'no-store'});state=await res.json();render();}
+function render(){if(!state)return;const t=state.totals||{};for(const [id,val] of Object.entries({runs:`${t.runs||0} runs`,running:`${t.running||0} running`,pass:`${t.pass||0} pass`,fail:`${t.fail||0} fail`,stale:`${t.stale||0} stale`}))document.getElementById(id).textContent=val;document.getElementById('updated').textContent=`updated ${new Date(state.generated_at).toLocaleTimeString()}`;renderMatrix();renderFailures();}
+function renderMatrix(){const rows=[];for(const run of state.runs||[])for(const vm of run.vms||[])rows.push(`<tr><td><div class="vm-name">${esc(vm.vm)}</div><div class="small">${esc(run.name)}</div></td><td><span class="pill ${cls(vm.status)}">${esc(vm.status)}</span></td><td>${vm.current_step?`step ${esc(vm.current_step.step_num)} <span class="small">${esc(vm.current_step.kind)}</span>`:'<span class="small">-</span>'}</td><td>${fmtAge(vm.age_seconds)}</td><td><div class="step-row">${(vm.steps||[]).map(step=>`<button class="cell ${cls(step.status)}" title="step ${esc(step.step_num)} ${esc(step.status)}" onclick="openTimeline('${esc(run.name)}','${esc(vm.vm)}','${esc(step.step_num)}')">${esc(step.step_num)}</button>`).join('')}</div></td></tr>`);document.getElementById('matrix').innerHTML=rows.length?`<table><thead><tr><th>VM</th><th>Status</th><th>Current</th><th>Last event</th><th>Steps</th></tr></thead><tbody>${rows.join('')}</tbody></table>`:'<div class="empty">No functional runs found.</div>'}
+function renderFailures(){const failures=state.failures||[];document.getElementById('failure-count').textContent=String(failures.length);document.getElementById('failures').innerHTML=failures.length?failures.map(f=>`<div class="fail-card" onclick="openTimeline('${esc(f.run)}','${esc(f.vm)}','${esc(f.step_num)}')"><div><strong>${esc(f.vm)}</strong> step ${esc(f.step_num)}</div><div class="small">${esc(f.run)} · attempts ${esc(f.attempts??'-')} · ${esc(f.duration_ms??'-')}ms</div>${f.question?`<div class="small">Q: ${esc(f.question)}</div>`:''}${f.answer?`<div class="small">A: ${esc(f.answer)}</div>`:''}${f.screenshot?`<img src="${esc(f.screenshot.url)}" loading="lazy">`:''}</div>`).join(''):'<div class="empty">No failures</div>'}
+function findVm(runName,vmName){for(const run of state.runs||[])if(run.name===runName)for(const vm of run.vms||[])if(vm.vm===vmName)return vm;return null}
+function openTimeline(runName,vmName,stepNum){const vm=findVm(runName,vmName);if(!vm)return;const steps=stepNum===''?vm.steps:vm.steps.filter(s=>String(s.step_num)===String(stepNum));document.getElementById('drawer-title').textContent=`${vmName} timeline`;document.getElementById('drawer-sub').textContent=`${runName} · ${vm.status} · last ${fmtAge(vm.age_seconds)}`;document.getElementById('drawer-body').innerHTML=steps.map(step=>`<div class="event"><div><strong>Step ${esc(step.step_num)}</strong> <span class="pill ${cls(step.status)}">${esc(step.status)}</span></div><div class="small">${esc(step.kind||'')} ${esc(step.label||'')} · ${esc(step.duration_ms??'-')}ms · attempts ${esc(step.attempts??'-')}</div>${(step.events||[]).map(e=>`<div class="event"><div class="small">${esc(e.ts||'')} · ${esc(e.event||'')}</div>${eventBody(e)}</div>`).join('')}<div class="shots">${(step.screenshots||[]).map(s=>`<img src="${esc(s.url)}" title="${esc(s.filename)}" onclick="openLightbox('${esc(s.url)}')" loading="lazy">`).join('')}</div></div>`).join('')||'<div class="empty">No events for this step.</div>';document.getElementById('drawer').classList.add('open')}
+function eventBody(e){const bits=[];if(e.question)bits.push(`Q: ${esc(e.question)}`);if(e.answer)bits.push(`A: ${esc(e.answer)}`);if(e.status)bits.push(`status: ${esc(e.status)}`);if(e.latency_ms)bits.push(`latency: ${esc(e.latency_ms)}ms`);return bits.length?`<div>${bits.join('<br>')}</div>`:''}
+function closeDrawer(){document.getElementById('drawer').classList.remove('open')}function openLightbox(url){document.getElementById('lightbox-img').src=url;document.getElementById('lightbox').style.display='flex'}function closeLightbox(){document.getElementById('lightbox').style.display='none';document.getElementById('lightbox-img').src=''}
+const es=new EventSource('/stream');es.onopen=()=>{const c=document.getElementById('conn');c.textContent='connected';c.className='pill pass'};es.onerror=()=>{const c=document.getElementById('conn');c.textContent='disconnected';c.className='pill fail'};es.onmessage=()=>loadState();loadState();setInterval(loadState,5000);
+</script></body></html>
+"""
+
 
 # ---------------------------------------------------------------------------
 # HTTP Handler
@@ -531,6 +573,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     # Injected by factory
     broadcaster: SSEBroadcaster
     results_root: Path
+    warn_after: int
+    stale_after: int
 
     def log_message(self, fmt: str, *args: object) -> None:  # type: ignore[override]
         # Suppress noisy request log; uncomment for debugging
@@ -542,6 +586,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/" or path == "":
             self._serve_html()
+        elif path == "/api/state":
+            self._serve_state()
         elif path == "/stream":
             self._serve_sse()
         elif path.startswith("/png/"):
@@ -550,9 +596,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def _serve_html(self) -> None:
-        body = _HTML.encode("utf-8")
+        body = _TRIAGE_HTML.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_state(self) -> None:
+        state = build_dashboard_state(
+            self.results_root,
+            warn_after=self.warn_after,
+            stale_after=self.stale_after,
+        )
+        body = json.dumps(state).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -637,7 +697,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def _make_handler(broadcaster: SSEBroadcaster, results_root: Path):
+def _make_handler(
+    broadcaster: SSEBroadcaster,
+    results_root: Path,
+    warn_after: int = 90,
+    stale_after: int = 180,
+):
     """Return a DashboardHandler subclass with broadcaster + results_root bound."""
 
     class BoundHandler(DashboardHandler):
@@ -645,6 +710,8 @@ def _make_handler(broadcaster: SSEBroadcaster, results_root: Path):
 
     BoundHandler.broadcaster = broadcaster
     BoundHandler.results_root = results_root
+    BoundHandler.warn_after = warn_after
+    BoundHandler.stale_after = stale_after
     return BoundHandler
 
 
@@ -658,6 +725,10 @@ def cli(args: Optional[list[str]] = None) -> int:
                         help="Results root directory (default: results/)")
     parser.add_argument("--refresh-ms", type=int, default=500, dest="refresh_ms",
                         help="Watcher poll interval ms (default: 500)")
+    parser.add_argument("--warn-after", type=int, default=90, dest="warn_after",
+                        help="Mark VM as warning/stale after N seconds without events (default: 90)")
+    parser.add_argument("--stale-after", type=int, default=180, dest="stale_after",
+                        help="Mark VM stale after N seconds without events (default: 180)")
     parsed = parser.parse_args(args)
 
     results_root = parsed.results.resolve()
@@ -670,7 +741,12 @@ def cli(args: Optional[list[str]] = None) -> int:
     watcher_thread.start()
     _hb("watcher_thread_started")
 
-    handler_cls = _make_handler(broadcaster, results_root)
+    handler_cls = _make_handler(
+        broadcaster,
+        results_root,
+        warn_after=parsed.warn_after,
+        stale_after=parsed.stale_after,
+    )
     server = ThreadingHTTPServer(("", parsed.port), handler_cls)
     server.daemon_threads = True
 
