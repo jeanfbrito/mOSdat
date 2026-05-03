@@ -86,6 +86,7 @@ def _build_vm_state(run: str, vm_dir: Path, now: datetime, warn_after: int, stal
         "duration_seconds": duration,
         "steps": steps,
         "failures": failures,
+        "latest_screenshot": _latest_screenshot(screenshots),
     }
 
 
@@ -179,6 +180,7 @@ def _extract_failures(run: str, vm: str, events: list[dict], screenshots: dict[s
                 "status": event.get("status", "failed"),
                 "duration_ms": event.get("duration_ms"),
                 "attempts": event.get("attempts"),
+                "cause": _failure_cause(event, vlm, shot[0] if shot else None),
                 "question": vlm.get("question", ""),
                 "answer": vlm.get("answer", ""),
                 "screenshot": shot[0] if shot else None,
@@ -195,6 +197,7 @@ def _extract_failures(run: str, vm: str, events: list[dict], screenshots: dict[s
             "status": "failed",
             "duration_ms": None,
             "attempts": None,
+            "cause": "screenshot-only failure",
             "question": "",
             "answer": "",
             "screenshot": shots[-1] if shots else None,
@@ -243,6 +246,26 @@ def _event_summary(event: dict) -> dict:
     keys = ("ts", "event", "step_num", "kind", "label", "status", "duration_ms", "attempts",
             "question", "answer", "latency_ms", "process", "window")
     return {key: event[key] for key in keys if key in event}
+
+
+def _failure_cause(event: dict, vlm: dict, screenshot: Optional[dict]) -> str:
+    if event.get("event") == "step_end" and event.get("status") != "ok":
+        if vlm.get("event") == "launch_verify":
+            return "launch verify failed"
+        if vlm.get("event") == "vlm_verify" and str(vlm.get("answer", "")).lower() in {"no", "false"}:
+            return "VLM said no"
+        if screenshot and screenshot.get("kind") == "fail":
+            return "step failed with screenshot"
+    return "step failed"
+
+
+def _latest_screenshot(screenshots: dict[str, list[dict]]) -> Optional[dict]:
+    latest = None
+    for shots in screenshots.values():
+        for shot in shots:
+            if latest is None or shot["filename"] > latest["filename"]:
+                latest = shot
+    return latest
 
 
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:

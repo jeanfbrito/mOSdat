@@ -225,6 +225,8 @@ class TestHTTPHandler:
             assert "mOSdat Live Triage" in body
             assert "run-filter" in body
             assert "freshness" in body
+            assert "Latest</option>" in body
+            assert "Total runtime" in body
         finally:
             server.shutdown()
 
@@ -338,6 +340,8 @@ class TestDashboardState:
 
         vm = state["runs"][0]["vms"][0]
         assert vm["status"] == "fail"
+        assert vm["latest_screenshot"]["url"] == "/png/run1/fedora/120000_step2_verify_poll.png"
+        assert state["failures"][0]["cause"] == "VLM said no"
         assert state["failures"][0]["question"] == "logged in?"
         assert state["failures"][0]["screenshot"]["url"] == "/png/run1/fedora/120000_step2_verify_poll.png"
 
@@ -386,4 +390,5 @@ class TestDashboardState:
         vm = state["runs"][0]["vms"][0]
         assert vm["status"] == "fail"
         assert vm["steps"][0]["status"] == "fail"
+        assert state["failures"][0]["cause"] == "screenshot-only failure"
         assert state["failures"][0]["screenshot"]["url"] == "/png/old-run/windows11/204800_step1_final_fail.png"
