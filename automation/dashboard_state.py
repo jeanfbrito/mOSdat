@@ -140,6 +140,8 @@ def _group_steps(events: list[dict], screenshots: dict[str, list[dict]]) -> list
             "screenshots": [],
         })
         step["screenshots"] = shots[-8:]
+        if step["status"] == "running" and any(shot.get("kind") == "fail" for shot in shots):
+            step["status"] = "fail"
     return [by_step[key] for key in sorted(by_step.keys(), key=_sort_step_key)]
 
 
@@ -165,6 +167,22 @@ def _extract_failures(run: str, vm: str, events: list[dict], screenshots: dict[s
                 "answer": vlm.get("answer", ""),
                 "screenshot": shot[0] if shot else None,
             })
+    failed_steps = {str(failure["step_num"]) for failure in failures}
+    for step_key, shots in screenshots.items():
+        if step_key in failed_steps or not any(shot.get("kind") == "fail" for shot in shots):
+            continue
+        failures.append({
+            "run": run,
+            "vm": vm,
+            "step_num": int(step_key) if step_key.isdigit() else step_key,
+            "ts": "",
+            "status": "failed",
+            "duration_ms": None,
+            "attempts": None,
+            "question": "",
+            "answer": "",
+            "screenshot": shots[-1] if shots else None,
+        })
     return failures
 
 
@@ -172,6 +190,8 @@ def _classify_status(steps: list[dict], latest_event: Optional[dict], failures: 
                      age: Optional[int], warn_after: int, stale_after: int) -> str:
     if failures:
         return "fail"
+    if latest_event is None and steps:
+        return "partial"
     if age is not None and age >= stale_after:
         return "stale"
     if not steps:

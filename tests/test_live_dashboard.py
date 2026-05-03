@@ -354,3 +354,16 @@ class TestDashboardState:
         )
 
         assert state["runs"][0]["vms"][0]["status"] == "stale"
+
+    def test_screenshot_only_failure_is_not_running(self, tmp_path):
+        run_dir = tmp_path / "functional" / "old-run" / "windows11"
+        run_dir.mkdir(parents=True)
+        (run_dir / "204747_step1_fail_attempt1.png").write_bytes(b"png")
+        (run_dir / "204800_step1_final_fail.png").write_bytes(b"png")
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 3, 10, 0, 0))
+
+        vm = state["runs"][0]["vms"][0]
+        assert vm["status"] == "fail"
+        assert vm["steps"][0]["status"] == "fail"
+        assert state["failures"][0]["screenshot"]["url"] == "/png/old-run/windows11/204800_step1_final_fail.png"
