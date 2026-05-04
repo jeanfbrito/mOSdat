@@ -4,7 +4,8 @@
 
 `mosdat confirm <id>` automates the workflow of visually confirming a bug on a VM, capturing evidence, and generating a shareable report. Given a GitHub issue ID and a YAML scenario that describes repro steps, the tool runs the scenario N times, fires VLM checks to detect the bug, and emits a Markdown report with screenshots, environment deltas, and verdict. Use this to: confirm a reported bug, verify a fix holds, or track regression in CI.
 
-For the full architecture and motivation, see [Plan — `mosdat confirm` issue-bug confirmation harness](.claude/mytasks/plan-issue-confirm-tool.md).
+This document is the canonical committed reference for the `mosdat confirm`
+workflow: modes, scenario shape, outputs, and CI usage are described below.
 
 ## Three Modes
 
