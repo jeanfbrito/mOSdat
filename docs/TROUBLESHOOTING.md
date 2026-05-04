@@ -14,7 +14,7 @@
 **Solutions**:
 ```bash
 # Check VM status
-./gpu-control.sh --status
+mosdat list-vms examples/rocketchat.toml
 
 # Inside VM, check guest agent
 systemctl status qemu-guest-agent

@@ -23,6 +23,14 @@ pip install -e .
 mosdat --help
 ```
 
+Typical local development:
+
+```bash
+python -m pytest -q
+mosdat validate examples/rocketchat.toml
+mosdat list-vms examples/rocketchat.toml
+```
+
 ---
 
 ## Run via Docker
@@ -37,7 +45,8 @@ docker build -t mosdat:dev .
 docker run --rm mosdat:dev
 
 # Run with a config file
-docker run --rm -v $(pwd)/myconfig.toml:/app/myconfig.toml mosdat:dev functional /app/myconfig.toml
+docker run --rm -v $(pwd)/myconfig.toml:/app/myconfig.toml mosdat:dev \
+  functional /app/myconfig.toml --vms ubuntu2404
 ```
 
 To use Docker images from the registry (when published):
@@ -47,7 +56,8 @@ To use Docker images from the registry (when published):
 docker pull ghcr.io/jeanfbrito/mosdat:latest
 
 # Run the smoke test scenario
-docker run --rm jeanfbrito/mosdat:latest mosdat functional examples/rocketchat.toml --scenario shared/scenarios/functional/rocketchat-smoke-linux.yaml
+docker run --rm jeanfbrito/mosdat:latest \
+  functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux
 ```
 
 ---
@@ -86,9 +96,52 @@ mOSdat uses Proxmox to orchestrate VMs with actual NVIDIA GPUs passed through vi
 
 **Full Pipeline** — Build from git ref → deploy to VM → run tests → collect results
 
+**VLM Functional Testing** — Drive real desktops through Proxmox VNC, with VLM localize/verify steps that work across X11 and Wayland
+
+**Live Triage Dashboard** — Watch current and historical functional runs, stale/dead runs, failures, screenshots, and step timelines from a LAN web UI
+
+**Author Workbench + Agent API** — Create reusable VLM test flows from a browser or via `mosdat author`, including hover, left/right click, type, key, validation, and YAML export
+
 **Reproducible** — Same VM snapshot, same test sequence, consistent results
 
 ---
+
+## Common Workflows
+
+Run a functional VLM smoke test:
+
+```bash
+mosdat functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux
+```
+
+Serve the live dashboard and authoring workbench:
+
+```bash
+mosdat live --port 8082 --results results --config examples/rocketchat.toml
+```
+
+Open:
+
+- Runs dashboard: `http://<host>:8082/`
+- Author Workbench: `http://<host>:8082/author`
+
+Use the agent authoring API through the CLI:
+
+```bash
+mosdat author --url http://127.0.0.1:8082 vms
+mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
+mosdat author --url http://127.0.0.1:8082 capture --session <session-id>
+mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"
+mosdat author --url http://127.0.0.1:8082 action --session <session-id> --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
+mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
+mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
+```
+
+Generate the static historical dashboard:
+
+```bash
+mosdat dashboard --root results --output results/functional/dashboard.html
+```
 
 ## Results
 
@@ -146,6 +199,12 @@ See [Linux Coverage Strategy](docs/LINUX-COVERAGE.md) for why these distribution
 | [Test Matrix](docs/TEST-MATRIX.md) | Test results by OS |
 | [Proxmox Setup](docs/PROXMOX-SETUP.md) | VFIO and GPU passthrough |
 | [Case Studies](docs/CASE-STUDIES.md) | Test examples |
+| [Functional Linux Tests](docs/FUNCTIONAL-TESTS-LINUX.md) | VNC/VLM desktop-driving model |
+| [Live Dashboard](docs/runbooks/live-dashboard.md) | Real-time triage dashboard and Author Workbench |
+| [Matrix Run](docs/runbooks/matrix-run.md) | Current matrix execution runbook |
+| [Agent Monitoring](docs/runbooks/agent-monitoring.md) | Long-running run monitoring patterns |
+| [Visual Regression](docs/runbooks/visual-regression.md) | Screenshot reference capture/check workflow |
+| [Issue Confirmation](docs/issue-confirm-tool.md) | GitHub issue confirmation workflow |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues |
 
 ---

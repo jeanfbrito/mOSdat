@@ -186,7 +186,7 @@ qm set 104 --ide3 mushu-isos:iso/virtio-win.iso,media=cdrom
 #### SSH Helper (no local sshpass)
 ```bash
 docker run --rm alpine sh -c "apk add --no-cache openssh-client sshpass >/dev/null 2>&1 && \
-  sshpass -p 'cb6wist3' ssh -o StrictHostKeyChecking=no jean@VM_IP 'COMMANDS'"
+  sshpass -p \"$VM_PASSWORD\" ssh -o StrictHostKeyChecking=no \"$VM_USER@VM_IP\" 'COMMANDS'"
 ```
 
 #### Enable SSH + Guest Agent
@@ -206,10 +206,10 @@ sudo pacman -S --noconfirm qemu-guest-agent && sudo systemctl enable --now qemu-
 
 #### Enable Auto-Login (GDM - Fedora/Ubuntu GNOME)
 ```bash
-echo cb6wist3 | sudo -S sh -c 'cat > /etc/gdm/custom.conf << EOF
+sudo sh -c 'cat > /etc/gdm/custom.conf << EOF
 [daemon]
 AutomaticLoginEnable=True
-AutomaticLogin=jean
+AutomaticLogin=<vm-user>
 [security]
 [xdmcp]
 [chooser]
@@ -219,9 +219,9 @@ EOF'
 
 #### Enable Auto-Login (SDDM - KDE/LXQt)
 ```bash
-echo cb6wist3 | sudo -S sh -c 'cat > /etc/sddm.conf.d/autologin.conf << EOF
+sudo sh -c 'cat > /etc/sddm.conf.d/autologin.conf << EOF
 [Autologin]
-User=jean
+User=<vm-user>
 Session=plasma
 EOF'
 ```
@@ -301,7 +301,7 @@ Add to your shell:
 vssh() {
   local ip=$1; shift
   docker run --rm alpine sh -c "apk add --no-cache openssh-client sshpass >/dev/null 2>&1 && \
-    sshpass -p 'cb6wist3' ssh -o StrictHostKeyChecking=no jean@$ip '$*'"
+    sshpass -p \"$VM_PASSWORD\" ssh -o StrictHostKeyChecking=no \"$VM_USER@$ip\" '$*'"
 }
 
 # Usage: vssh 192.168.13.138 'uname -a'

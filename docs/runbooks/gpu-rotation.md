@@ -6,101 +6,24 @@
 
 **CRITICAL:** Only ONE VM can have the GPU attached at a time.
 
-```bash
-# Before attaching to new VM, always detach from current
-./os/<current-os>/gpu-control.sh --detach
-./os/<new-os>/gpu-control.sh --attach
-```
+Use `mosdat run` for normal matrix execution. The Python Proxmox layer handles
+VM state and GPU config; do not use the old per-OS shell helpers.
 
 ## GPU Passthrough Workflow
 
 ```bash
-# 1. Attach GPU to VM
-./os/<os>/gpu-control.sh --attach
-
-# 2. Wait for VM to boot into desktop session
-# 3. Run GPU tests via SSH
-ssh jean@<VM_IP> '/tmp/tests/run-gpu-tests.sh'
-
-# 4. Detach GPU for next VM
-./os/<os>/gpu-control.sh --detach
+mosdat validate examples/rocketchat.toml
+mosdat list-vms examples/rocketchat.toml
+mosdat run examples/rocketchat.toml --only fedora42
 ```
 
 ## GPU Rotation Between VMs (Complete Safe Sequence)
 
 **CRITICAL**: Only ONE VM can have the GPU at a time. The GPU is on **Proxmox** at PCI `0000:01:00` (RTX 3060), NOT on local host!
 
-```bash
-# === SETUP: Get auth tokens ===
-AUTH=$(curl -k -s -d "username=root@pam&password=cb6wist3" \
-  "https://192.168.13.85:8006/api2/json/access/ticket")
-TICKET=$(echo "$AUTH" | jq -r '.data.ticket')
-CSRF=$(echo "$AUTH" | jq -r '.data.CSRFPreventionToken')
-
-# === STEP 1: Detach GPU from current VM ===
-CURRENT_VMID=100  # VM that currently has GPU
-
-# 1a. Stop VM
-curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
-  -X POST "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${CURRENT_VMID}/status/stop"
-
-# 1b. Wait for stopped state (poll until status=stopped)
-for i in {1..20}; do
-  STATUS=$(curl -k -s -b "PVEAuthCookie=$TICKET" \
-    "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${CURRENT_VMID}/status/current" | jq -r '.data.status')
-  [[ "$STATUS" == "stopped" ]] && break
-  sleep 3
-done
-
-# 1c. Remove GPU config
-curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
-  -X PUT -d "delete=hostpci0" \
-  "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${CURRENT_VMID}/config"
-
-# 1d. Start VM without GPU (optional - can leave stopped)
-curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
-  -X POST "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${CURRENT_VMID}/status/start"
-
-# === STEP 2: Attach GPU to next VM ===
-NEXT_VMID=101  # VM that needs GPU
-
-# 2a. Stop next VM
-curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
-  -X POST "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${NEXT_VMID}/status/stop"
-
-# 2b. Wait for stopped state
-for i in {1..20}; do
-  STATUS=$(curl -k -s -b "PVEAuthCookie=$TICKET" \
-    "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${NEXT_VMID}/status/current" | jq -r '.data.status')
-  [[ "$STATUS" == "stopped" ]] && break
-  sleep 3
-done
-
-# 2c. Attach GPU (use FULL address format: 0000:01:00)
-# DO NOT use "03:00" - that's the local GTX 970 which doesn't exist on Proxmox!
-curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
-  -X PUT -d "hostpci0=0000:01:00" \
-  "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${NEXT_VMID}/config"
-
-# 2d. Start VM with GPU
-curl -k -s -b "PVEAuthCookie=$TICKET" -H "CSRFPreventionToken: $CSRF" \
-  -X POST "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${NEXT_VMID}/status/start"
-
-# === STEP 3: Wait for VM to be accessible ===
-# Poll qemu-guest-agent for IP
-for i in {1..24}; do
-  IP=$(curl -k -s -b "PVEAuthCookie=$TICKET" \
-    "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/${NEXT_VMID}/agent/network-get-interfaces" 2>/dev/null | \
-    jq -r '.data.result[] | select(.name != "lo") | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4") | .["ip-address"]' | head -1)
-  [[ -n "$IP" && "$IP" != "null" ]] && break
-  sleep 5
-done
-echo "VM $NEXT_VMID IP: $IP"
-
-# === STEP 4: Verify GPU visible ===
-ssh jean@$IP "lspci | grep -i nvidia"
-# Expected: "VGA compatible controller: NVIDIA Corporation GA106 [GeForce RTX 3060..."
-```
+For manual recovery, use the Proxmox UI or a short Python script that imports
+`automation.proxmox.api.ProxmoxAPI` and `automation.config.load_config`.
+Credentials belong in local config/environment, not in this runbook.
 
 ## GPU Passthrough Troubleshooting
 
@@ -129,11 +52,8 @@ If GPU tests fail with "No NVIDIA GPU visible":
    ```
 
 5. **Verify VM config in Proxmox:**
-   ```bash
-   # Check if hostpci0 is set
-   curl -k -s -b "PVEAuthCookie=$TICKET" \
-     "https://$PROXMOX_HOST:8006/api2/json/nodes/pve/qemu/$VMID/config" | jq '.data.hostpci0'
-   ```
+   Use `mosdat list-vms examples/rocketchat.toml` for configured VM inventory,
+   then inspect the VM config in Proxmox if GPU attachment looks wrong.
 
 ## GPU Test Result Interpretation (CRITICAL)
 

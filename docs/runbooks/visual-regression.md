@@ -13,7 +13,7 @@ as references:
 
 ```bash
 # Save screenshots from a functional run
-mosdat functional config.toml --vms fedora42 --screenshots /tmp/run1
+mosdat functional config.toml --vms fedora42 --test rocketchat-smoke-linux --screenshots /tmp/run1
 
 # Capture references for one scenario
 mosdat visual --capture /tmp/run1/fedora42 --refs-dir shared/references

@@ -2,7 +2,10 @@
 
 ## Overview
 
-This framework tests Rocket.Chat Electron's Wayland/X11 handling across multiple operating systems using Proxmox VMs with optional GPU passthrough.
+This framework tests desktop applications across multiple operating systems
+using Proxmox VMs, optional GPU passthrough, VNC-backed input, and VLM screen
+understanding. The current implementation is Python-first (`automation/`) with
+TOML app/VM configuration and YAML functional scenarios.
 
 ## Components
 
@@ -10,9 +13,9 @@ This framework tests Rocket.Chat Electron's Wayland/X11 handling across multiple
 ┌─────────────────────────────────────────────────────────────┐
 │                     Host Machine                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │              Test Framework Scripts                  │    │
+│  │              mOSdat Python CLI                       │    │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │    │
-│  │  │ build.sh │  │ deploy.sh│  │ gpu-control.sh   │   │    │
+│  │  │ config   │  │ runner   │  │ live dashboard   │   │    │
 │  │  └────┬─────┘  └────┬─────┘  └────────┬─────────┘   │    │
 │  │       │             │                 │             │    │
 │  │       ▼             ▼                 ▼             │    │
@@ -41,6 +44,29 @@ This framework tests Rocket.Chat Electron's Wayland/X11 handling across multiple
 
 ## Data Flow
 
+### Configuration
+
+```
+examples/*.toml
+  ├── [app] source/build/package metadata
+  ├── [proxmox] API connection
+  ├── [vlm] model endpoint and expected model
+  └── [[vm]] VM name, VMID, desktop, packages, SSH user
+```
+
+The main command surface is:
+
+| Command | Purpose |
+|---------|---------|
+| `mosdat run` | Build/deploy/test matrix |
+| `mosdat test` | Test pre-built package(s) |
+| `mosdat functional` | Run VLM functional UI scenarios |
+| `mosdat live` | Serve live triage dashboard and Author Workbench |
+| `mosdat author` | Agent CLI for authoring API |
+| `mosdat dashboard` | Generate static historical dashboard |
+| `mosdat visual` | Capture/check visual references |
+| `mosdat confirm` | Confirm or verify-fix GitHub issues |
+
 ## Agent Authoring API
 
 `mosdat live --config <config.toml>` also exposes an authoring API for agents
@@ -65,6 +91,21 @@ python -m automation.main author --url http://127.0.0.1:8082 validate --session 
 python -m automation.main author --url http://127.0.0.1:8082 export --session SESSION --name tooltip-flow
 ```
 
+### Functional Test Phase
+
+```
+YAML scenario -> FunctionalRunner
+        |
+        ├── Proxmox VNC capture/input
+        ├── VLM localize/verify
+        ├── SSH only for shell/launch/focus helpers
+        └── events.jsonl + screenshots in results/functional/<run>/<vm>/
+```
+
+VNC input is display-server agnostic and is the preferred path for clicks,
+hover, typing, and key presses. This avoids X11/Wayland focus and xauth
+problems.
+
 ### Build Phase
 
 ```
@@ -83,7 +124,7 @@ python -m automation.main author --url http://127.0.0.1:8082 export --session SE
 4. Verify installation
 ```
 
-### Test Phase
+### Legacy Smoke Test Phase
 
 ```
 1. SSH into VM
@@ -140,25 +181,21 @@ hostpci0=0000:01:00,pcie=1,x-vga=1
 
 ```
 mOSdat/
-├── shared/              # Cross-OS utilities
-│   ├── config.sh        # Credentials, paths
-│   └── proxmox-api.sh   # API helper functions
-├── os/
-│   └── <os-version>/    # OS-specific scripts
-│       ├── README.md    # OS setup instructions
-│       ├── config.sh    # OS-specific config (VMID, etc.)
-│       ├── build.sh     # Build for this OS
-│       ├── deploy.sh    # Deploy to VM
-│       └── gpu-control.sh
-├── results/             # Test results by timestamp
-└── docs/                # Documentation
+├── automation/          # CLI, config, Proxmox, VLM, runners, dashboards
+├── examples/            # App/VM TOML configs
+├── shared/scenarios/    # Functional YAML scenarios
+├── docs/                # Architecture and runbooks
+├── tests/               # Pytest coverage and CLI help snapshots
+└── results/             # Generated run artifacts (mostly gitignored)
 ```
 
-## Why OS-Specific Scripts?
+Older shell helpers under `shared/` are retained for compatibility and low-level
+reference, but the Python CLI is the canonical workflow.
 
-1. **Package formats differ**: RPM vs DEB vs AppImage vs MSI
-2. **Package managers differ**: dnf vs apt vs pacman
-3. **Paths differ**: /etc/gdm/ vs /etc/gdm3/
-4. **Desktop versions differ**: GNOME 42 vs 46 vs 47
-5. **Wayland implementations differ**: Mutter versions vary
-6. **Reproducibility**: Each OS folder is a self-contained example
+## Why Configuration Is Per VM/App?
+
+1. **Package formats differ**: RPM, DEB, AppImage, Snap, Flatpak, MSI.
+2. **Package managers differ**: dnf, apt, pacman, zypper, snap, flatpak.
+3. **Desktop behavior differs**: GNOME, KDE, X11, Wayland, Windows.
+4. **Launch and cleanup paths differ**: app names, temp dirs, package paths.
+5. **Reproducibility matters**: TOML config makes VM/app/package assumptions explicit.

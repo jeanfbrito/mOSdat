@@ -193,10 +193,10 @@ file_glob = "<glob-pattern>"
 EOF
 
 # Run step-by-step
-mosdat functional test-new-os.toml --until-step 1  # Cleanup + launch
-mosdat functional test-new-os.toml --until-step 2  # Verify RC window
-mosdat functional test-new-os.toml --until-step 3  # Login
-mosdat functional test-new-os.toml --until-step 4  # Full smoke
+	mosdat functional test-new-os.toml --vms mynewos --until-step 1  # Cleanup + launch
+	mosdat functional test-new-os.toml --vms mynewos --until-step 2  # Verify RC window
+	mosdat functional test-new-os.toml --vms mynewos --until-step 3  # Login
+	mosdat functional test-new-os.toml --vms mynewos --until-step 4  # Full smoke
 ```
 
 ### Common Failures

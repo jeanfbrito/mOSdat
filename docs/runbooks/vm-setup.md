@@ -6,7 +6,7 @@
 
 Before testing a VM, ensure:
 
-1. **SSH key access**: `ssh-copy-id jean@<VM_IP>` (password: see .env)
+1. **SSH key access**: `ssh-copy-id <vm-user>@<VM_IP>` (password: use your local secret store)
 2. **Passwordless sudo**: `echo "jean ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/jean`
 3. **Test dependencies**: `Xvfb`, `weston` installed
    - Fedora: `sudo dnf install -y xorg-x11-server-Xvfb weston`
@@ -37,13 +37,13 @@ docker run --rm alpine sh -c "apk add --no-cache samba-client >/dev/null 2>&1 &&
 
 **Check Proxmox sees it:**
 ```bash
-TICKET=$(curl -k -s -d "username=root@pam&password=cb6wist3" "https://192.168.13.85:8006/api2/json/access/ticket" | jq -r '.data.ticket')
-curl -k -s -b "PVEAuthCookie=$TICKET" "https://192.168.13.85:8006/api2/json/nodes/pve/storage/mushu-isos/content" | jq -r '.data[] | .volid'
+mosdat validate examples/rocketchat.toml
+mosdat list-vms examples/rocketchat.toml
 ```
 
 ## Adding New OS
 
-1. Copy existing OS folder
-2. Update `config.sh` (VMID, package format)
-3. Modify `deploy.sh` for package manager
-4. Update `README.md`
+1. Add a `[[vm]]` block to the relevant TOML config.
+2. Add one or more `[[vm.package]]` entries for supported package formats.
+3. Confirm SSH, desktop auto-login, and qemu-guest-agent are working.
+4. Run `mosdat validate <config>` and a bounded functional smoke with `--until-step`.

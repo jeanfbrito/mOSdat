@@ -240,14 +240,11 @@ Virtual displays (Xvfb, Weston headless) are useful for CI automation but have l
 ### GPU Test Workflow
 
 ```bash
-# Attach GPU to VM (VM must be stopped)
-./os/<os>/gpu-control.sh --attach
+# Normal workflow: let mOSdat coordinate configured VMs/packages.
+mosdat run examples/rocketchat.toml --only fedora42
 
-# Run GPU tests (VM auto-starts with desktop session)
-ssh jean@<VM_IP> '/tmp/tests/run-gpu-tests.sh'
-
-# Detach GPU for next VM
-./os/<os>/gpu-control.sh --detach
+# Quick inventory before/after a GPU run.
+mosdat list-vms examples/rocketchat.toml
 ```
 
 ## Future Considerations

@@ -1,50 +1,117 @@
-# Live Dashboard Runbook
+# Live Dashboard and Author Workbench
+
+The live server serves two tools from the same process:
+
+- `/` — functional-run triage dashboard
+- `/author` — browser workbench for creating VLM-driven test flows
 
 ## Launch
 
 ```bash
-mosdat live --port 8080 --results results/
+mosdat live --port 8082 --results results --config examples/rocketchat.toml
 ```
 
-Then open `http://localhost:8080` in a browser.
+Open:
+
+- `http://localhost:8082/` for run triage
+- `http://localhost:8082/author` for authoring
 
 Options:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 8080 | HTTP port |
+| `--port` | `8080` | HTTP port |
 | `--results` | `results/` | Root results directory to watch |
-| `--refresh-ms` | 500 | Poll interval for new events/screenshots |
+| `--refresh-ms` | `500` | Poll interval for new events/screenshots |
+| `--warn-after` | `90` | Mark VM warning/stale after N seconds without events |
+| `--stale-after` | `180` | Mark VM stale after N seconds without events |
+| `--config` | none | Enables authoring sessions and VM status lookup |
 
-## What it shows
+## Runs Dashboard
 
-- **Top bar**: in-flight step count, cumulative pass/fail counts, staleness indicator (turns red if no event received for >5 s).
-- **Swimlanes**: one lane per `<run>/<vm>` pair, auto-discovered as directories appear under `results/functional/`.
-- **Step chips**: coloured by kind (shell/key/type/localize/launch/verify) and status (running/ok/fail). Pulsing = in progress.
-- **Screenshot thumbnails**: click any thumbnail to enlarge.
-- **Filter dropdown**: select a single VM for a full-width view.
+The root page is a triage view over `results/functional/`.
 
-## How it works
+It shows:
+
+- latest or selected historical runs
+- VM status (`running`, `pass`, `fail`, `stale`, `partial`)
+- latest screenshot thumbnails
+- current step and total runtime
+- per-step status cells with slow/hot duration markers
+- failure cards with VLM question/answer and screenshots
+- a timeline drawer for individual steps
+
+Dead runs are inferred from artifacts and event age, so old runs that no
+longer have a process should not remain as live-running forever.
+
+## Author Workbench
+
+`/author` is a full-page tool for creating reproducible functional flows.
+
+Current capabilities:
+
+- VM dropdown populated from config, with Proxmox running/stopped status
+- lazy session creation when capture/localize/verify/action is used
+- VNC screen capture and manual refresh
+- VLM localize with a precise X marker on the rendered image
+- VLM yes/no verify
+- hover, left click, right click, type, and key actions
+- automatic capture after actions
+- draft YAML preview and export
+
+Action semantics:
+
+| UI action | YAML emitted | Runtime behavior |
+|-----------|--------------|------------------|
+| Hover | `localize: ...`, `hover: true` | VNC mouse move only |
+| Left click | `localize: ...` | VNC button 1 |
+| Right click | `localize: ...`, `click: right` | VNC button 3 |
+| Type | `type: ...` | VNC text input |
+| Key | `key: ...` | VNC key press |
+
+## Agent Authoring API
+
+Agents should prefer the CLI wrapper because it prints compact JSON:
+
+```bash
+mosdat author --url http://127.0.0.1:8082 vms
+mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
+mosdat author --url http://127.0.0.1:8082 capture --session <session-id>
+mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"
+mosdat author --url http://127.0.0.1:8082 action --session <session-id> --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
+mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
+mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
+```
+
+Raw HTTP endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/author/vms` | Configured VMs and Proxmox power state |
+| `POST /api/author/session` | Create a session |
+| `GET /api/author/session?session=...` | Session state, latest result, draft steps |
+| `POST /api/author/capture` | JSON VNC capture payload |
+| `GET /api/author/screenshot?session=...` | Browser-compatible capture payload |
+| `POST /api/author/vlm/localize` | Locate a UI target |
+| `POST /api/author/vlm/verify` | Ask a yes/no screen question |
+| `POST /api/author/action` | Run confirmed action |
+| `POST /api/author/validate` | Validate draft YAML through scenario parser |
+| `GET /api/author/export?session=...&name=...` | Export scenario YAML |
+
+## How It Works
 
 ```
-results/functional/<run>/<vm>/events.jsonl   ← tailed every 500 ms
-results/functional/<run>/<vm>/*.png          ← new files detected via scandir
+results/functional/<run>/<vm>/events.jsonl   <- tailed by EventWatcher
+results/functional/<run>/<vm>/*.png          <- discovered via scandir
         |
         v
-EventWatcher (background thread)
-        |
-        v
-SSEBroadcaster  ──── /stream (text/event-stream) ──── browser EventSource
-                                                        (vanilla JS, no deps)
+SSEBroadcaster -> /stream -> browser
+
+Proxmox VNC + configured VMs -> AuthorManager -> /api/author/*
 ```
 
-- `/` — serves embedded HTML (no external files needed).
-- `/stream` — SSE endpoint; heartbeat every 15 s keeps the connection alive through proxies.
-- `/png/<run>/<vm>/<file>` — serves screenshot PNGs; path traversal is rejected with HTTP 400/403.
-
-## Running multiple VMs simultaneously
-
-Start `mosdat functional` with multiple `--vms` in separate terminals (or in parallel). The dashboard discovers all `<run>/<vm>` directories automatically and shows a swimlane for each.
+The dashboard is dependency-light: stdlib HTTP server, embedded HTML/CSS/JS,
+and no frontend build step.
 
 ## Stopping
 

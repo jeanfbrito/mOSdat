@@ -45,11 +45,8 @@ mosdat run examples/rocketchat.toml --only fedora42
 # Quick test with a pre-built package:
 mosdat test examples/rocketchat.toml /path/to/package.rpm --vms fedora42
 
-# Per-OS bash adapters (build/deploy/gpu primitives only):
-./os/fedora-42/build.sh
-./os/fedora-42/deploy.sh
-./os/fedora-42/gpu-control.sh --attach
-./os/fedora-42/gpu-control.sh --detach
+# Watch progress:
+mosdat live --port 8082 --results results --config examples/rocketchat.toml
 ```
 
 ### VM Quick Reference
@@ -78,227 +75,81 @@ results/smoke/<date>_full-matrix-<version>/
 
 ---
 
-## Complete Test Runbook (Copy-Paste Ready)
+## Complete Test Runbook
 
-This section contains ALL commands needed to run a full test matrix. No discovery required.
+Use the Python CLI and TOML config as the source of truth. Do not put local
+passwords or Proxmox tickets in this document; keep credentials in your local
+environment or config file.
 
-### Environment Variables
-
-```bash
-# Source these at the start of any test session
-export PROXMOX_HOST=192.168.13.85
-export PROXMOX_USER=root@pam
-export PROXMOX_PASSWORD=cb6wist3
-export REPO_PATH=/home/jean/projects/linux-testing/Rocket.Chat.Electron
-export FRAMEWORK_PATH=/home/jean/projects/linux-testing/mOSdat
-export VM_USER=jean
-export VM_PASSWORD=cb6wist3
-```
-
-### Pre-flight Checks
+### Pre-flight
 
 ```bash
-# 1. Verify all VMs are reachable
-for ip in 192.168.13.80 192.168.13.81 192.168.13.82 192.168.13.83 192.168.13.84; do
-  ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no jean@$ip "echo OK" || echo "FAILED: $ip"
-done
-
-# 2. Get Proxmox API ticket
-TICKET=$(curl -k -s -d "username=root@pam&password=cb6wist3" \
-  "https://192.168.13.85:8006/api2/json/access/ticket" | jq -r '.data.ticket')
-
-# 3. Check all VM statuses
-for vmid in 100 101 102 103 106; do
-  STATUS=$(curl -k -s -b "PVEAuthCookie=$TICKET" \
-    "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/$vmid/status/current" | jq -r '.data.status')
-  echo "VMID $vmid: $STATUS"
-done
-
-# 4. Check GPU not attached to any VM
-curl -k -s -b "PVEAuthCookie=$TICKET" \
-  "https://192.168.13.85:8006/api2/json/nodes/pve/qemu/100/config" | jq '.data.hostpci0'
-# Should return null
-
-# 5. Create results directory
-VERSION="4.12.0-alpha.2"  # Change this
-mkdir -p ${FRAMEWORK_PATH}/results/smoke/$(date +%Y-%m-%d)_full-matrix-${VERSION}
+cd ${FRAMEWORK_PATH:-/home/jean/projects/linux-testing/mOSdat}
+mosdat validate examples/rocketchat.toml
+mosdat list-vms examples/rocketchat.toml
 ```
 
-### Build Commands
+For interactive/live runs, start the dashboard first:
 
 ```bash
-cd ${REPO_PATH}
-
-# Checkout and build
-git fetch --tags
-git checkout 4.12.0-alpha.2  # Change version as needed
-yarn install
-yarn build
-
-# Build ALL Linux packages (takes ~12 min)
-yarn electron-builder --publish never --linux rpm deb AppImage snap
-
-# Verify packages
-ls -lh dist/*.{rpm,deb,AppImage,snap}
-# Expected: ~83MB each for rpm/deb, ~126MB AppImage, ~106MB snap
+mosdat live --port 8082 --results results --config examples/rocketchat.toml
 ```
 
-### Deploy Commands by OS
+### Full Matrix
 
-**Fedora 42 (192.168.13.80) - RPM:**
 ```bash
-scp dist/rocketchat-*.rpm jean@192.168.13.80:/tmp/
-ssh jean@192.168.13.80 "sudo dnf install -y /tmp/rocketchat-*.rpm"
+# Build, deploy, and test all configured VMs/packages
+mosdat run examples/rocketchat.toml
+
+# Resume after interruption
+mosdat run examples/rocketchat.toml --resume
+
+# Reuse existing packages
+mosdat run examples/rocketchat.toml --skip-build
+
+# Restrict scope
+mosdat run examples/rocketchat.toml --only fedora42
 ```
 
-**Ubuntu 22.04/24.04 (192.168.13.81/82) - DEB:**
+### Functional VLM Runs
+
 ```bash
-scp dist/rocketchat-*.deb jean@192.168.13.81:/tmp/
-ssh jean@192.168.13.81 "sudo apt install -y /tmp/rocketchat-*.deb"
+mosdat functional examples/rocketchat.toml --vms fedora42,ubuntu2404 --test rocketchat-smoke-linux
+mosdat functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux --save-screenshots
+mosdat functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux --from-step 3 --until-step 5
 ```
 
-**Ubuntu 22.04/24.04 - Snap:**
+Functional results are written under:
+
+```
+results/functional/<timestamp>_<test>/<vm>/
+├── events.jsonl
+├── *.png
+└── summary/report artifacts
+```
+
+### Agent Authoring
+
+Use the author API to build or refine a scenario while watching the VM:
+
 ```bash
-scp dist/rocketchat-*.snap jean@192.168.13.81:/tmp/
-ssh jean@192.168.13.81 "sudo snap install --dangerous /tmp/rocketchat-*.snap"
+mosdat author --url http://127.0.0.1:8082 vms
+mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
+mosdat author --url http://127.0.0.1:8082 capture --session <session-id>
+mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"
+mosdat author --url http://127.0.0.1:8082 action --session <session-id> --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
+mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
+mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
 ```
 
-**openSUSE (192.168.13.84) - RPM:**
+Open `http://localhost:8082/author` for the browser version of the same flow.
+
+### Reporting
+
 ```bash
-scp dist/rocketchat-*.rpm jean@192.168.13.84:/tmp/
-ssh jean@192.168.13.84 "sudo zypper install -y --allow-unsigned-rpm /tmp/rocketchat-*.rpm"
+mosdat dashboard --root results --output results/functional/dashboard.html
+mosdat report --root results
 ```
 
-**ALL OSes - AppImage:**
-```bash
-scp dist/rocketchat-*.AppImage jean@<VM_IP>:/tmp/
-ssh jean@<VM_IP> "chmod +x /tmp/rocketchat-*.AppImage"
-```
-
-### Test Commands
-
-**Transfer test scripts (required for each VM):**
-```bash
-scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@<VM_IP>:/tmp/tests
-```
-
-### APP_PATH Environment Variable
-
-The test scripts use `APP_PATH` to locate the application:
-
-| Package | APP_PATH Value |
-|---------|----------------|
-| RPM/DEB | (not needed - uses default `/opt/Rocket.Chat/rocketchat-desktop`) |
-| AppImage | `/tmp/rocketchat-<version>-linux-x86_64.AppImage` |
-| Snap | `/snap/bin/rocketchat-desktop` |
-
-**Run WITHOUT GPU tests:**
-```bash
-# For installed packages (RPM/DEB)
-ssh jean@<VM_IP> "/tmp/tests/run-all.sh"
-
-# For AppImage
-ssh jean@<VM_IP> "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh"
-
-# For Snap
-ssh jean@<VM_IP> "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh"
-```
-
-**Run WITH GPU tests:**
-```bash
-# For installed packages (RPM/DEB)
-ssh jean@<VM_IP> "/tmp/tests/run-gpu-tests.sh"
-
-# For AppImage
-ssh jean@<VM_IP> "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-gpu-tests.sh"
-```
-
-### Log File Naming Convention
-
-```
-<os>-<package>-<gpu>.log
-
-Examples:
-- fedora42-rpm-no-gpu.log
-- fedora42-rpm-gpu.log
-- fedora42-appimage-no-gpu.log
-- ubuntu2204-deb-no-gpu.log
-- ubuntu2204-snap-no-gpu.log
-- ubuntu2404-appimage-gpu.log
-- manjaro-appimage-no-gpu.log
-- opensuse-rpm-no-gpu.log
-```
-
-### Complete Test Script Per OS
-
-**Fedora 42 (RPM + AppImage):**
-```bash
-VM_IP=192.168.13.80
-RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
-
-# Transfer tests
-scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
-
-# Deploy and test RPM
-scp ${REPO_PATH}/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "sudo dnf install -y /tmp/rocketchat-*.rpm"
-ssh jean@${VM_IP} "/tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/fedora42-rpm-no-gpu.log
-
-# Deploy and test AppImage
-scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
-ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/fedora42-appimage-no-gpu.log
-```
-
-**Ubuntu 22.04/24.04 (DEB + AppImage + Snap):**
-```bash
-VM_IP=192.168.13.81  # or .82 for 24.04
-OS_NAME=ubuntu2204   # or ubuntu2404
-RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
-
-scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
-
-# DEB
-scp ${REPO_PATH}/dist/rocketchat-*.deb jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "sudo apt install -y /tmp/rocketchat-*.deb"
-ssh jean@${VM_IP} "/tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/${OS_NAME}-deb-no-gpu.log
-
-# AppImage
-scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
-ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/${OS_NAME}-appimage-no-gpu.log
-
-# Snap
-scp ${REPO_PATH}/dist/rocketchat-*.snap jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "sudo snap install --dangerous /tmp/rocketchat-*.snap"
-ssh jean@${VM_IP} "APP_PATH=/snap/bin/rocketchat-desktop /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/${OS_NAME}-snap-no-gpu.log
-```
-
-**Manjaro (AppImage only):**
-```bash
-VM_IP=192.168.13.83
-RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
-
-scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
-scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
-ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/manjaro-appimage-no-gpu.log
-```
-
-**openSUSE (RPM + AppImage):**
-```bash
-VM_IP=192.168.13.84
-RESULTS=${FRAMEWORK_PATH}/results/smoke/2026-01-29_full-matrix-4.12.0-alpha.2
-
-scp -r ${FRAMEWORK_PATH}/shared/scenarios/smoke-linux jean@${VM_IP}:/tmp/tests
-
-# RPM (note: zypper, not dnf!)
-scp ${REPO_PATH}/dist/rocketchat-*.rpm jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "sudo zypper install -y --allow-unsigned-rpm /tmp/rocketchat-*.rpm"
-ssh jean@${VM_IP} "/tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/opensuse-rpm-no-gpu.log
-
-# AppImage
-scp ${REPO_PATH}/dist/rocketchat-*.AppImage jean@${VM_IP}:/tmp/
-ssh jean@${VM_IP} "chmod +x /tmp/rocketchat-*.AppImage"
-ssh jean@${VM_IP} "APP_PATH=/tmp/rocketchat-4.12.0-alpha.2-linux-x86_64.AppImage /tmp/tests/run-all.sh" 2>&1 | tee ${RESULTS}/opensuse-appimage-no-gpu.log
-```
+Use `docs/runbooks/agent-monitoring.md` for long-running run monitoring and
+staleness checks.
