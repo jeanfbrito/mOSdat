@@ -129,6 +129,8 @@ class TypeStep(_StepBase):
 
 class ClickStep(_StepBase):
     localize: str
+    click: Optional[Literal["left", "right"]] = None
+    hover: bool = False
     then_type: Optional[str] = None
     type: Optional[str] = None
     then_key: Optional[str] = None

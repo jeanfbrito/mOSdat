@@ -41,6 +41,30 @@ This framework tests Rocket.Chat Electron's Wayland/X11 handling across multiple
 
 ## Data Flow
 
+## Agent Authoring API
+
+`mosdat live --config <config.toml>` also exposes an authoring API for agents
+and the browser workbench. The intended flow is:
+
+1. `GET /api/author/vms` to choose a running VM.
+2. `POST /api/author/session` with `{"vm": "ubuntu2404"}`.
+3. `POST /api/author/capture` with `{"session_id": "..."}` to refresh VNC.
+4. `POST /api/author/vlm/localize` or `/api/author/vlm/verify` to inspect the screen.
+5. `POST /api/author/action` with `confirm: true` to run `hover`, `click`, `type`, `key`, `shell`, `wait`, or `launch`.
+6. `POST /api/author/validate` to check that the draft flow is runnable.
+7. `GET /api/author/export?session=...&name=...` to retrieve scenario YAML.
+
+Agents should prefer the CLI wrapper because it prints compact JSON:
+
+```
+python -m automation.main author --url http://127.0.0.1:8082 vms
+python -m automation.main author --url http://127.0.0.1:8082 start --vm ubuntu2404
+python -m automation.main author --url http://127.0.0.1:8082 localize --session SESSION --prompt "help tooltip"
+python -m automation.main author --url http://127.0.0.1:8082 action --session SESSION --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
+python -m automation.main author --url http://127.0.0.1:8082 validate --session SESSION
+python -m automation.main author --url http://127.0.0.1:8082 export --session SESSION --name tooltip-flow
+```
+
 ### Build Phase
 
 ```

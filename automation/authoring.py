@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -68,13 +69,19 @@ class AuthorSession:
     draft_steps: list[dict] = field(default_factory=list)
     last_image: Optional[Image.Image] = None
     last_size: Optional[tuple[int, int]] = None
+    last_capture: Optional[dict] = None
+    last_localize: Optional[dict] = None
+    last_verify: Optional[dict] = None
+    last_action: Optional[dict] = None
     created_at: float = field(default_factory=time.time)
 
     def capture(self) -> dict:
         image, size = self.vnc.capture()
         self.last_image = image
         self.last_size = size
-        return image_payload(image, size)
+        payload = image_payload(image, size)
+        self.last_capture = {k: v for k, v in payload.items() if k != "image"}
+        return payload
 
     def require_frame(self) -> tuple[Image.Image, tuple[int, int]]:
         if self.last_image is None or self.last_size is None:
@@ -85,25 +92,38 @@ class AuthorSession:
     def localize(self, prompt: str) -> dict:
         image, size = self.require_frame()
         x, y = self.vlm.localize(image, prompt, size)
-        return {"prompt": prompt, "x": x, "y": y, "width": size[0], "height": size[1]}
+        result = {"prompt": prompt, "x": x, "y": y, "width": size[0], "height": size[1]}
+        self.last_localize = result
+        return result
 
     def verify(self, question: str) -> dict:
         image, _ = self.require_frame()
         started = time.perf_counter()
         answer = bool(self.vlm.verify(image, question))
-        return {
+        result = {
             "question": question,
             "answer": "yes" if answer else "no",
             "ok": answer,
             "latency_ms": int((time.perf_counter() - started) * 1000),
         }
+        self.last_verify = result
+        return result
 
     def run_action(self, action: str, payload: dict) -> dict:
         if not payload.get("confirm"):
             raise ValueError("action requires confirm=true")
         if action == "click":
-            self.injector.click(int(payload["x"]), int(payload["y"]))
+            button_name = str(payload.get("button", "left"))
+            if button_name not in {"left", "right"}:
+                raise ValueError(f"unsupported click button: {button_name}")
+            button = 3 if button_name == "right" else 1
+            self.injector.click(int(payload["x"]), int(payload["y"]), button=button)
             step = {"localize": payload.get("prompt", "manual click"), "retries": 1}
+            if button_name == "right":
+                step["click"] = "right"
+        elif action == "hover":
+            self.injector.move(int(payload["x"]), int(payload["y"]))
+            step = {"localize": payload.get("prompt", "manual hover"), "hover": True, "retries": 1}
         elif action == "type":
             self.injector.type_text(str(payload["text"]))
             step = {"type": str(payload["text"])}
@@ -123,18 +143,54 @@ class AuthorSession:
         else:
             raise ValueError(f"unsupported action: {action}")
         self.draft_steps.append(step)
-        return {"action": action, "step": step, "draft_steps": self.draft_steps}
+        result = {"action": action, "step": step, "draft_steps": self.draft_steps}
+        self.last_action = result
+        return result
 
     def append_step(self, step: dict) -> dict:
         self.draft_steps.append(step)
+        self.last_action = {"action": "append_step", "step": step, "draft_steps": self.draft_steps}
         return {"draft_steps": self.draft_steps}
 
     def update_steps(self, steps: list[dict]) -> dict:
         self.draft_steps = steps
+        self.last_action = {"action": "update_steps", "draft_steps": self.draft_steps}
         return {"draft_steps": self.draft_steps}
 
     def export_yaml(self, name: str = "authored-scenario") -> str:
         return yaml.safe_dump({"name": name, "steps": self.draft_steps}, sort_keys=False)
+
+    def state(self) -> dict:
+        return {
+            "session_id": self.id,
+            "vm": self.vm_name,
+            "created_at": self.created_at,
+            "draft_steps": self.draft_steps,
+            "last_capture": self.last_capture,
+            "last_localize": self.last_localize,
+            "last_verify": self.last_verify,
+            "last_action": self.last_action,
+        }
+
+    def validate(self, name: str = "authored-scenario") -> dict:
+        from automation.runners.scenario_loader import load_test_yaml
+
+        yaml_text = self.export_yaml(name=name)
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as fh:
+            fh.write(yaml_text)
+            path = Path(fh.name)
+        try:
+            load_test_yaml(path)
+        except SystemExit as exc:
+            return {"ok": False, "error": f"scenario validation exited with {exc.code}", "draft_steps": self.draft_steps}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc), "draft_steps": self.draft_steps}
+        finally:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return {"ok": True, "draft_steps": self.draft_steps}
 
     def close(self) -> None:
         close = getattr(self.vnc, "close", None)
@@ -154,8 +210,44 @@ class AuthorManager:
         self.sessions[session.id] = session
         return self.describe(session)
 
+    def list_vms(self) -> dict:
+        if not self.config_path:
+            return {"configured": False, "vms": []}
+
+        from automation.config import load_config
+        from automation.proxmox.api import ProxmoxAPI
+
+        config = load_config(self.config_path)
+        proxmox = ProxmoxAPI(config.proxmox)
+        vms = []
+        for vm in config.vms:
+            try:
+                status = proxmox.get_vm_status(vm.vmid)
+            except Exception:  # noqa: BLE001
+                status = "unknown"
+            vms.append(
+                {
+                    "name": vm.name,
+                    "vmid": vm.vmid,
+                    "desktop": vm.desktop,
+                    "os_type": vm.os_type,
+                    "status": status,
+                    "running": status == "running",
+                }
+            )
+        return {
+            "configured": True,
+            "vms": vms,
+        }
+
     def describe(self, session: AuthorSession) -> dict:
         return {"session_id": session.id, "vm": session.vm_name, "draft_steps": session.draft_steps}
+
+    def state(self, session_id: str) -> dict:
+        return self.get(session_id).state()
+
+    def validate(self, session_id: str, name: str = "authored-scenario") -> dict:
+        return self.get(session_id).validate(name=name)
 
     def get(self, session_id: str) -> AuthorSession:
         try:

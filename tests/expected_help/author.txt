@@ -1,0 +1,19 @@
+usage: mosdat author [-h] [--url URL]
+                     {vms,start,session,capture,localize,verify,action,validate,export}
+                     ...
+
+positional arguments:
+  {vms,start,session,capture,localize,verify,action,validate,export}
+    vms                 List configured VMs and Proxmox power state
+    start               Create an authoring session
+    session             Show authoring session state
+    capture             Capture the current VNC screen
+    localize            Find a prompt on the current screen
+    verify              Ask the VLM a yes/no screen question
+    action              Run a confirmed authoring action
+    validate            Validate current draft scenario
+    export              Export current draft scenario YAML
+
+options:
+  -h, --help            show this help message and exit
+  --url URL             Live dashboard URL

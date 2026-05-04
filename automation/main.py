@@ -669,6 +669,38 @@ def main() -> int:
     live_p.add_argument("--config", type=Path, default=None,
                         help="mosdat config path; enables browser authoring sessions")
 
+    # mosdat author
+    author_p = sub.add_parser("author", help="Agent client for the live authoring API")
+    author_p.add_argument("--url", default="http://127.0.0.1:8080",
+                          help="Live dashboard URL")
+    author_sub = author_p.add_subparsers(dest="author_command", required=True)
+    author_sub.add_parser("vms", help="List configured VMs and Proxmox power state")
+    author_start = author_sub.add_parser("start", help="Create an authoring session")
+    author_start.add_argument("--vm", required=True)
+    author_start.add_argument("--model")
+    author_start.add_argument("--verify-model")
+    author_session = author_sub.add_parser("session", help="Show authoring session state")
+    author_session.add_argument("--session", required=True)
+    author_capture = author_sub.add_parser("capture", help="Capture the current VNC screen")
+    author_capture.add_argument("--session", required=True)
+    author_localize = author_sub.add_parser("localize", help="Find a prompt on the current screen")
+    author_localize.add_argument("--session", required=True)
+    author_localize.add_argument("--prompt", required=True)
+    author_verify = author_sub.add_parser("verify", help="Ask the VLM a yes/no screen question")
+    author_verify.add_argument("--session", required=True)
+    author_verify.add_argument("--question", required=True)
+    author_action = author_sub.add_parser("action", help="Run a confirmed authoring action")
+    author_action.add_argument("--session", required=True)
+    author_action.add_argument("--kind", required=True,
+                               choices=["hover", "click", "type", "key", "shell", "wait", "launch"])
+    author_action.add_argument("--json", default="{}", help="Action payload JSON")
+    author_validate = author_sub.add_parser("validate", help="Validate current draft scenario")
+    author_validate.add_argument("--session", required=True)
+    author_validate.add_argument("--name", default="authored-scenario")
+    author_export = author_sub.add_parser("export", help="Export current draft scenario YAML")
+    author_export.add_argument("--session", required=True)
+    author_export.add_argument("--name", default="authored-scenario")
+
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
     visual_group = visual_p.add_mutually_exclusive_group(required=True)
@@ -696,6 +728,27 @@ def main() -> int:
         if args.config:
             argv += ["--config", str(args.config)]
         return live_cli(argv)
+
+    def cmd_author(args) -> int:
+        from automation.author_cli import cli as author_cli
+        argv = ["--url", args.url, args.author_command]
+        if args.author_command == "start":
+            argv += ["--vm", args.vm]
+            if args.model:
+                argv += ["--model", args.model]
+            if args.verify_model:
+                argv += ["--verify-model", args.verify_model]
+        elif args.author_command in {"session", "capture"}:
+            argv += ["--session", args.session]
+        elif args.author_command == "localize":
+            argv += ["--session", args.session, "--prompt", args.prompt]
+        elif args.author_command == "verify":
+            argv += ["--session", args.session, "--question", args.question]
+        elif args.author_command == "action":
+            argv += ["--session", args.session, "--kind", args.kind, "--json", args.json]
+        elif args.author_command in {"validate", "export"}:
+            argv += ["--session", args.session, "--name", args.name]
+        return author_cli(argv)
 
     def cmd_visual(args) -> int:
         from automation.visual import cli as visual_cli
@@ -725,6 +778,7 @@ def main() -> int:
         "list-vms": cmd_list_vms,
         "report": cmd_report,
         "live": cmd_live,
+        "author": cmd_author,
         "visual": cmd_visual,
         "dashboard": cmd_dashboard,
     }

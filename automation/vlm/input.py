@@ -29,8 +29,8 @@ class InputInjector:
         """Move mouse to absolute coordinates (no click, wakes DPMS)."""
         self.vnc.move(x, y)
 
-    def click(self, x: int, y: int) -> None:
-        self.vnc.click(x, y)
+    def click(self, x: int, y: int, button: int = 1) -> None:
+        self.vnc.click(x, y, button=button)
 
     def type_text(self, text: str) -> None:
         self.vnc.type_text(text)

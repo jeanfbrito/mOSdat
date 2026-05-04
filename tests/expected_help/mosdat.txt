@@ -1,11 +1,11 @@
 usage: mosdat [-h]
-              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,visual}
+              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,author,visual}
               ...
 
 mOSdat - Multi-OS Desktop App Testing with GPU passthrough
 
 positional arguments:
-  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,visual}
+  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,author,visual}
     run                 Full test matrix run
     test                Quick test with pre-built package
     functional          Run VLM functional UI tests
@@ -19,6 +19,7 @@ positional arguments:
                         functional runs
     live                Live event-stream dashboard — stream smoke test events
                         in real time
+    author              Agent client for the live authoring API
     visual              Visual regression: capture or check step screenshots
                         via SSIM
 

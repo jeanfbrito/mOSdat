@@ -23,8 +23,6 @@ from datetime import datetime
 from http.client import HTTPConnection
 from pathlib import Path
 
-from PIL import Image
-
 # ---------------------------------------------------------------------------
 # Module loader (mirrors pattern from test_dashboard.py)
 # ---------------------------------------------------------------------------
@@ -62,9 +60,17 @@ def _append_event(path: Path, evt: dict) -> None:
         fh.write(json.dumps(evt) + "\n")
 
 
+class FakeImage:
+    def convert(self, mode):
+        return self
+
+    def tobytes(self):
+        return b"\xff\xff\xff" * 20 * 10
+
+
 class FakeVNC:
     def capture(self):
-        return Image.new("RGB", (20, 10), "white"), (20, 10)
+        return FakeImage(), (20, 10)
 
 
 class FakeVLM:
@@ -79,8 +85,11 @@ class FakeInjector:
     def __init__(self):
         self.calls = []
 
-    def click(self, x, y):
-        self.calls.append(("click", x, y))
+    def click(self, x, y, button=1):
+        self.calls.append(("click", x, y, button))
+
+    def move(self, x, y):
+        self.calls.append(("move", x, y))
 
     def type_text(self, text):
         self.calls.append(("type", text))
@@ -107,6 +116,29 @@ class FakeAuthorManager(AuthorManager):
         )
         self.sessions[session.id] = session
         return self.describe(session)
+
+    def list_vms(self):
+        return {
+            "configured": True,
+            "vms": [
+                {
+                    "name": "ubuntu2404",
+                    "vmid": 101,
+                    "desktop": "kde",
+                    "os_type": "linux",
+                    "status": "running",
+                    "running": True,
+                },
+                {
+                    "name": "windows11",
+                    "vmid": 102,
+                    "desktop": "windows",
+                    "os_type": "windows",
+                    "status": "stopped",
+                    "running": False,
+                },
+            ],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +309,40 @@ class TestHTTPHandler:
             assert "freshness" in body
             assert "Latest</option>" in body
             assert "Total runtime" in body
+            assert 'href="/author"' in body
+            assert "author-screen" not in body
+        finally:
+            server.shutdown()
+
+    def test_author_page_serves_full_workbench(self, tmp_path):
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path)
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/author")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            ct = resp.getheader("Content-Type", "")
+            assert "text/html" in ct
+            body = resp.read().decode("utf-8")
+            assert "mOSdat Author Workbench" in body
+            assert 'href="/"' in body
+            assert "author-screen" in body
+            assert "<select id=\"author-vm\"" in body
+            assert "authorLoadVms()" in body
+            assert "Refresh screen" in body
+            assert "authorAfterAction" in body
+            assert "authorEnsureSession" in body
+            assert "authorPlaceTarget" in body
+            assert "getBoundingClientRect" in body
+            assert "Hover" in body
+            assert "authorHover" in body
+            assert "Left click" in body
+            assert "Right click" in body
+            assert "button,confirm:true" in body
+            assert ".target:before,.target:after" in body
+            assert "start a session first" not in body
+            assert "/api/author/session" in body
         finally:
             server.shutdown()
 
@@ -393,9 +459,25 @@ class TestAuthorAPI:
         bc = live.SSEBroadcaster()
         server, port = _start_server(bc, tmp_path, author_manager=manager)
         try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/author/vms")
+            resp = conn.getresponse()
+            vms = json.loads(resp.read().decode("utf-8"))
+            assert resp.status == 200
+            assert vms["vms"][0]["name"] == "ubuntu2404"
+            assert vms["vms"][0]["status"] == "running"
+
             status, data = self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
             assert status == 200
             assert data["session_id"] == "session-1"
+
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/author/session?session=session-1")
+            resp = conn.getresponse()
+            state = json.loads(resp.read().decode("utf-8"))
+            assert resp.status == 200
+            assert state["vm"] == "ubuntu2404"
+            assert state["draft_steps"] == []
 
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("GET", "/api/author/screenshot?session=session-1")
@@ -405,6 +487,11 @@ class TestAuthorAPI:
             assert shot["width"] == 20
             assert shot["height"] == 10
             assert shot["image"]
+
+            status, capture = self._post(port, "/api/author/capture", {"session_id": "session-1"})
+            assert status == 200
+            assert capture["ok"] is True
+            assert capture["result"]["width"] == 20
 
             status, loc = self._post(
                 port,
@@ -428,7 +515,7 @@ class TestAuthorAPI:
                 {"session_id": "session-1", "action": "click", "confirm": True, "x": 5, "y": 6, "prompt": "login button"},
             )
             assert status == 200
-            assert manager.injector.calls == [("click", 5, 6)]
+            assert manager.injector.calls == [("click", 5, 6, 1)]
             assert action["draft_steps"][0]["localize"] == "login button"
 
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
@@ -438,6 +525,115 @@ class TestAuthorAPI:
             assert resp.status == 200
             assert "name: demo" in text
             assert "login button" in text
+        finally:
+            server.shutdown()
+
+    def test_author_right_click_records_button(self, tmp_path):
+        manager = FakeAuthorManager()
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path, author_manager=manager)
+        try:
+            self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
+
+            status, action = self._post(
+                port,
+                "/api/author/action",
+                {
+                    "session_id": "session-1",
+                    "action": "click",
+                    "button": "right",
+                    "confirm": True,
+                    "x": 5,
+                    "y": 6,
+                    "prompt": "context menu",
+                },
+            )
+
+            assert status == 200
+            assert manager.injector.calls == [("click", 5, 6, 3)]
+            assert action["draft_steps"][0]["click"] == "right"
+        finally:
+            server.shutdown()
+
+    def test_author_hover_records_move(self, tmp_path):
+        manager = FakeAuthorManager()
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path, author_manager=manager)
+        try:
+            self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
+
+            status, action = self._post(
+                port,
+                "/api/author/action",
+                {
+                    "session_id": "session-1",
+                    "action": "hover",
+                    "confirm": True,
+                    "x": 5,
+                    "y": 6,
+                    "prompt": "help tooltip",
+                },
+            )
+
+            assert status == 200
+            assert manager.injector.calls == [("move", 5, 6)]
+            assert action["draft_steps"][0]["hover"] is True
+            assert action["draft_steps"][0]["localize"] == "help tooltip"
+        finally:
+            server.shutdown()
+
+    def test_author_validate_draft_steps(self, tmp_path):
+        manager = FakeAuthorManager()
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path, author_manager=manager)
+        try:
+            self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
+            self._post(
+                port,
+                "/api/author/action",
+                {
+                    "session_id": "session-1",
+                    "action": "hover",
+                    "confirm": True,
+                    "x": 5,
+                    "y": 6,
+                    "prompt": "help tooltip",
+                },
+            )
+
+            status, data = self._post(port, "/api/author/validate", {"session_id": "session-1"})
+            assert status == 200
+            assert data["ok"] is True
+
+            self._post(port, "/api/author/step", {"session_id": "session-1", "steps": [{"loaclize": "typo"}]})
+            status, data = self._post(port, "/api/author/validate", {"session_id": "session-1"})
+            assert status == 200
+            assert data["ok"] is False
+            assert "validation" in data["error"].lower()
+        finally:
+            server.shutdown()
+
+    def test_author_rejects_unknown_click_button(self, tmp_path):
+        manager = FakeAuthorManager()
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path, author_manager=manager)
+        try:
+            self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
+            status, data = self._post(
+                port,
+                "/api/author/action",
+                {
+                    "session_id": "session-1",
+                    "action": "click",
+                    "button": "middle",
+                    "confirm": True,
+                    "x": 5,
+                    "y": 6,
+                },
+            )
+            assert status == 400
+            assert "unsupported click button" in data["error"]
+            assert manager.injector.calls == []
         finally:
             server.shutdown()
 

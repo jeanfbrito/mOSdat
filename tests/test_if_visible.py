@@ -142,7 +142,7 @@ class TestIfVisibleExecute(unittest.TestCase):
         vlm.verify.assert_called_once()
         # then_step triggered localize → click
         vlm.localize.assert_called_once()
-        injector.click.assert_called_once_with(100, 200)
+        injector.click.assert_called_once_with(100, 200, button=1)
 
     def test_multiple_then_steps_execute_in_order(self):
         runner, vlm, injector = _make_runner(vlm_verify_return=True)

@@ -8,6 +8,8 @@ from typing import Optional
 @dataclass
 class FunctionalStep:
     localize: Optional[str] = None
+    click: Optional[str] = None
+    hover: bool = False
     then_type: Optional[str] = None
     then_key: Optional[str] = None
     then_key_pre: Optional[str] = None
@@ -45,6 +47,8 @@ def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep
     for step in steps:
         resolved.append(FunctionalStep(
             localize=_sub(step.localize, vars) if step.localize else None,
+            click=step.click,
+            hover=step.hover,
             then_type=_sub(step.then_type, vars) if step.then_type else None,
             then_key=step.then_key,
             then_key_pre=step.then_key_pre,
@@ -149,6 +153,8 @@ def parse_step(raw: dict) -> FunctionalStep:
         then_steps = [parse_step(step) for step in raw["then"]]
     return FunctionalStep(
         localize=raw.get("localize"),
+        click=raw.get("click"),
+        hover=bool(raw.get("hover", False)),
         then_type=raw.get("then_type") or raw.get("type"),
         then_key=raw.get("then_key") or raw.get("key"),
         then_key_pre=raw.get("then_key_pre") or raw.get("key_pre"),

@@ -589,9 +589,15 @@ class FunctionalRunner:
                     if not step.localize_consistent:
                         self._emit("vlm_localize", step_num=step_num, attempt=attempt,
                                    target=step.localize[:80], x=x, y=y, latency_ms=latency_ms_loc)
-                    self.log(f"    → click ({x}, {y})")
-                    self._emit("click", step_num=step_num, x=x, y=y)
-                    self.injector.click(x, y)
+                    if step.hover:
+                        self.log(f"    → hover ({x}, {y})")
+                        self._emit("hover", step_num=step_num, x=x, y=y)
+                        self.injector.move(x, y)
+                    else:
+                        click_button = 3 if step.click == "right" else 1
+                        self.log(f"    → {step.click or 'left'} click ({x}, {y})")
+                        self._emit("click", step_num=step_num, x=x, y=y, button=step.click or "left")
+                        self.injector.click(x, y, button=click_button)
                     # A6: save click overlay
                     self._save_click_overlay(screenshot, x, y, step_num)
                     time.sleep(0.4)
@@ -1323,4 +1329,3 @@ class FunctionalRunner:
         _log(f"  PASS: all {len(resolved)} steps completed")
         self._cleanup_snapshots(self._checkpoints_retain)
         return True, "\n".join(log_lines)
-

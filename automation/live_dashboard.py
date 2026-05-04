@@ -534,6 +534,7 @@ _TRIAGE_HTML = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}
 header{position:sticky;top:0;z-index:10;background:rgba(11,15,20,.96);border-bottom:1px solid var(--border);padding:12px 18px}
 .top{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.title{font-weight:750;font-size:18px;margin-right:8px}
+.nav{color:var(--text);text-decoration:none;border:1px solid var(--border);border-radius:6px;padding:6px 10px;background:var(--panel2);font-size:12px}
 .pill{border:1px solid var(--border);border-radius:999px;padding:4px 10px;color:var(--muted);font-size:12px}.pill.pass{color:var(--ok);border-color:rgba(63,185,80,.45)}.pill.fail{color:var(--fail);border-color:rgba(255,107,107,.45)}.pill.running{color:var(--run);border-color:rgba(88,166,255,.45)}.pill.stale,.pill.partial{color:var(--stale);border-color:rgba(240,180,41,.45)}.pill.skipped{color:var(--muted)}
 main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;padding:16px}section{background:var(--panel);border:1px solid var(--border);border-radius:8px;min-width:0}.section-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border)}h2{font-size:14px;margin:0}.matrix{overflow:auto}
 table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1px solid var(--border);padding:8px;text-align:left;font-size:12px;vertical-align:middle}th{color:var(--muted);font-weight:650;background:var(--panel2);position:sticky;top:0}.vm-name{font-weight:700}.small{color:var(--muted);font-size:12px}
@@ -541,19 +542,16 @@ table{border-collapse:collapse;width:100%;min-width:720px}th,td{border-bottom:1p
 .thumb{width:74px;height:44px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:#05070a;cursor:zoom-in}
 .fail-list{padding:10px;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 150px);overflow:auto}.fail-card{border:1px solid rgba(255,107,107,.45);background:rgba(255,107,107,.08);border-radius:8px;padding:10px;cursor:pointer}.fail-card img{width:100%;max-height:160px;object-fit:contain;border:1px solid var(--border);border-radius:6px;margin-top:8px;background:#05070a}
 .drawer{position:fixed;right:0;top:0;bottom:0;width:min(720px,96vw);background:#0f151f;border-left:1px solid var(--border);z-index:30;transform:translateX(100%);transition:.18s transform;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-head{position:sticky;top:0;background:#0f151f;border-bottom:1px solid var(--border);padding:14px;display:flex;justify-content:space-between;gap:12px}.drawer-body{padding:14px}button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer}.event{border:1px solid var(--border);border-radius:6px;padding:8px;margin:8px 0;background:rgba(255,255,255,.025)}.shots{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.shots img{width:180px;height:110px;object-fit:contain;border:1px solid var(--border);border-radius:6px;background:#05070a;cursor:zoom-in}.empty{padding:28px;color:var(--muted);text-align:center}
-.author{margin:0 16px 16px 16px;padding:12px}.author-grid{display:grid;grid-template-columns:320px minmax(0,1fr) 360px;gap:12px}.author input,.author textarea,.author select{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px}.author textarea{min-height:74px}.author-screen{position:relative;min-height:260px;background:#05070a;border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden}.author-screen img{max-width:100%;max-height:520px}.target{position:absolute;width:24px;height:24px;border:2px solid var(--fail);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}pre{white-space:pre-wrap;background:#070b11;border:1px solid var(--border);border-radius:6px;padding:8px;max-height:260px;overflow:auto}
 #lightbox{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.86);align-items:center;justify-content:center;padding:20px}#lightbox img{max-width:96vw;max-height:92vh;border:1px solid var(--border)}@media(max-width:980px){main{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<header><div class="top"><div class="title">mOSdat Live Triage</div><span id="conn" class="pill stale">connecting</span><span id="runs" class="pill">0 runs</span><span id="running" class="pill running">0 running</span><span id="pass" class="pill pass">0 pass</span><span id="fail" class="pill fail">0 fail</span><span id="stale" class="pill stale">0 stale</span><span id="updated" class="pill">updated never</span><label class="small">Run <select id="run-filter" onchange="setRunFilter(this.value)"><option value="latest">Latest</option><option value="all">All</option></select></label><button onclick="loadState()">Refresh</button></div><div id="freshness" class="small" style="margin-top:8px">No run loaded.</div></header>
+<header><div class="top"><div class="title">mOSdat Live Triage</div><a class="nav" href="/author">Author Workbench</a><span id="conn" class="pill stale">connecting</span><span id="runs" class="pill">0 runs</span><span id="running" class="pill running">0 running</span><span id="pass" class="pill pass">0 pass</span><span id="fail" class="pill fail">0 fail</span><span id="stale" class="pill stale">0 stale</span><span id="updated" class="pill">updated never</span><label class="small">Run <select id="run-filter" onchange="setRunFilter(this.value)"><option value="latest">Latest</option><option value="all">All</option></select></label><button onclick="loadState()">Refresh</button></div><div id="freshness" class="small" style="margin-top:8px">No run loaded.</div></header>
 <main><section><div class="section-head"><h2>Matrix Overview</h2><span class="small">click a step for timeline</span></div><div id="matrix" class="matrix"><div class="empty">Loading state…</div></div></section><section><div class="section-head"><h2>Failures</h2><span id="failure-count" class="small">0</span></div><div id="failures" class="fail-list"><div class="empty">No failures</div></div></section></main>
-<section class="author"><div class="section-head"><h2>Author Workbench</h2><span id="author-status" class="small">no session</span></div><div class="author-grid"><div><label class="small">VM</label><input id="author-vm" placeholder="ubuntu2404"><button onclick="authorStart()">Start session</button><button onclick="authorCapture()">Capture</button><label class="small">Prompt / question</label><textarea id="author-prompt" placeholder="find the login button"></textarea><button onclick="authorLocalize()">Localize</button><button onclick="authorVerify()">Verify</button><div class="small">Actions require manual confirm.</div><button onclick="authorClick()">Run confirmed click</button><input id="author-type" placeholder="text to type"><button onclick="authorType()">Run confirmed type</button><input id="author-key" placeholder="key, e.g. enter"><button onclick="authorKey()">Run confirmed key</button></div><div class="author-screen" id="author-screen"><span class="small">capture appears here</span></div><div><div class="small">VLM result</div><pre id="author-result">{}</pre><div class="small">Draft YAML</div><pre id="author-draft">steps: []</pre><button onclick="authorExport()">Export YAML</button></div></div></section>
 <aside id="drawer" class="drawer"><div class="drawer-head"><div><strong id="drawer-title">Timeline</strong><div id="drawer-sub" class="small"></div></div><button onclick="closeDrawer()">Close</button></div><div id="drawer-body" class="drawer-body"></div></aside>
 <div id="lightbox" onclick="closeLightbox()"><img id="lightbox-img" src="" alt="screenshot"></div>
 <script>
 let state=null;let runFilter='latest';function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-let authorSession=null;let authorLast=null;let authorTarget=null;
 function fmtAge(sec){if(sec==null)return'-';if(sec<60)return`${sec}s`;return`${Math.floor(sec/60)}m ${sec%60}s`;}
 function cls(status){return['pass','fail','running','stale','partial','skipped'].includes(status)?status:''}
 async function loadState(){const res=await fetch('/api/state',{cache:'no-store'});state=await res.json();render();}
@@ -571,19 +569,74 @@ function openTimeline(runName,vmName,stepNum){const vm=findVm(runName,vmName);if
 function eventBody(e){const bits=[];if(e.question)bits.push(`Q: ${esc(e.question)}`);if(e.answer)bits.push(`A: ${esc(e.answer)}`);if(e.status)bits.push(`status: ${esc(e.status)}`);if(e.latency_ms)bits.push(`latency: ${esc(e.latency_ms)}ms`);return bits.length?`<div>${bits.join('<br>')}</div>`:''}
 function closeDrawer(){document.getElementById('drawer').classList.remove('open')}function openLightbox(url){document.getElementById('lightbox-img').src=url;document.getElementById('lightbox').style.display='flex'}function closeLightbox(){document.getElementById('lightbox').style.display='none';document.getElementById('lightbox-img').src=''}
 const es=new EventSource('/stream');es.onopen=()=>{const c=document.getElementById('conn');c.textContent='connected';c.className='pill pass'};es.onerror=()=>{const c=document.getElementById('conn');c.textContent='disconnected';c.className='pill fail'};es.onmessage=()=>loadState();loadState();setInterval(loadState,5000);
+</script></body></html>
+"""
+
+_AUTHOR_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mOSdat Author Workbench</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121821;--panel2:#182130;--text:#e8eef6;--muted:#9aa7b8;--border:#2a3547;--ok:#3fb950;--fail:#ff6b6b;--run:#58a6ff}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}
+header{height:56px;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--border);background:#0b0f14}
+.title{font-weight:750;font-size:18px}.nav{color:var(--text);text-decoration:none;border:1px solid var(--border);border-radius:6px;padding:6px 10px;background:var(--panel2);font-size:12px}.small{color:var(--muted);font-size:12px}.spacer{flex:1}
+button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;cursor:pointer}button.primary{background:#14304f;border-color:rgba(88,166,255,.6)}
+input,select,textarea{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px}textarea{min-height:112px;resize:vertical}
+main{height:calc(100vh - 56px);display:grid;grid-template-columns:320px minmax(0,1fr) 380px;gap:12px;padding:12px}
+.panel{min-height:0;background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:auto}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px;border-bottom:1px solid var(--border)}.panel-body{padding:12px;display:flex;flex-direction:column;gap:10px}
+.row{display:flex;gap:8px}.row>*{flex:1}.screen{position:relative;min-height:0;height:100%;display:flex;align-items:center;justify-content:center;background:#05070a;border:1px solid var(--border);border-radius:8px;overflow:hidden}.screen img{max-width:100%;max-height:100%;object-fit:contain}.target{position:absolute;width:28px;height:28px;transform:translate(-50%,-50%);pointer-events:none}.target:before,.target:after{content:"";position:absolute;left:50%;top:50%;width:28px;height:2px;background:var(--fail);transform-origin:center}.target:before{transform:translate(-50%,-50%) rotate(45deg)}.target:after{transform:translate(-50%,-50%) rotate(-45deg)}
+pre{white-space:pre-wrap;background:#070b11;border:1px solid var(--border);border-radius:6px;padding:9px;min-height:120px;overflow:auto}.status{border:1px solid var(--border);border-radius:999px;padding:4px 10px;color:var(--muted);font-size:12px}.status.running{color:var(--ok);border-color:rgba(63,185,80,.5)}.status.stopped{color:var(--muted)}.status.unknown{color:#f0b429;border-color:rgba(240,180,41,.5)}
+@media(max-width:1100px){main{height:auto;grid-template-columns:1fr}.screen{min-height:420px}}
+</style>
+</head>
+<body>
+<header><div class="title">mOSdat Author Workbench</div><a class="nav" href="/">Runs</a><div class="spacer"></div><span id="author-status" class="status">no session</span></header>
+<main>
+  <section class="panel"><div class="panel-head"><strong>Session</strong></div><div class="panel-body">
+    <label class="small">VM</label><select id="author-vm" onchange="authorUpdateVmStatus()"><option value="">Loading VMs...</option></select><div id="author-vm-status" class="status unknown">unknown</div>
+    <div class="row"><button class="primary" onclick="authorStart()">Start</button><button onclick="authorCapture()">Refresh screen</button></div>
+    <label class="small">Prompt / question</label><textarea id="author-prompt" placeholder="find the login button"></textarea>
+    <div class="row"><button onclick="authorLocalize()">Localize</button><button onclick="authorVerify()">Verify</button></div>
+    <div class="small">Actions require manual confirm.</div>
+    <div class="row"><button onclick="authorHover()">Hover</button><button onclick="authorClick('left')">Left click</button><button onclick="authorClick('right')">Right click</button></div>
+    <label class="small">Text</label><input id="author-type" placeholder="text to type"><button onclick="authorType()">Run confirmed type</button>
+    <label class="small">Key</label><input id="author-key" placeholder="key, e.g. enter"><button onclick="authorKey()">Run confirmed key</button>
+  </div></section>
+  <section class="screen" id="author-screen"><span class="small">capture appears here</span></section>
+  <section class="panel"><div class="panel-head"><strong>Output</strong><button onclick="authorExport()">Export YAML</button></div><div class="panel-body">
+    <div class="small">VLM result</div><pre id="author-result">{}</pre>
+    <div class="small">Draft YAML</div><pre id="author-draft">steps: []</pre>
+  </div></section>
+</main>
+<script>
+let authorSession=null;let authorTarget=null;let authorVms=[];
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function postJson(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok||data.error)throw new Error(data.error||res.statusText);return data}
 function authorSetStatus(text){document.getElementById('author-status').textContent=text}
 function authorShow(obj){document.getElementById('author-result').textContent=JSON.stringify(obj,null,2)}
-function authorDraft(steps){document.getElementById('author-draft').textContent='steps:\\n'+(steps||[]).map(s=>'  - '+JSON.stringify(s)).join('\\n')}
-async function authorStart(){try{const vm=document.getElementById('author-vm').value.trim();const data=await postJson('/api/author/session',{vm});authorSession=data.session_id;authorSetStatus(`session ${authorSession} · ${data.vm}`);authorDraft(data.draft_steps);await authorCapture()}catch(e){authorSetStatus(e.message)}}
-async function authorCapture(){if(!authorSession)return authorSetStatus('start a session first');try{const res=await fetch(`/api/author/screenshot?session=${encodeURIComponent(authorSession)}`);const data=await res.json();authorLast=data;const screen=document.getElementById('author-screen');screen.innerHTML=`<img id="author-img" src="data:${data.content_type};base64,${data.image}">`;authorShow({width:data.width,height:data.height})}catch(e){authorSetStatus(e.message)}}
-async function authorLocalize(){try{const prompt=document.getElementById('author-prompt').value;const data=await postJson('/api/author/vlm/localize',{session_id:authorSession,prompt});authorTarget=data;authorShow(data);const img=document.getElementById('author-img');if(img){const rect=img.getBoundingClientRect();const dot=document.createElement('div');dot.className='target';dot.style.left=`${(data.x/data.width)*100}%`;dot.style.top=`${(data.y/data.height)*100}%`;document.getElementById('author-screen').appendChild(dot)}}catch(e){authorSetStatus(e.message)}}
-async function authorVerify(){try{const question=document.getElementById('author-prompt').value;authorShow(await postJson('/api/author/vlm/verify',{session_id:authorSession,question}))}catch(e){authorSetStatus(e.message)}}
-async function authorClick(){try{if(!authorTarget)throw new Error('localize first');const data=await postJson('/api/author/action',{session_id:authorSession,action:'click',confirm:true,x:authorTarget.x,y:authorTarget.y,prompt:authorTarget.prompt});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
-async function authorType(){try{const text=document.getElementById('author-type').value;const data=await postJson('/api/author/action',{session_id:authorSession,action:'type',confirm:true,text});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
-async function authorKey(){try{const key=document.getElementById('author-key').value;const data=await postJson('/api/author/action',{session_id:authorSession,action:'key',confirm:true,key});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
-async function authorExport(){if(!authorSession)return;const text=await (await fetch(`/api/author/export?session=${encodeURIComponent(authorSession)}`)).text();document.getElementById('author-draft').textContent=text}
-</script></body></html>
+function authorDraft(steps){document.getElementById('author-draft').textContent='steps:\n'+(steps||[]).map(s=>'  - '+JSON.stringify(s)).join('\n')}
+function authorVmIcon(vm){if(vm.status==='running')return '●';if(vm.status==='stopped')return '○';return '?'}
+function authorUpdateVmStatus(){const name=document.getElementById('author-vm').value;const vm=authorVms.find(v=>v.name===name);const pill=document.getElementById('author-vm-status');if(!vm){pill.textContent='unknown';pill.className='status unknown';return}pill.textContent=`${authorVmIcon(vm)} ${vm.status} / ${vm.desktop} / vmid ${vm.vmid}`;pill.className=`status ${vm.status==='running'?'running':vm.status==='stopped'?'stopped':'unknown'}`}
+async function authorLoadVms(){try{const data=await (await fetch('/api/author/vms',{cache:'no-store'})).json();authorVms=data.vms||[];const sel=document.getElementById('author-vm');if(!data.configured){sel.innerHTML='<option value="">start live with --config</option>';authorSetStatus('authoring requires --config');authorUpdateVmStatus();return}sel.innerHTML=authorVms.length?authorVms.map(vm=>`<option value="${esc(vm.name)}">${authorVmIcon(vm)} ${esc(vm.name)}</option>`).join(''):'<option value="">no VMs configured</option>';authorUpdateVmStatus()}catch(e){authorSetStatus(e.message)}}
+async function authorEnsureSession(){if(authorSession)return authorSession;const vmName=document.getElementById('author-vm').value;if(!vmName)throw new Error('select a VM first');const vm=authorVms.find(v=>v.name===vmName);if(vm&&vm.status!=='running')throw new Error(`${vmName} is ${vm.status}; start it before authoring`);authorSetStatus(`creating session / ${vmName}`);const data=await postJson('/api/author/session',{vm:vmName});authorSession=data.session_id;authorSetStatus(`session ${authorSession} / ${data.vm}`);authorDraft(data.draft_steps);return authorSession}
+async function authorStart(){try{authorSession=null;await authorEnsureSession();await authorCapture()}catch(e){authorSetStatus(e.message)}}
+async function authorCapture(){try{const session=await authorEnsureSession();const res=await fetch(`/api/author/screenshot?session=${encodeURIComponent(session)}`);const data=await res.json();if(!res.ok||data.error)throw new Error(data.error||res.statusText);const screen=document.getElementById('author-screen');screen.innerHTML=`<img id="author-img" src="data:${data.content_type};base64,${data.image}">`;authorShow({width:data.width,height:data.height})}catch(e){authorSetStatus(e.message)}}
+function authorPlaceTarget(data){document.querySelectorAll('.target').forEach(el=>el.remove());const img=document.getElementById('author-img');const screen=document.getElementById('author-screen');if(!img||!screen)return;const ir=img.getBoundingClientRect();const sr=screen.getBoundingClientRect();const width=data.width||img.naturalWidth;const height=data.height||img.naturalHeight;if(!width||!height)return;const dot=document.createElement('div');dot.className='target';dot.style.left=`${ir.left-sr.left+(data.x/width)*ir.width}px`;dot.style.top=`${ir.top-sr.top+(data.y/height)*ir.height}px`;screen.appendChild(dot)}
+async function authorLocalize(){try{const session=await authorEnsureSession();const prompt=document.getElementById('author-prompt').value;const data=await postJson('/api/author/vlm/localize',{session_id:session,prompt});authorTarget=data;authorShow(data);authorPlaceTarget(data)}catch(e){authorSetStatus(e.message)}}
+async function authorVerify(){try{const session=await authorEnsureSession();const question=document.getElementById('author-prompt').value;authorShow(await postJson('/api/author/vlm/verify',{session_id:session,question}))}catch(e){authorSetStatus(e.message)}}
+async function authorAfterAction(data){authorDraft(data.draft_steps);authorShow(data);authorTarget=null;await authorCapture()}
+async function authorHover(){try{const session=await authorEnsureSession();if(!authorTarget)throw new Error('localize first');const data=await postJson('/api/author/action',{session_id:session,action:'hover',confirm:true,x:authorTarget.x,y:authorTarget.y,prompt:authorTarget.prompt});await authorAfterAction(data)}catch(e){authorSetStatus(e.message)}}
+async function authorClick(button){try{const session=await authorEnsureSession();if(!authorTarget)throw new Error('localize first');const data=await postJson('/api/author/action',{session_id:session,action:'click',button,confirm:true,x:authorTarget.x,y:authorTarget.y,prompt:authorTarget.prompt});await authorAfterAction(data)}catch(e){authorSetStatus(e.message)}}
+async function authorType(){try{const session=await authorEnsureSession();const text=document.getElementById('author-type').value;const data=await postJson('/api/author/action',{session_id:session,action:'type',confirm:true,text});await authorAfterAction(data)}catch(e){authorSetStatus(e.message)}}
+async function authorKey(){try{const session=await authorEnsureSession();const key=document.getElementById('author-key').value;const data=await postJson('/api/author/action',{session_id:session,action:'key',confirm:true,key});await authorAfterAction(data)}catch(e){authorSetStatus(e.message)}}
+async function authorExport(){try{const session=await authorEnsureSession();const res=await fetch(`/api/author/export?session=${encodeURIComponent(session)}`);const text=await res.text();document.getElementById('author-draft').textContent=text}catch(e){authorSetStatus(e.message)}}
+authorLoadVms();
+</script>
+</body>
+</html>
 """
 
 
@@ -610,8 +663,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/" or path == "":
             self._serve_html()
+        elif path == "/author":
+            self._serve_author_html()
         elif path == "/api/state":
             self._serve_state()
+        elif path == "/api/author/vms":
+            self._send_json(self.author_manager.list_vms())
+        elif path == "/api/author/session":
+            self._serve_author_session(parsed.query)
         elif path == "/stream":
             self._serve_sse()
         elif path == "/api/author/screenshot":
@@ -633,6 +692,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     model=body.get("model"),
                     verify_model=body.get("verify_model"),
                 )
+            elif parsed.path == "/api/author/capture":
+                session = self.author_manager.get(body["session_id"])
+                result = self._agent_result(session.capture())
             elif parsed.path == "/api/author/vlm/localize":
                 session = self.author_manager.get(body["session_id"])
                 result = session.localize(body["prompt"])
@@ -642,6 +704,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/author/action":
                 session = self.author_manager.get(body["session_id"])
                 result = session.run_action(body["action"], body)
+            elif parsed.path == "/api/author/validate":
+                result = self.author_manager.validate(
+                    body["session_id"],
+                    name=body.get("name", "authored-scenario"),
+                )
             elif parsed.path == "/api/author/step":
                 session = self.author_manager.get(body["session_id"])
                 if "steps" in body:
@@ -656,9 +723,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(result)
         except (KeyError, ValueError) as exc:
             self._send_json({"error": str(exc)}, status=400)
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": str(exc)}, status=500)
 
     def _serve_html(self) -> None:
         body = _TRIAGE_HTML.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_author_html(self) -> None:
+        body = _AUTHOR_HTML.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -681,6 +758,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _agent_result(self, result: dict) -> dict:
+        return {"ok": True, "result": result}
+
     def _serve_state(self) -> None:
         state = build_dashboard_state(
             self.results_root,
@@ -701,6 +781,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             payload = self.author_manager.get(session_id).capture()
             self._send_json(payload)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=400)
+
+    def _serve_author_session(self, query: str) -> None:
+        params = parse_qs(query)
+        session_id = params.get("session", [""])[0]
+        try:
+            self._send_json(self.author_manager.state(session_id))
         except ValueError as exc:
             self._send_json({"error": str(exc)}, status=400)
 

@@ -12,17 +12,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# test_if_visible.py may stub out PIL (runs first alphabetically).
-# Only restore if it's been replaced with a stub — don't drop the real PIL
-# (that would lose the PNG plugin registry, breaking test_visual.py).
-import importlib as _importlib
-import PIL.Image as _pil_image_mod
-# test_if_visible.py unconditionally sets PIL.Image.Image = object on the real module.
-# Reload PIL.Image to restore the real Image class before any Image.new() calls.
-if getattr(_pil_image_mod, "Image", None) is object:
-    _importlib.reload(_pil_image_mod)
-from PIL import Image
-
 # ---------------------------------------------------------------------------
 # Load runner module directly by file path (avoid broken __init__ chain)
 # ---------------------------------------------------------------------------
@@ -60,6 +49,10 @@ StepFailed = _runner_mod.StepFailed
 # Helper
 # ---------------------------------------------------------------------------
 
+class FakeImage:
+    pass
+
+
 def _make_runner(vlm_verify=True, vlm_coords=(200, 300), screenshot_dir=None):
     vlm = MagicMock()
     vlm.verify.return_value = vlm_verify
@@ -69,7 +62,7 @@ def _make_runner(vlm_verify=True, vlm_coords=(200, 300), screenshot_dir=None):
     vlm.verify_consistent.return_value = (vlm_verify, ["yes"] * 3)
 
     ss = MagicMock()
-    ss.capture.return_value = (Image.new("RGB", (1920, 1080)), (1920, 1080))
+    ss.capture.return_value = (FakeImage(), (1920, 1080))
     ss.wait_for_stable.return_value = True
 
     inj = MagicMock()
@@ -143,7 +136,20 @@ class TestLocalizeStep:
         runner, vlm, _, inj = _make_runner()
         runner.run_step(FunctionalStep(localize="the Submit button", retries=1), 1)
         vlm.localize.assert_called_once()
-        inj.click.assert_called_once_with(200, 300)
+        inj.click.assert_called_once_with(200, 300, button=1)
+
+    def test_localize_issues_right_click(self):
+        runner, vlm, _, inj = _make_runner()
+        runner.run_step(FunctionalStep(localize="the Submit button", click="right", retries=1), 1)
+        vlm.localize.assert_called_once()
+        inj.click.assert_called_once_with(200, 300, button=3)
+
+    def test_localize_issues_hover_without_click(self):
+        runner, vlm, _, inj = _make_runner()
+        runner.run_step(FunctionalStep(localize="help icon", hover=True, retries=1), 1)
+        vlm.localize.assert_called_once()
+        inj.move.assert_called_once_with(200, 300)
+        inj.click.assert_not_called()
 
     def test_localize_then_type_then_key(self):
         runner, _, _, inj = _make_runner()

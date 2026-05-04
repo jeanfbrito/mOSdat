@@ -7,7 +7,7 @@ fix the snapshot or revert the CLI change.
 
 To regenerate snapshots after an intentional change:
     python -m automation.main --help > tests/expected_help/mosdat.txt 2>&1
-    for sub in run test functional validate list-vms report dashboard visual; do
+    for sub in run test functional validate list-vms report dashboard author visual; do
         python -m automation.main $sub --help > tests/expected_help/${sub}.txt 2>&1
     done
 """
@@ -30,6 +30,7 @@ CASES = [
     ("list-vms",   ["list-vms"]),
     ("report",     ["report"]),
     ("dashboard",  ["dashboard"]),
+    ("author",     ["author"]),
     ("visual",     ["visual"]),
 ]
 
