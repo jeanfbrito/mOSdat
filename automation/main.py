@@ -694,6 +694,33 @@ def main() -> int:
     author_action.add_argument("--kind", required=True,
                                choices=["hover", "click", "type", "key", "shell", "wait", "launch"])
     author_action.add_argument("--json", default="{}", help="Action payload JSON")
+    author_click = author_sub.add_parser("click", help="Run a confirmed click action")
+    author_click.add_argument("--session", required=True)
+    author_click.add_argument("--x", required=True, type=int)
+    author_click.add_argument("--y", required=True, type=int)
+    author_click.add_argument("--button", choices=["left", "right"], default="left")
+    author_click.add_argument("--prompt")
+    author_hover = author_sub.add_parser("hover", help="Run a confirmed hover action")
+    author_hover.add_argument("--session", required=True)
+    author_hover.add_argument("--x", required=True, type=int)
+    author_hover.add_argument("--y", required=True, type=int)
+    author_hover.add_argument("--prompt")
+    author_type = author_sub.add_parser("type", help="Run a confirmed text input action")
+    author_type.add_argument("--session", required=True)
+    author_type.add_argument("--text", required=True)
+    author_key = author_sub.add_parser("key", help="Run a confirmed key press action")
+    author_key.add_argument("--session", required=True)
+    author_key.add_argument("--key", required=True)
+    author_wait = author_sub.add_parser("wait", help="Append and run a bounded wait action")
+    author_wait.add_argument("--session", required=True)
+    author_wait.add_argument("--seconds", type=int, default=1)
+    author_shell = author_sub.add_parser("shell", help="Run a confirmed shell action")
+    author_shell.add_argument("--session", required=True)
+    author_shell.add_argument("--cmd", required=True)
+    author_launch = author_sub.add_parser("launch", help="Run a confirmed launch action")
+    author_launch.add_argument("--session", required=True)
+    author_launch.add_argument("--cmd", required=True)
+    author_launch.add_argument("--wait", type=int, default=0)
     author_validate = author_sub.add_parser("validate", help="Validate current draft scenario")
     author_validate.add_argument("--session", required=True)
     author_validate.add_argument("--name", default="authored-scenario")
@@ -753,6 +780,24 @@ def main() -> int:
             argv += ["--session", args.session, "--question", args.question]
         elif args.author_command == "action":
             argv += ["--session", args.session, "--kind", args.kind, "--json", args.json]
+        elif args.author_command == "click":
+            argv += ["--session", args.session, "--x", str(args.x), "--y", str(args.y), "--button", args.button]
+            if args.prompt is not None:
+                argv += ["--prompt", args.prompt]
+        elif args.author_command == "hover":
+            argv += ["--session", args.session, "--x", str(args.x), "--y", str(args.y)]
+            if args.prompt is not None:
+                argv += ["--prompt", args.prompt]
+        elif args.author_command == "type":
+            argv += ["--session", args.session, "--text", args.text]
+        elif args.author_command == "key":
+            argv += ["--session", args.session, "--key", args.key]
+        elif args.author_command == "wait":
+            argv += ["--session", args.session, "--seconds", str(args.seconds)]
+        elif args.author_command == "shell":
+            argv += ["--session", args.session, "--cmd", args.cmd]
+        elif args.author_command == "launch":
+            argv += ["--session", args.session, "--cmd", args.cmd, "--wait", str(args.wait)]
         elif args.author_command in {"validate", "export"}:
             argv += ["--session", args.session, "--name", args.name]
         elif args.author_command == "step":

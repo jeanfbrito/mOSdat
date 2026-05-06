@@ -55,9 +55,10 @@ Current capabilities:
 - VNC screen capture and manual refresh
 - VLM localize with a precise X marker on the rendered image
 - VLM yes/no verify
-- hover, left click, right click, type, and key actions
+- hover, left click, right click, type, key, wait, shell, and launch actions
+- manual screenshot coordinate picking by clicking the captured image
 - JSON step append or full draft-step replacement through the agent CLI/API
-- session close through the agent CLI/API
+- validation and session close from the browser workbench and agent CLI/API
 - automatic capture after actions
 - draft YAML preview and export
 
@@ -70,6 +71,9 @@ Action semantics:
 | Right click | `localize: ...`, `click: right` | VNC button 3 |
 | Type | `type: ...` | VNC text input |
 | Key | `key: ...` | VNC key press |
+| Wait | `wait: ...` | Bounded server-side wait |
+| Shell | `shell: ...` | SSH shell command |
+| Launch | `launch: ...`, `wait: ...` | SSH launch helper |
 
 ## Agent Authoring API
 
@@ -80,7 +84,9 @@ mosdat author --url http://127.0.0.1:8082 vms
 mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
 mosdat author --url http://127.0.0.1:8082 capture --session <session-id>
 mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"
-mosdat author --url http://127.0.0.1:8082 action --session <session-id> --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
+mosdat author --url http://127.0.0.1:8082 click --session <session-id> --x 5 --y 6 --prompt "help tooltip"
+mosdat author --url http://127.0.0.1:8082 type --session <session-id> --text "hello"
+mosdat author --url http://127.0.0.1:8082 key --session <session-id> --key enter
 mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
 mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
 mosdat author --url http://127.0.0.1:8082 step --session <session-id> --json '{"key":"escape"}'

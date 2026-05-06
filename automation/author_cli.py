@@ -73,6 +73,16 @@ def _print(data: dict) -> int:
     return 1 if data.get("error") or data.get("ok") is False else 0
 
 
+def _action_payload(session_id: str, action: str, **fields: object) -> dict:
+    payload = {k: v for k, v in fields.items() if v is not None}
+    payload.update({"session_id": session_id, "action": action, "confirm": True})
+    return payload
+
+
+def _post_action(base_url: str, session_id: str, action: str, **fields: object) -> int:
+    return _print(_request_json(base_url, "POST", "/api/author/action", _action_payload(session_id, action, **fields)))
+
+
 def cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mosdat author", description="Agent client for the live authoring API")
     parser.add_argument("--url", default="http://127.0.0.1:8080", help="Live dashboard URL")
@@ -103,6 +113,40 @@ def cli(argv: list[str] | None = None) -> int:
     action.add_argument("--session", required=True)
     action.add_argument("--kind", required=True, choices=["hover", "click", "type", "key", "shell", "wait", "launch"])
     action.add_argument("--json", default={}, type=_json_object_arg, help="Action payload JSON object")
+
+    click = sub.add_parser("click", help="Run a confirmed click action")
+    click.add_argument("--session", required=True)
+    click.add_argument("--x", required=True, type=int)
+    click.add_argument("--y", required=True, type=int)
+    click.add_argument("--button", choices=["left", "right"], default="left")
+    click.add_argument("--prompt")
+
+    hover = sub.add_parser("hover", help="Run a confirmed hover action")
+    hover.add_argument("--session", required=True)
+    hover.add_argument("--x", required=True, type=int)
+    hover.add_argument("--y", required=True, type=int)
+    hover.add_argument("--prompt")
+
+    type_cmd = sub.add_parser("type", help="Run a confirmed text input action")
+    type_cmd.add_argument("--session", required=True)
+    type_cmd.add_argument("--text", required=True)
+
+    key = sub.add_parser("key", help="Run a confirmed key press action")
+    key.add_argument("--session", required=True)
+    key.add_argument("--key", required=True)
+
+    wait = sub.add_parser("wait", help="Append and run a bounded wait action")
+    wait.add_argument("--session", required=True)
+    wait.add_argument("--seconds", type=int, default=1)
+
+    shell = sub.add_parser("shell", help="Run a confirmed shell action")
+    shell.add_argument("--session", required=True)
+    shell.add_argument("--cmd", required=True)
+
+    launch = sub.add_parser("launch", help="Run a confirmed launch action")
+    launch.add_argument("--session", required=True)
+    launch.add_argument("--cmd", required=True)
+    launch.add_argument("--wait", type=int, default=0)
 
     validate = sub.add_parser("validate", help="Validate current draft scenario")
     validate.add_argument("--session", required=True)
@@ -141,6 +185,20 @@ def cli(argv: list[str] | None = None) -> int:
         payload = dict(args.json)
         payload.update({"session_id": args.session, "action": args.kind, "confirm": True})
         return _print(_request_json(base_url, "POST", "/api/author/action", payload))
+    if args.command == "click":
+        return _post_action(base_url, args.session, "click", x=args.x, y=args.y, button=args.button, prompt=args.prompt)
+    if args.command == "hover":
+        return _post_action(base_url, args.session, "hover", x=args.x, y=args.y, prompt=args.prompt)
+    if args.command == "type":
+        return _post_action(base_url, args.session, "type", text=args.text)
+    if args.command == "key":
+        return _post_action(base_url, args.session, "key", key=args.key)
+    if args.command == "wait":
+        return _post_action(base_url, args.session, "wait", seconds=args.seconds)
+    if args.command == "shell":
+        return _post_action(base_url, args.session, "shell", cmd=args.cmd)
+    if args.command == "launch":
+        return _post_action(base_url, args.session, "launch", cmd=args.cmd, wait=args.wait)
     if args.command == "validate":
         return _print(_request_json(base_url, "POST", "/api/author/validate", {"session_id": args.session, "name": args.name}))
     if args.command == "export":

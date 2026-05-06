@@ -53,6 +53,73 @@ def test_author_cli_action_merges_payload(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["action"] == "click"
 
 
+def test_author_cli_click_posts_typed_action(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        return {"action": "click"}
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli([
+        "click",
+        "--session", "session-1",
+        "--x", "5",
+        "--y", "6",
+        "--button", "right",
+        "--prompt", "context menu",
+    ])
+
+    assert status == 0
+    assert calls[0][1:4] == (
+        "POST",
+        "/api/author/action",
+        {"x": 5, "y": 6, "button": "right", "prompt": "context menu", "session_id": "session-1", "action": "click", "confirm": True},
+    )
+    assert json.loads(capsys.readouterr().out)["action"] == "click"
+
+
+def test_author_cli_type_posts_typed_action(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        return {"action": "type"}
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["type", "--session", "session-1", "--text", "hello"])
+
+    assert status == 0
+    assert calls[0][1:4] == (
+        "POST",
+        "/api/author/action",
+        {"text": "hello", "session_id": "session-1", "action": "type", "confirm": True},
+    )
+    assert json.loads(capsys.readouterr().out)["action"] == "type"
+
+
+def test_author_cli_launch_posts_typed_action(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        return {"action": "launch"}
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["launch", "--session", "session-1", "--cmd", "rocketchat", "--wait", "5"])
+
+    assert status == 0
+    assert calls[0][1:4] == (
+        "POST",
+        "/api/author/action",
+        {"cmd": "rocketchat", "wait": 5, "session_id": "session-1", "action": "launch", "confirm": True},
+    )
+    assert json.loads(capsys.readouterr().out)["action"] == "launch"
+
+
 def test_author_cli_export_prints_yaml_json(monkeypatch, capsys):
     calls = []
 

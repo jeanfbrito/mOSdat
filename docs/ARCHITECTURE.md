@@ -88,7 +88,9 @@ Agents should prefer the CLI wrapper because it prints compact JSON:
 python -m automation.main author --url http://127.0.0.1:8082 vms
 python -m automation.main author --url http://127.0.0.1:8082 start --vm ubuntu2404
 python -m automation.main author --url http://127.0.0.1:8082 localize --session SESSION --prompt "help tooltip"
-python -m automation.main author --url http://127.0.0.1:8082 action --session SESSION --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
+python -m automation.main author --url http://127.0.0.1:8082 click --session SESSION --x 5 --y 6 --prompt "help tooltip"
+python -m automation.main author --url http://127.0.0.1:8082 type --session SESSION --text "hello"
+python -m automation.main author --url http://127.0.0.1:8082 key --session SESSION --key enter
 python -m automation.main author --url http://127.0.0.1:8082 validate --session SESSION
 python -m automation.main author --url http://127.0.0.1:8082 export --session SESSION --name tooltip-flow
 python -m automation.main author --url http://127.0.0.1:8082 step --session SESSION --json '{"key":"escape"}'

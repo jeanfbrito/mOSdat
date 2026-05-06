@@ -337,6 +337,18 @@ class TestHTTPHandler:
             assert "getBoundingClientRect" in body
             assert "Hover" in body
             assert "authorHover" in body
+            assert "Run confirmed wait" in body
+            assert "authorWait" in body
+            assert "Run confirmed shell" in body
+            assert "authorShell" in body
+            assert "Run confirmed launch" in body
+            assert "authorLaunch" in body
+            assert "Validate draft" in body
+            assert "authorValidate" in body
+            assert "Close session" in body
+            assert "authorClose" in body
+            assert "authorPickTarget" in body
+            assert "click screenshot to set target" in body
             assert "Left click" in body
             assert "Right click" in body
             assert "button,confirm:true" in body
