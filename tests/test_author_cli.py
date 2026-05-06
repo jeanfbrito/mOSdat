@@ -123,6 +123,33 @@ def test_author_cli_click_posts_typed_action(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["action"] == "click"
 
 
+def test_author_cli_prompt_click_localizes_then_clicks(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        if path == "/api/author/vlm/localize":
+            return {"prompt": payload["prompt"], "x": 5, "y": 6, "width": 20, "height": 10}
+        return {"action": "click", "draft_steps": [{"localize": payload["prompt"]}]}
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["prompt-click", "--session", "session-1", "--prompt", "login button", "--button", "right"])
+
+    assert status == 0
+    assert calls == [
+        ("http://127.0.0.1:8080", "POST", "/api/author/vlm/localize", {"session_id": "session-1", "prompt": "login button"}, None),
+        (
+            "http://127.0.0.1:8080",
+            "POST",
+            "/api/author/action",
+            {"x": 5, "y": 6, "button": "right", "prompt": "login button", "session_id": "session-1", "action": "click", "confirm": True},
+            None,
+        ),
+    ]
+    assert json.loads(capsys.readouterr().out)["draft_steps"] == [{"localize": "login button"}]
+
+
 def test_author_cli_capture_writes_bmp_file(monkeypatch, tmp_path, capsys):
     calls = []
 

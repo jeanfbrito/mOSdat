@@ -702,6 +702,10 @@ def main() -> int:
     author_click.add_argument("--y", required=True, type=int)
     author_click.add_argument("--button", choices=["left", "right"], default="left")
     author_click.add_argument("--prompt")
+    author_prompt_click = author_sub.add_parser("prompt-click", help="Localize a prompt and click its center")
+    author_prompt_click.add_argument("--session", required=True)
+    author_prompt_click.add_argument("--prompt", required=True)
+    author_prompt_click.add_argument("--button", choices=["left", "right"], default="left")
     author_hover = author_sub.add_parser("hover", help="Run a confirmed hover action")
     author_hover.add_argument("--session", required=True)
     author_hover.add_argument("--x", required=True, type=int)
@@ -791,6 +795,8 @@ def main() -> int:
             argv += ["--session", args.session, "--x", str(args.x), "--y", str(args.y), "--button", args.button]
             if args.prompt is not None:
                 argv += ["--prompt", args.prompt]
+        elif args.author_command == "prompt-click":
+            argv += ["--session", args.session, "--prompt", args.prompt, "--button", args.button]
         elif args.author_command == "hover":
             argv += ["--session", args.session, "--x", str(args.x), "--y", str(args.y)]
             if args.prompt is not None:

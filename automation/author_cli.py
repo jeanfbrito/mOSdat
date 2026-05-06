@@ -84,6 +84,15 @@ def _post_action(base_url: str, session_id: str, action: str, **fields: object) 
     return _print(_request_json(base_url, "POST", "/api/author/action", _action_payload(session_id, action, **fields)))
 
 
+
+def _prompt_click(base_url: str, session_id: str, prompt: str, button: str) -> int:
+    target = _request_json(base_url, "POST", "/api/author/vlm/localize", {"session_id": session_id, "prompt": prompt})
+    if target.get("error") or target.get("ok") is False:
+        return _print(target)
+    if not all(key in target for key in ("x", "y")):
+        return _print({"ok": False, "error": "localize response did not include x/y", "localize": target})
+    return _post_action(base_url, session_id, "click", x=int(target["x"]), y=int(target["y"]), button=button, prompt=prompt)
+
 def _write_yaml_output(data: dict, output: str | None) -> int:
     if data.get("error"):
         return _print(data)
@@ -166,6 +175,11 @@ def cli(argv: list[str] | None = None) -> int:
     click.add_argument("--button", choices=["left", "right"], default="left")
     click.add_argument("--prompt")
 
+
+    prompt_click = sub.add_parser("prompt-click", help="Localize a prompt and click its center")
+    prompt_click.add_argument("--session", required=True)
+    prompt_click.add_argument("--prompt", required=True)
+    prompt_click.add_argument("--button", choices=["left", "right"], default="left")
     hover = sub.add_parser("hover", help="Run a confirmed hover action")
     hover.add_argument("--session", required=True)
     hover.add_argument("--x", required=True, type=int)
@@ -235,6 +249,8 @@ def cli(argv: list[str] | None = None) -> int:
         return _print(_request_json(base_url, "POST", "/api/author/action", payload))
     if args.command == "click":
         return _post_action(base_url, args.session, "click", x=args.x, y=args.y, button=args.button, prompt=args.prompt)
+    if args.command == "prompt-click":
+        return _prompt_click(base_url, args.session, args.prompt, args.button)
     if args.command == "hover":
         return _post_action(base_url, args.session, "hover", x=args.x, y=args.y, prompt=args.prompt)
     if args.command == "type":
