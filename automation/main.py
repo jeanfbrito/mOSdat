@@ -675,6 +675,7 @@ def main() -> int:
                           help="Live dashboard URL")
     author_sub = author_p.add_subparsers(dest="author_command", required=True)
     author_sub.add_parser("vms", help="List configured VMs and Proxmox power state")
+    author_sub.add_parser("doctor", help="Check author dashboard readiness")
     author_start = author_sub.add_parser("start", help="Create an authoring session")
     author_start.add_argument("--vm", required=True)
     author_start.add_argument("--model")
@@ -767,7 +768,9 @@ def main() -> int:
     def cmd_author(args) -> int:
         from automation.author_cli import cli as author_cli
         argv = ["--url", args.url, args.author_command]
-        if args.author_command == "start":
+        if args.author_command == "doctor":
+            pass
+        elif args.author_command == "start":
             argv += ["--vm", args.vm]
             if args.model:
                 argv += ["--model", args.model]

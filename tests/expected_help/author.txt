@@ -1,10 +1,11 @@
 usage: mosdat author [-h] [--url URL]
-                     {vms,start,session,capture,localize,verify,action,click,hover,type,key,wait,shell,launch,validate,export,step,close}
+                     {vms,doctor,start,session,capture,localize,verify,action,click,hover,type,key,wait,shell,launch,validate,export,step,close}
                      ...
 
 positional arguments:
-  {vms,start,session,capture,localize,verify,action,click,hover,type,key,wait,shell,launch,validate,export,step,close}
+  {vms,doctor,start,session,capture,localize,verify,action,click,hover,type,key,wait,shell,launch,validate,export,step,close}
     vms                 List configured VMs and Proxmox power state
+    doctor              Check author dashboard readiness
     start               Create an authoring session
     session             Show authoring session state
     capture             Capture the current VNC screen

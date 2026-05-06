@@ -96,12 +96,26 @@ def _write_yaml_output(data: dict, output: str | None) -> int:
     return _print({"ok": True, "output": str(path), "bytes": len(yaml_text.encode("utf-8"))})
 
 
+def _doctor(base_url: str) -> int:
+    checks = []
+    vms_payload = _request_json(base_url, "GET", "/api/author/vms")
+    checks.append({"name": "dashboard_reachable", "ok": "error" not in vms_payload, "detail": vms_payload.get("error")})
+    configured = bool(vms_payload.get("configured"))
+    checks.append({"name": "authoring_configured", "ok": configured, "detail": None if configured else "start live with --config"})
+    vms = vms_payload.get("vms") if isinstance(vms_payload.get("vms"), list) else []
+    checks.append({"name": "vms_listed", "ok": bool(vms), "detail": f"{len(vms)} VM(s)"})
+    running = [vm.get("name") for vm in vms if vm.get("running")]
+    checks.append({"name": "running_vm_available", "ok": bool(running), "detail": running[0] if running else "no running VMs"})
+    return _print({"ok": all(check["ok"] for check in checks), "checks": checks})
+
+
 def cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mosdat author", description="Agent client for the live authoring API")
     parser.add_argument("--url", default="http://127.0.0.1:8080", help="Live dashboard URL")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("vms", help="List configured VMs and Proxmox power state")
+    sub.add_parser("doctor", help="Check author dashboard readiness")
 
     start = sub.add_parser("start", help="Create an authoring session")
     start.add_argument("--vm", required=True)
@@ -184,6 +198,8 @@ def cli(argv: list[str] | None = None) -> int:
 
     if args.command == "vms":
         return _print(_request_json(base_url, "GET", "/api/author/vms"))
+    if args.command == "doctor":
+        return _doctor(base_url)
     if args.command == "start":
         payload = {"vm": args.vm, "model": args.model, "verify_model": args.verify_model}
         return _print(_request_json(base_url, "POST", "/api/author/session", {k: v for k, v in payload.items() if v}))

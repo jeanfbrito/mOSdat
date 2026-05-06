@@ -28,6 +28,49 @@ def test_author_cli_start_posts_session(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["session_id"] == "session-1"
 
 
+def test_author_cli_doctor_reports_readiness(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        return {
+            "configured": True,
+            "vms": [
+                {"name": "ubuntu2404", "running": True},
+                {"name": "windows11", "running": False},
+            ],
+        }
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["doctor"])
+
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert [check["name"] for check in payload["checks"]] == [
+        "dashboard_reachable",
+        "authoring_configured",
+        "vms_listed",
+        "running_vm_available",
+    ]
+    assert calls == [("http://127.0.0.1:8080", "GET", "/api/author/vms", None, None)]
+
+
+def test_author_cli_doctor_returns_nonzero_when_not_configured(monkeypatch, capsys):
+    def fake_request(base_url, method, path, payload=None, query=None):
+        return {"configured": False, "vms": []}
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["doctor"])
+
+    assert status == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["checks"][1]["detail"] == "start live with --config"
+
+
 def test_author_cli_action_merges_payload(monkeypatch, capsys):
     calls = []
 
