@@ -614,6 +614,8 @@ pre{white-space:pre-wrap;background:#070b11;border:1px solid var(--border);borde
   <section class="panel"><div class="panel-head"><strong>Output</strong><button onclick="authorExport()">Export YAML</button></div><div class="panel-body">
     <div class="small">VLM result</div><pre id="author-result">{}</pre>
     <div class="small">Draft YAML</div><pre id="author-draft">steps: []</pre>
+    <div class="small">Draft steps JSON editor</div><textarea id="author-steps-json" placeholder='[{"key":"escape"}]'></textarea>
+    <div class="row"><button onclick="authorLoadStepsEditor()">Load steps</button><button onclick="authorReplaceSteps()">Replace steps</button><button onclick="authorAppendStep()">Append step</button></div>
   </div></section>
 </main>
 <script>
@@ -622,7 +624,7 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 async function postJson(url,payload){const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok||data.error)throw new Error(data.error||res.statusText);return data}
 function authorSetStatus(text){document.getElementById('author-status').textContent=text}
 function authorShow(obj){document.getElementById('author-result').textContent=JSON.stringify(obj,null,2)}
-function authorDraft(steps){document.getElementById('author-draft').textContent='steps:\n'+(steps||[]).map(s=>'  - '+JSON.stringify(s)).join('\n')}
+function authorDraft(steps){const safe=steps||[];document.getElementById('author-draft').textContent='steps:\n'+safe.map(s=>'  - '+JSON.stringify(s)).join('\n');const editor=document.getElementById('author-steps-json');if(editor&&!editor.value.trim())editor.value=JSON.stringify(safe,null,2)}
 function authorVmIcon(vm){if(vm.status==='running')return '●';if(vm.status==='stopped')return '○';return '?'}
 function authorUpdateVmStatus(){const name=document.getElementById('author-vm').value;const vm=authorVms.find(v=>v.name===name);const pill=document.getElementById('author-vm-status');if(!vm){pill.textContent='unknown';pill.className='status unknown';return}pill.textContent=`${authorVmIcon(vm)} ${vm.status} / ${vm.desktop} / vmid ${vm.vmid}`;pill.className=`status ${vm.status==='running'?'running':vm.status==='stopped'?'stopped':'unknown'}`}
 async function authorLoadVms(){try{const data=await (await fetch('/api/author/vms',{cache:'no-store'})).json();authorVms=data.vms||[];const sel=document.getElementById('author-vm');if(!data.configured){sel.innerHTML='<option value="">start live with --config</option>';authorSetStatus('authoring requires --config');authorUpdateVmStatus();return}sel.innerHTML=authorVms.length?authorVms.map(vm=>`<option value="${esc(vm.name)}">${authorVmIcon(vm)} ${esc(vm.name)}</option>`).join(''):'<option value="">no VMs configured</option>';authorUpdateVmStatus()}catch(e){authorSetStatus(e.message)}}
@@ -643,6 +645,9 @@ async function authorShell(){try{const session=await authorEnsureSession();const
 async function authorLaunch(){try{const session=await authorEnsureSession();const cmd=document.getElementById('author-launch').value;if(!cmd)throw new Error('launch command required');const wait=Number(document.getElementById('author-launch-wait').value||0);const data=await postJson('/api/author/action',{session_id:session,action:'launch',confirm:true,cmd,wait});await authorAfterAction(data)}catch(e){authorSetStatus(e.message)}}
 async function authorValidate(){try{const session=await authorEnsureSession();authorShow(await postJson('/api/author/validate',{session_id:session}))}catch(e){authorSetStatus(e.message)}}
 async function authorClose(){try{if(!authorSession)throw new Error('no session to close');const closed=authorSession;authorShow(await postJson('/api/author/close',{session_id:authorSession}));authorSession=null;authorTarget=null;authorSetStatus(`closed ${closed}`)}catch(e){authorSetStatus(e.message)}}
+async function authorLoadStepsEditor(){try{const session=await authorEnsureSession();const data=await (await fetch(`/api/author/session?session=${encodeURIComponent(session)}`)).json();if(data.error)throw new Error(data.error);document.getElementById('author-steps-json').value=JSON.stringify(data.draft_steps||[],null,2);authorShow(data)}catch(e){authorSetStatus(e.message)}}
+async function authorReplaceSteps(){try{const session=await authorEnsureSession();const steps=JSON.parse(document.getElementById('author-steps-json').value||'[]');if(!Array.isArray(steps))throw new Error('steps editor must contain a JSON array');const data=await postJson('/api/author/step',{session_id:session,steps});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
+async function authorAppendStep(){try{const session=await authorEnsureSession();const parsed=JSON.parse(document.getElementById('author-steps-json').value||'{}');const step=Array.isArray(parsed)?parsed[0]:parsed;if(!step||Array.isArray(step)||typeof step!=='object')throw new Error('append requires a JSON object or non-empty array');const data=await postJson('/api/author/step',{session_id:session,step});authorDraft(data.draft_steps);authorShow(data)}catch(e){authorSetStatus(e.message)}}
 async function authorExport(){try{const session=await authorEnsureSession();const res=await fetch(`/api/author/export?session=${encodeURIComponent(session)}`);const text=await res.text();document.getElementById('author-draft').textContent=text}catch(e){authorSetStatus(e.message)}}
 authorLoadVms();
 </script>

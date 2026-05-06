@@ -100,7 +100,7 @@ mOSdat uses Proxmox to orchestrate VMs with actual NVIDIA GPUs passed through vi
 
 **Live Triage Dashboard** — Watch current and historical functional runs, stale/dead runs, failures, screenshots, and step timelines from a LAN web UI
 
-**Author Workbench + Agent API** — Create reusable VLM test flows from a browser or via `mosdat author`, including manual coordinate picking, hover, left/right click, type, key, wait, shell, launch, validation, and YAML export
+**Author Workbench + Agent API** — Create reusable VLM test flows from a browser or via `mosdat author`, including manual coordinate picking, hover, left/right click, type, key, wait, shell, launch, draft-step JSON editing, validation, and YAML export
 
 **Reproducible** — Same VM snapshot, same test sequence, consistent results
 

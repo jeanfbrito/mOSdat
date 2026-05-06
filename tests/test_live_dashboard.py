@@ -349,6 +349,14 @@ class TestHTTPHandler:
             assert "authorClose" in body
             assert "authorPickTarget" in body
             assert "click screenshot to set target" in body
+            assert "Draft steps JSON editor" in body
+            assert "author-steps-json" in body
+            assert "Load steps" in body
+            assert "authorLoadStepsEditor" in body
+            assert "Replace steps" in body
+            assert "authorReplaceSteps" in body
+            assert "Append step" in body
+            assert "authorAppendStep" in body
             assert "Left click" in body
             assert "Right click" in body
             assert "button,confirm:true" in body

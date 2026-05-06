@@ -58,6 +58,7 @@ Current capabilities:
 - hover, left click, right click, type, key, wait, shell, and launch actions
 - manual screenshot coordinate picking by clicking the captured image
 - JSON step append or full draft-step replacement through the agent CLI/API
+- browser draft steps JSON editor with load, replace, and append controls
 - validation and session close from the browser workbench and agent CLI/API
 - automatic capture after actions
 - draft YAML preview and export
