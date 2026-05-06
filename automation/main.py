@@ -684,6 +684,7 @@ def main() -> int:
     author_session.add_argument("--session", required=True)
     author_capture = author_sub.add_parser("capture", help="Capture the current VNC screen")
     author_capture.add_argument("--session", required=True)
+    author_capture.add_argument("--output", help="Write captured BMP image bytes to path")
     author_localize = author_sub.add_parser("localize", help="Find a prompt on the current screen")
     author_localize.add_argument("--session", required=True)
     author_localize.add_argument("--prompt", required=True)
@@ -778,6 +779,8 @@ def main() -> int:
                 argv += ["--verify-model", args.verify_model]
         elif args.author_command in {"session", "capture"}:
             argv += ["--session", args.session]
+            if args.author_command == "capture" and args.output:
+                argv += ["--output", args.output]
         elif args.author_command == "localize":
             argv += ["--session", args.session, "--prompt", args.prompt]
         elif args.author_command == "verify":

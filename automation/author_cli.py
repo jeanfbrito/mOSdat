@@ -96,6 +96,23 @@ def _write_yaml_output(data: dict, output: str | None) -> int:
     return _print({"ok": True, "output": str(path), "bytes": len(yaml_text.encode("utf-8"))})
 
 
+def _write_capture_output(data: dict, output: str | None) -> int:
+    if data.get("error") or output is None:
+        return _print(data)
+    result = data.get("result") if isinstance(data.get("result"), dict) else data
+    image_b64 = result.get("image") if isinstance(result, dict) else None
+    if not image_b64:
+        return _print({"ok": False, "error": "capture response did not include image"})
+    import base64
+
+    raw = base64.b64decode(str(image_b64))
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    meta = {k: v for k, v in result.items() if k != "image"}
+    return _print({"ok": True, "output": str(path), "bytes": len(raw), **meta})
+
+
 def _doctor(base_url: str) -> int:
     checks = []
     vms_payload = _request_json(base_url, "GET", "/api/author/vms")
@@ -127,6 +144,7 @@ def cli(argv: list[str] | None = None) -> int:
 
     capture = sub.add_parser("capture", help="Capture the current VNC screen")
     capture.add_argument("--session", required=True)
+    capture.add_argument("--output", help="Write captured BMP image bytes to path")
 
     localize = sub.add_parser("localize", help="Find a prompt on the current screen")
     localize.add_argument("--session", required=True)
@@ -206,7 +224,7 @@ def cli(argv: list[str] | None = None) -> int:
     if args.command == "session":
         return _print(_request_json(base_url, "GET", "/api/author/session", query={"session": args.session}))
     if args.command == "capture":
-        return _print(_request_json(base_url, "POST", "/api/author/capture", {"session_id": args.session}))
+        return _write_capture_output(_request_json(base_url, "POST", "/api/author/capture", {"session_id": args.session}), args.output)
     if args.command == "localize":
         return _print(_request_json(base_url, "POST", "/api/author/vlm/localize", {"session_id": args.session, "prompt": args.prompt}))
     if args.command == "verify":

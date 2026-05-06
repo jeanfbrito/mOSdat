@@ -131,7 +131,7 @@ Use the agent authoring API through the CLI:
 mosdat author --url http://127.0.0.1:8082 vms
 mosdat author --url http://127.0.0.1:8082 doctor
 mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
-mosdat author --url http://127.0.0.1:8082 capture --session <session-id>
+mosdat author --url http://127.0.0.1:8082 capture --session <session-id> --output /tmp/screen.bmp
 mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"
 mosdat author --url http://127.0.0.1:8082 click --session <session-id> --x 5 --y 6 --prompt "help tooltip"
 mosdat author --url http://127.0.0.1:8082 type --session <session-id> --text "hello"

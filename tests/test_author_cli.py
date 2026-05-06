@@ -123,6 +123,39 @@ def test_author_cli_click_posts_typed_action(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["action"] == "click"
 
 
+def test_author_cli_capture_writes_bmp_file(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        return {
+            "ok": True,
+            "result": {
+                "image": "Qk1Q",
+                "width": 20,
+                "height": 10,
+                "content_type": "image/bmp",
+            },
+        }
+
+    output = tmp_path / "captures" / "screen.bmp"
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["capture", "--session", "session-1", "--output", str(output)])
+
+    assert status == 0
+    assert output.read_bytes() == b"BMP"
+    assert calls == [("http://127.0.0.1:8080", "POST", "/api/author/capture", {"session_id": "session-1"}, None)]
+    assert json.loads(capsys.readouterr().out) == {
+        "ok": True,
+        "output": str(output),
+        "bytes": 3,
+        "width": 20,
+        "height": 10,
+        "content_type": "image/bmp",
+    }
+
+
 def test_author_cli_type_posts_typed_action(monkeypatch, capsys):
     calls = []
 
