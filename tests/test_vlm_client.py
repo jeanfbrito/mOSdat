@@ -373,6 +373,30 @@ def _ensure_requests_stub():
     return _req_mod, _req_mod.exceptions.ConnectionError, _req_mod.exceptions.Timeout
 
 
+
+
+class TestDescribeElement:
+    def test_prompt_forbids_transient_time_and_neighbor_anchors(self):
+        c, oai = _make_client()
+        oai.chat.completions.create.return_value = _make_response('"gray dropdown button"')
+
+        result = c.describe_element(_fake_image(size=(300, 200)), 150, 100)
+
+        assert result == "gray dropdown button"
+        request = oai.chat.completions.create.call_args.kwargs
+        assert request["model"] == "qwen3-vl"
+        text_parts = [
+            part["text"]
+            for message in request["messages"]
+            for part in message["content"]
+            if part["type"] == "text"
+        ]
+        prompt = "\n".join(text_parts)
+        assert "reusable UI target prompt" in prompt
+        assert "Do not mention time, date, timestamps" in prompt
+        assert "temporary text" in prompt
+        assert "position relative to transient neighbors" in prompt
+        assert "role, visible static label text, icon shape, color, and container" in prompt
 class TestListModels:
     def test_returns_all_model_ids(self):
         """list_models() returns all model ids from /v1/models."""

@@ -606,10 +606,13 @@ class VLMClient:
         crop = screenshot.crop(box)
         b64 = _encode_image(crop)
         prompt = (
-            "Describe the GUI element at the center of this image in one phrase "
-            "suitable for a click target. Be specific about visible attributes "
-            "(text, icon, position relative to neighbors). 8-15 words. "
-            "Output only the description."
+            "You are writing a reusable UI target prompt for automation. "
+            "Describe only the stable element at the center of this image. "
+            "Use durable visual semantics: role, visible static label text, icon shape, color, and container. "
+            "Do not mention time, date, timestamps, message order, temporary text, usernames, file names, "
+            "or position relative to transient neighbors. "
+            "If surrounding context is needed, use stable container or section names only. "
+            "Return 6-14 words. Output only the reusable target prompt."
         )
         resp = self._call_with_failover(
             "chat.completions.create",
