@@ -90,6 +90,7 @@ python -m automation.main author --url http://127.0.0.1:8082 doctor
 python -m automation.main author --url http://127.0.0.1:8082 start --vm ubuntu2404
 python -m automation.main author --url http://127.0.0.1:8082 capture --session SESSION --output /tmp/screen.bmp
 python -m automation.main author --url http://127.0.0.1:8082 localize --session SESSION --prompt "help tooltip"
+python -m automation.main author --url http://127.0.0.1:8082 describe --session SESSION --x 120 --y 240
 python -m automation.main author --url http://127.0.0.1:8082 click --session SESSION --x 5 --y 6 --prompt "help tooltip"
 python -m automation.main author --url http://127.0.0.1:8082 prompt-click --session SESSION --prompt "help tooltip"
 python -m automation.main author --url http://127.0.0.1:8082 prompt-hover --session SESSION --prompt "help tooltip"

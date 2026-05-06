@@ -688,6 +688,10 @@ def main() -> int:
     author_localize = author_sub.add_parser("localize", help="Find a prompt on the current screen")
     author_localize.add_argument("--session", required=True)
     author_localize.add_argument("--prompt", required=True)
+    author_describe = author_sub.add_parser("describe", help="Describe a clicked screenshot point as a localize prompt")
+    author_describe.add_argument("--session", required=True)
+    author_describe.add_argument("--x", required=True, type=int)
+    author_describe.add_argument("--y", required=True, type=int)
     author_verify = author_sub.add_parser("verify", help="Ask the VLM a yes/no screen question")
     author_verify.add_argument("--session", required=True)
     author_verify.add_argument("--question", required=True)
@@ -795,6 +799,8 @@ def main() -> int:
                 argv += ["--output", args.output]
         elif args.author_command == "localize":
             argv += ["--session", args.session, "--prompt", args.prompt]
+        elif args.author_command == "describe":
+            argv += ["--session", args.session, "--x", str(args.x), "--y", str(args.y)]
         elif args.author_command == "verify":
             argv += ["--session", args.session, "--question", args.question]
         elif args.author_command == "action":

@@ -123,6 +123,22 @@ def test_author_cli_click_posts_typed_action(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["action"] == "click"
 
 
+def test_author_cli_describe_posts_clicked_coordinates(monkeypatch, capsys):
+    calls = []
+
+    def fake_request(base_url, method, path, payload=None, query=None):
+        calls.append((base_url, method, path, payload, query))
+        return {"prompt": "send button", "x": payload["x"], "y": payload["y"], "source": "vlm_describe"}
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["describe", "--session", "session-1", "--x", "12", "--y", "34"])
+
+    assert status == 0
+    assert calls == [("http://127.0.0.1:8080", "POST", "/api/author/vlm/describe", {"session_id": "session-1", "x": 12, "y": 34}, None)]
+    assert json.loads(capsys.readouterr().out)["prompt"] == "send button"
+
+
 def test_author_cli_prompt_click_localizes_then_clicks(monkeypatch, capsys):
     calls = []
 

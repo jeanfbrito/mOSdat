@@ -133,6 +133,7 @@ mosdat author --url http://127.0.0.1:8082 doctor
 mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
 mosdat author --url http://127.0.0.1:8082 capture --session <session-id> --output /tmp/screen.bmp
 mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"
+mosdat author --url http://127.0.0.1:8082 describe --session <session-id> --x 120 --y 240
 mosdat author --url http://127.0.0.1:8082 click --session <session-id> --x 5 --y 6 --prompt "help tooltip"
 mosdat author --url http://127.0.0.1:8082 prompt-click --session <session-id> --prompt "help tooltip"
 mosdat author --url http://127.0.0.1:8082 prompt-hover --session <session-id> --prompt "help tooltip"

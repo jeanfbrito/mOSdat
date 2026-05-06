@@ -80,6 +80,9 @@ class FakeVLM:
     def verify(self, image, question):
         return "ready" in question
 
+    def describe_element(self, image, x, y):
+        return f"described target at {x},{y}"
+
 
 class FakeInjector:
     def __init__(self):
@@ -349,6 +352,9 @@ class TestHTTPHandler:
             assert "authorClose" in body
             assert "authorPickTarget" in body
             assert "click screenshot to set target" in body
+            assert "Describe clicked target" in body
+            assert "authorDescribeTarget" in body
+            assert "/api/author/vlm/describe" in body
             assert "Draft steps JSON editor" in body
             assert "author-steps-json" in body
             assert "Load steps" in body
@@ -520,6 +526,21 @@ class TestAuthorAPI:
             )
             assert status == 200
             assert (loc["x"], loc["y"]) == (5, 6)
+
+            status, described = self._post(
+                port,
+                "/api/author/vlm/describe",
+                {"session_id": "session-1", "x": 7, "y": 8},
+            )
+            assert status == 200
+            assert described == {
+                "prompt": "described target at 7,8",
+                "x": 7,
+                "y": 8,
+                "width": 20,
+                "height": 10,
+                "source": "vlm_describe",
+            }
 
             status, verify = self._post(
                 port,

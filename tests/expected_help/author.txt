@@ -1,15 +1,17 @@
 usage: mosdat author [-h] [--url URL]
-                     {vms,doctor,start,session,capture,localize,verify,action,click,prompt-click,prompt-hover,prompt-type,hover,type,key,wait,shell,launch,validate,export,step,close}
+                     {vms,doctor,start,session,capture,localize,describe,verify,action,click,prompt-click,prompt-hover,prompt-type,hover,type,key,wait,shell,launch,validate,export,step,close}
                      ...
 
 positional arguments:
-  {vms,doctor,start,session,capture,localize,verify,action,click,prompt-click,prompt-hover,prompt-type,hover,type,key,wait,shell,launch,validate,export,step,close}
+  {vms,doctor,start,session,capture,localize,describe,verify,action,click,prompt-click,prompt-hover,prompt-type,hover,type,key,wait,shell,launch,validate,export,step,close}
     vms                 List configured VMs and Proxmox power state
     doctor              Check author dashboard readiness
     start               Create an authoring session
     session             Show authoring session state
     capture             Capture the current VNC screen
     localize            Find a prompt on the current screen
+    describe            Describe a clicked screenshot point as a localize
+                        prompt
     verify              Ask the VLM a yes/no screen question
     action              Run a confirmed authoring action
     click               Run a confirmed click action

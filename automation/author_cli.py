@@ -164,6 +164,11 @@ def cli(argv: list[str] | None = None) -> int:
     localize.add_argument("--session", required=True)
     localize.add_argument("--prompt", required=True)
 
+    describe = sub.add_parser("describe", help="Describe a clicked screenshot point as a localize prompt")
+    describe.add_argument("--session", required=True)
+    describe.add_argument("--x", required=True, type=int)
+    describe.add_argument("--y", required=True, type=int)
+
     verify = sub.add_parser("verify", help="Ask the VLM a yes/no screen question")
     verify.add_argument("--session", required=True)
     verify.add_argument("--question", required=True)
@@ -256,6 +261,8 @@ def cli(argv: list[str] | None = None) -> int:
         return _write_capture_output(_request_json(base_url, "POST", "/api/author/capture", {"session_id": args.session}), args.output)
     if args.command == "localize":
         return _print(_request_json(base_url, "POST", "/api/author/vlm/localize", {"session_id": args.session, "prompt": args.prompt}))
+    if args.command == "describe":
+        return _print(_request_json(base_url, "POST", "/api/author/vlm/describe", {"session_id": args.session, "x": args.x, "y": args.y}))
     if args.command == "verify":
         return _print(_request_json(base_url, "POST", "/api/author/vlm/verify", {"session_id": args.session, "question": args.question}))
     if args.command == "action":

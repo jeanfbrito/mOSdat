@@ -96,6 +96,20 @@ class AuthorSession:
         self.last_localize = result
         return result
 
+    def describe_target(self, x: int, y: int) -> dict:
+        image, size = self.require_frame()
+        prompt = str(self.vlm.describe_element(image, int(x), int(y))).strip()
+        result = {
+            "prompt": prompt,
+            "x": int(x),
+            "y": int(y),
+            "width": size[0],
+            "height": size[1],
+            "source": "vlm_describe",
+        }
+        self.last_localize = result
+        return result
+
     def verify(self, question: str) -> dict:
         image, _ = self.require_frame()
         started = time.perf_counter()
