@@ -81,17 +81,22 @@ def _action_payload(session_id: str, action: str, **fields: object) -> dict:
 
 
 def _post_action(base_url: str, session_id: str, action: str, **fields: object) -> int:
-    return _print(_request_json(base_url, "POST", "/api/author/action", _action_payload(session_id, action, **fields)))
+    return _print(_request_action(base_url, session_id, action, **fields))
 
 
+def _request_action(base_url: str, session_id: str, action: str, **fields: object) -> dict:
+    return _request_json(base_url, "POST", "/api/author/action", _action_payload(session_id, action, **fields))
 
 def _prompt_action(base_url: str, session_id: str, prompt: str, action: str, **fields: object) -> int:
+    return _print(_prompt_action_result(base_url, session_id, prompt, action, **fields))
+
+def _prompt_action_result(base_url: str, session_id: str, prompt: str, action: str, **fields: object) -> dict:
     target = _request_json(base_url, "POST", "/api/author/vlm/localize", {"session_id": session_id, "prompt": prompt})
     if target.get("error") or target.get("ok") is False:
-        return _print(target)
+        return target
     if not all(key in target for key in ("x", "y")):
-        return _print({"ok": False, "error": "localize response did not include x/y", "localize": target})
-    return _post_action(base_url, session_id, action, x=int(target["x"]), y=int(target["y"]), prompt=prompt, **fields)
+        return {"ok": False, "error": "localize response did not include x/y", "localize": target}
+    return _request_action(base_url, session_id, action, x=int(target["x"]), y=int(target["y"]), prompt=prompt, **fields)
 
 def _write_yaml_output(data: dict, output: str | None) -> int:
     if data.get("error"):
@@ -184,6 +189,12 @@ def cli(argv: list[str] | None = None) -> int:
     prompt_hover = sub.add_parser("prompt-hover", help="Localize a prompt and hover its center")
     prompt_hover.add_argument("--session", required=True)
     prompt_hover.add_argument("--prompt", required=True)
+
+    prompt_type = sub.add_parser("prompt-type", help="Localize a prompt, click it, then type text")
+    prompt_type.add_argument("--session", required=True)
+    prompt_type.add_argument("--prompt", required=True)
+    prompt_type.add_argument("--text", required=True)
+    prompt_type.add_argument("--button", choices=["left", "right"], default="left")
     hover = sub.add_parser("hover", help="Run a confirmed hover action")
     hover.add_argument("--session", required=True)
     hover.add_argument("--x", required=True, type=int)
@@ -257,6 +268,11 @@ def cli(argv: list[str] | None = None) -> int:
         return _prompt_action(base_url, args.session, args.prompt, "click", button=args.button)
     if args.command == "prompt-hover":
         return _prompt_action(base_url, args.session, args.prompt, "hover")
+    if args.command == "prompt-type":
+        click_result = _prompt_action_result(base_url, args.session, args.prompt, "click", button=args.button)
+        if click_result.get("error") or click_result.get("ok") is False:
+            return _print(click_result)
+        return _post_action(base_url, args.session, "type", text=args.text)
     if args.command == "hover":
         return _post_action(base_url, args.session, "hover", x=args.x, y=args.y, prompt=args.prompt)
     if args.command == "type":

@@ -136,6 +136,7 @@ mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prom
 mosdat author --url http://127.0.0.1:8082 click --session <session-id> --x 5 --y 6 --prompt "help tooltip"
 mosdat author --url http://127.0.0.1:8082 prompt-click --session <session-id> --prompt "help tooltip"
 mosdat author --url http://127.0.0.1:8082 prompt-hover --session <session-id> --prompt "help tooltip"
+mosdat author --url http://127.0.0.1:8082 prompt-type --session <session-id> --prompt "message box" --text "hello"
 mosdat author --url http://127.0.0.1:8082 type --session <session-id> --text "hello"
 mosdat author --url http://127.0.0.1:8082 key --session <session-id> --key enter
 mosdat author --url http://127.0.0.1:8082 validate --session <session-id>

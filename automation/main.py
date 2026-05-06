@@ -709,6 +709,11 @@ def main() -> int:
     author_prompt_hover = author_sub.add_parser("prompt-hover", help="Localize a prompt and hover its center")
     author_prompt_hover.add_argument("--session", required=True)
     author_prompt_hover.add_argument("--prompt", required=True)
+    author_prompt_type = author_sub.add_parser("prompt-type", help="Localize a prompt, click it, then type text")
+    author_prompt_type.add_argument("--session", required=True)
+    author_prompt_type.add_argument("--prompt", required=True)
+    author_prompt_type.add_argument("--text", required=True)
+    author_prompt_type.add_argument("--button", choices=["left", "right"], default="left")
     author_hover = author_sub.add_parser("hover", help="Run a confirmed hover action")
     author_hover.add_argument("--session", required=True)
     author_hover.add_argument("--x", required=True, type=int)
@@ -802,6 +807,8 @@ def main() -> int:
             argv += ["--session", args.session, "--prompt", args.prompt, "--button", args.button]
         elif args.author_command == "prompt-hover":
             argv += ["--session", args.session, "--prompt", args.prompt]
+        elif args.author_command == "prompt-type":
+            argv += ["--session", args.session, "--prompt", args.prompt, "--text", args.text, "--button", args.button]
         elif args.author_command == "hover":
             argv += ["--session", args.session, "--x", str(args.x), "--y", str(args.y)]
             if args.prompt is not None:
