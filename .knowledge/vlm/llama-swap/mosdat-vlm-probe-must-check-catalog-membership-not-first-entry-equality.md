@@ -11,6 +11,8 @@ kind: lesson
 scope: project-shared
 category: vlm/llama-swap
 confidence: high
+accessed: 1
+last_accessed: "2026-05-03"
 ---
 
 ## Lesson (2026-05-02)

@@ -12,6 +12,8 @@ kind: lesson
 scope: project-shared
 category: proxmox/vga
 confidence: high
+accessed: 1
+last_accessed: "2026-05-03"
 ---
 
 ## Lesson (2026-05-01 ubuntu2204, 2026-05-02 manjaro/fedora42)

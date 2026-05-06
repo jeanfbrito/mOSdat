@@ -13,6 +13,8 @@ kind: war-story
 scope: project-shared
 category: testing/recovery
 confidence: high
+accessed: 2
+last_accessed: "2026-05-03"
 ---
 
 ## War story
