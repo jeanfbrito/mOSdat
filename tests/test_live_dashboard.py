@@ -141,6 +141,7 @@ class FakeAuthorManager(AuthorManager):
                     "running": False,
                 },
             ],
+            "vlm": {"model": "localizer", "verify_model": "qwen3-vl", "verify_model_configured": True},
         }
 
 
@@ -492,6 +493,7 @@ class TestAuthorAPI:
             assert resp.status == 200
             assert vms["vms"][0]["name"] == "ubuntu2404"
             assert vms["vms"][0]["status"] == "running"
+            assert vms["vlm"] == {"model": "localizer", "verify_model": "qwen3-vl", "verify_model_configured": True}
 
             status, data = self._post(port, "/api/author/session", {"vm": "ubuntu2404"})
             assert status == 200

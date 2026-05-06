@@ -130,6 +130,7 @@ Use the agent authoring API through the CLI:
 ```bash
 mosdat author --url http://127.0.0.1:8082 vms
 mosdat author --url http://127.0.0.1:8082 doctor
+# doctor includes a non-blocking verify_model_configured warning when yes/no checks reuse the localize model
 mosdat author --url http://127.0.0.1:8082 start --vm ubuntu2404
 mosdat author --url http://127.0.0.1:8082 capture --session <session-id> --output /tmp/screen.bmp
 mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prompt "help tooltip"

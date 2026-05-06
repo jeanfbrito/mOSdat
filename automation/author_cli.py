@@ -137,7 +137,16 @@ def _doctor(base_url: str) -> int:
     checks.append({"name": "vms_listed", "ok": bool(vms), "detail": f"{len(vms)} VM(s)"})
     running = [vm.get("name") for vm in vms if vm.get("running")]
     checks.append({"name": "running_vm_available", "ok": bool(running), "detail": running[0] if running else "no running VMs"})
-    return _print({"ok": all(check["ok"] for check in checks), "checks": checks})
+    vlm = vms_payload.get("vlm") if isinstance(vms_payload.get("vlm"), dict) else {}
+    verify_configured = bool(vlm.get("verify_model_configured"))
+    checks.append({
+        "name": "verify_model_configured",
+        "ok": verify_configured,
+        "required": False,
+        "detail": None if verify_configured else "set VLM_VERIFY_MODEL or [vlm].verify_model for yes/no checks",
+    })
+    ok = all(check["ok"] for check in checks if check.get("required", True))
+    return _print({"ok": ok, "checks": checks})
 
 
 def cli(argv: list[str] | None = None) -> int:

@@ -252,6 +252,11 @@ class AuthorManager:
         return {
             "configured": True,
             "vms": vms,
+            "vlm": {
+                "model": config.vlm.model,
+                "verify_model": config.vlm.verify_model or None,
+                "verify_model_configured": bool(config.vlm.verify_model),
+            },
         }
 
     def describe(self, session: AuthorSession) -> dict:

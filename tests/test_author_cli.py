@@ -39,6 +39,7 @@ def test_author_cli_doctor_reports_readiness(monkeypatch, capsys):
                 {"name": "ubuntu2404", "running": True},
                 {"name": "windows11", "running": False},
             ],
+            "vlm": {"model": "localizer", "verify_model": "qwen3-vl", "verify_model_configured": True},
         }
 
     monkeypatch.setattr(author_cli, "_request_json", fake_request)
@@ -53,7 +54,14 @@ def test_author_cli_doctor_reports_readiness(monkeypatch, capsys):
         "authoring_configured",
         "vms_listed",
         "running_vm_available",
+        "verify_model_configured",
     ]
+    assert payload["checks"][-1] == {
+        "name": "verify_model_configured",
+        "ok": True,
+        "required": False,
+        "detail": None,
+    }
     assert calls == [("http://127.0.0.1:8080", "GET", "/api/author/vms", None, None)]
 
 
@@ -70,6 +78,29 @@ def test_author_cli_doctor_returns_nonzero_when_not_configured(monkeypatch, caps
     assert payload["ok"] is False
     assert payload["checks"][1]["detail"] == "start live with --config"
 
+
+
+def test_author_cli_doctor_warns_when_verify_model_missing(monkeypatch, capsys):
+    def fake_request(base_url, method, path, payload=None, query=None):
+        return {
+            "configured": True,
+            "vms": [{"name": "ubuntu2404", "running": True}],
+            "vlm": {"model": "localizer", "verify_model": None, "verify_model_configured": False},
+        }
+
+    monkeypatch.setattr(author_cli, "_request_json", fake_request)
+
+    status = author_cli.cli(["doctor"])
+
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["checks"][-1] == {
+        "name": "verify_model_configured",
+        "ok": False,
+        "required": False,
+        "detail": "set VLM_VERIFY_MODEL or [vlm].verify_model for yes/no checks",
+    }
 
 def test_author_cli_action_merges_payload(monkeypatch, capsys):
     calls = []

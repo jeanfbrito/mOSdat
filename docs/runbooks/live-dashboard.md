@@ -104,7 +104,7 @@ Raw HTTP endpoints:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /api/author/vms` | Configured VMs and Proxmox power state |
+| `GET /api/author/vms` | Configured VMs, Proxmox power state, and VLM verify-model readiness |
 | `POST /api/author/session` | Create a session |
 | `GET /api/author/session?session=...` | Session state, latest result, draft steps |
 | `POST /api/author/capture` | JSON VNC capture payload |
