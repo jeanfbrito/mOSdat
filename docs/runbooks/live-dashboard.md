@@ -89,6 +89,7 @@ mosdat author --url http://127.0.0.1:8082 type --session <session-id> --text "he
 mosdat author --url http://127.0.0.1:8082 key --session <session-id> --key enter
 mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
 mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
+mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow --output shared/scenarios/functional/tooltip-flow.yaml
 mosdat author --url http://127.0.0.1:8082 step --session <session-id> --json '{"key":"escape"}'
 mosdat author --url http://127.0.0.1:8082 close --session <session-id>
 ```

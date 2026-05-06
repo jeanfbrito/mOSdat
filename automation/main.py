@@ -727,6 +727,7 @@ def main() -> int:
     author_export = author_sub.add_parser("export", help="Export current draft scenario YAML")
     author_export.add_argument("--session", required=True)
     author_export.add_argument("--name", default="authored-scenario")
+    author_export.add_argument("--output", help="Write YAML to path instead of embedding it in JSON; use - for stdout JSON")
     author_step = author_sub.add_parser("step", help="Append or replace draft scenario steps")
     author_step.add_argument("--session", required=True)
     author_step_group = author_step.add_mutually_exclusive_group(required=True)
@@ -800,6 +801,8 @@ def main() -> int:
             argv += ["--session", args.session, "--cmd", args.cmd, "--wait", str(args.wait)]
         elif args.author_command in {"validate", "export"}:
             argv += ["--session", args.session, "--name", args.name]
+            if args.author_command == "export" and args.output:
+                argv += ["--output", args.output]
         elif args.author_command == "step":
             argv += ["--session", args.session]
             if args.step_json is not None:

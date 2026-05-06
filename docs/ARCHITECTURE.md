@@ -93,6 +93,7 @@ python -m automation.main author --url http://127.0.0.1:8082 type --session SESS
 python -m automation.main author --url http://127.0.0.1:8082 key --session SESSION --key enter
 python -m automation.main author --url http://127.0.0.1:8082 validate --session SESSION
 python -m automation.main author --url http://127.0.0.1:8082 export --session SESSION --name tooltip-flow
+python -m automation.main author --url http://127.0.0.1:8082 export --session SESSION --name tooltip-flow --output shared/scenarios/functional/tooltip-flow.yaml
 python -m automation.main author --url http://127.0.0.1:8082 step --session SESSION --json '{"key":"escape"}'
 python -m automation.main author --url http://127.0.0.1:8082 close --session SESSION
 ```

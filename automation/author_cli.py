@@ -6,6 +6,7 @@ import argparse
 import json
 from urllib.error import HTTPError
 from urllib.parse import urlencode
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 def _json_object_arg(value: str) -> dict:
@@ -83,6 +84,18 @@ def _post_action(base_url: str, session_id: str, action: str, **fields: object) 
     return _print(_request_json(base_url, "POST", "/api/author/action", _action_payload(session_id, action, **fields)))
 
 
+def _write_yaml_output(data: dict, output: str | None) -> int:
+    if data.get("error"):
+        return _print(data)
+    yaml_text = str(data.get("yaml", ""))
+    if output is None or output == "-":
+        return _print(data)
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml_text, encoding="utf-8")
+    return _print({"ok": True, "output": str(path), "bytes": len(yaml_text.encode("utf-8"))})
+
+
 def cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mosdat author", description="Agent client for the live authoring API")
     parser.add_argument("--url", default="http://127.0.0.1:8080", help="Live dashboard URL")
@@ -155,6 +168,7 @@ def cli(argv: list[str] | None = None) -> int:
     export = sub.add_parser("export", help="Export current draft scenario YAML")
     export.add_argument("--session", required=True)
     export.add_argument("--name", default="authored-scenario")
+    export.add_argument("--output", help="Write YAML to path instead of embedding it in JSON; use - for stdout JSON")
 
     step = sub.add_parser("step", help="Append or replace draft scenario steps")
     step.add_argument("--session", required=True)
@@ -202,7 +216,7 @@ def cli(argv: list[str] | None = None) -> int:
     if args.command == "validate":
         return _print(_request_json(base_url, "POST", "/api/author/validate", {"session_id": args.session, "name": args.name}))
     if args.command == "export":
-        return _print(_request_text(base_url, "/api/author/export", query={"session": args.session, "name": args.name}))
+        return _write_yaml_output(_request_text(base_url, "/api/author/export", query={"session": args.session, "name": args.name}), args.output)
     if args.command == "step":
         payload = {"session_id": args.session}
         if args.steps_json is not None:

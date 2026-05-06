@@ -136,6 +136,24 @@ def test_author_cli_export_prints_yaml_json(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["yaml"].startswith("name: demo")
 
 
+def test_author_cli_export_writes_yaml_file(monkeypatch, tmp_path, capsys):
+    calls = []
+
+    def fake_request(base_url, path, query=None):
+        calls.append((base_url, path, query))
+        return {"yaml": "name: demo\nsteps: []\n"}
+
+    output = tmp_path / "authored" / "demo.yaml"
+    monkeypatch.setattr(author_cli, "_request_text", fake_request)
+
+    status = author_cli.cli(["export", "--session", "session-1", "--name", "demo", "--output", str(output)])
+
+    assert status == 0
+    assert output.read_text(encoding="utf-8") == "name: demo\nsteps: []\n"
+    assert calls == [("http://127.0.0.1:8080", "/api/author/export", {"session": "session-1", "name": "demo"})]
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "output": str(output), "bytes": 21}
+
+
 def test_author_cli_step_appends_step(monkeypatch, capsys):
     calls = []
 
