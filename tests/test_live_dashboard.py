@@ -356,6 +356,17 @@ class TestHTTPHandler:
             assert "Describe clicked target" in body
             assert "authorDescribeTarget" in body
             assert "/api/author/vlm/describe" in body
+            assert "author-op" in body
+            assert "op-card" in body
+            assert "authorRun" in body
+            assert "authorSetBusy" in body
+            assert "Request sent. Waiting for response" in body
+            assert "waiting for dashboard response" in body
+            assert "button:disabled" in body
+            assert "data-op" in body
+            assert "Describing clicked target" in body
+            assert "Refreshing screen" in body
+            assert "Starting session" in body
             assert "Draft steps JSON editor" in body
             assert "author-steps-json" in body
             assert "Load steps" in body
