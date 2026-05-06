@@ -8,6 +8,25 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+def _json_object_arg(value: str) -> dict:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object")
+    return parsed
+
+
+def _json_array_arg(value: str) -> list:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, list):
+        raise argparse.ArgumentTypeError("expected a JSON array")
+    return parsed
+
 
 def _url(base_url: str, path: str, query: dict | None = None) -> str:
     url = base_url.rstrip("/") + path
@@ -83,7 +102,7 @@ def cli(argv: list[str] | None = None) -> int:
     action = sub.add_parser("action", help="Run a confirmed authoring action")
     action.add_argument("--session", required=True)
     action.add_argument("--kind", required=True, choices=["hover", "click", "type", "key", "shell", "wait", "launch"])
-    action.add_argument("--json", default="{}", help="Action payload JSON")
+    action.add_argument("--json", default={}, type=_json_object_arg, help="Action payload JSON object")
 
     validate = sub.add_parser("validate", help="Validate current draft scenario")
     validate.add_argument("--session", required=True)
@@ -92,6 +111,15 @@ def cli(argv: list[str] | None = None) -> int:
     export = sub.add_parser("export", help="Export current draft scenario YAML")
     export.add_argument("--session", required=True)
     export.add_argument("--name", default="authored-scenario")
+
+    step = sub.add_parser("step", help="Append or replace draft scenario steps")
+    step.add_argument("--session", required=True)
+    step_group = step.add_mutually_exclusive_group(required=True)
+    step_group.add_argument("--json", dest="step_json", type=_json_object_arg, help="Step JSON object to append")
+    step_group.add_argument("--steps-json", type=_json_array_arg, help="Full steps JSON array to replace draft")
+
+    close = sub.add_parser("close", help="Close an authoring session")
+    close.add_argument("--session", required=True)
 
     args = parser.parse_args(argv)
     base_url = args.url
@@ -110,13 +138,22 @@ def cli(argv: list[str] | None = None) -> int:
     if args.command == "verify":
         return _print(_request_json(base_url, "POST", "/api/author/vlm/verify", {"session_id": args.session, "question": args.question}))
     if args.command == "action":
-        payload = json.loads(args.json)
+        payload = dict(args.json)
         payload.update({"session_id": args.session, "action": args.kind, "confirm": True})
         return _print(_request_json(base_url, "POST", "/api/author/action", payload))
     if args.command == "validate":
         return _print(_request_json(base_url, "POST", "/api/author/validate", {"session_id": args.session, "name": args.name}))
     if args.command == "export":
         return _print(_request_text(base_url, "/api/author/export", query={"session": args.session, "name": args.name}))
+    if args.command == "step":
+        payload = {"session_id": args.session}
+        if args.steps_json is not None:
+            payload["steps"] = args.steps_json
+        else:
+            payload["step"] = args.step_json
+        return _print(_request_json(base_url, "POST", "/api/author/step", payload))
+    if args.command == "close":
+        return _print(_request_json(base_url, "POST", "/api/author/close", {"session_id": args.session}))
 
     parser.print_help()
     return 1

@@ -77,8 +77,10 @@ and the browser workbench. The intended flow is:
 3. `POST /api/author/capture` with `{"session_id": "..."}` to refresh VNC.
 4. `POST /api/author/vlm/localize` or `/api/author/vlm/verify` to inspect the screen.
 5. `POST /api/author/action` with `confirm: true` to run `hover`, `click`, `type`, `key`, `shell`, `wait`, or `launch`.
-6. `POST /api/author/validate` to check that the draft flow is runnable.
-7. `GET /api/author/export?session=...&name=...` to retrieve scenario YAML.
+6. `POST /api/author/step` to append one step or replace the draft `steps` array.
+7. `POST /api/author/validate` to check that the draft flow is runnable.
+8. `GET /api/author/export?session=...&name=...` to retrieve scenario YAML.
+9. `POST /api/author/close` to release the VNC session.
 
 Agents should prefer the CLI wrapper because it prints compact JSON:
 
@@ -89,6 +91,8 @@ python -m automation.main author --url http://127.0.0.1:8082 localize --session 
 python -m automation.main author --url http://127.0.0.1:8082 action --session SESSION --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
 python -m automation.main author --url http://127.0.0.1:8082 validate --session SESSION
 python -m automation.main author --url http://127.0.0.1:8082 export --session SESSION --name tooltip-flow
+python -m automation.main author --url http://127.0.0.1:8082 step --session SESSION --json '{"key":"escape"}'
+python -m automation.main author --url http://127.0.0.1:8082 close --session SESSION
 ```
 
 ### Functional Test Phase

@@ -135,6 +135,9 @@ mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prom
 mosdat author --url http://127.0.0.1:8082 action --session <session-id> --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
 mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
 mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
+mosdat author --url http://127.0.0.1:8082 step --session <session-id> --json '{"key":"escape"}'
+mosdat author --url http://127.0.0.1:8082 step --session <session-id> --steps-json '[{"key":"escape"},{"wait":1}]'
+mosdat author --url http://127.0.0.1:8082 close --session <session-id>
 ```
 
 Generate the static historical dashboard:

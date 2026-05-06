@@ -56,6 +56,8 @@ Current capabilities:
 - VLM localize with a precise X marker on the rendered image
 - VLM yes/no verify
 - hover, left click, right click, type, and key actions
+- JSON step append or full draft-step replacement through the agent CLI/API
+- session close through the agent CLI/API
 - automatic capture after actions
 - draft YAML preview and export
 
@@ -81,6 +83,8 @@ mosdat author --url http://127.0.0.1:8082 localize --session <session-id> --prom
 mosdat author --url http://127.0.0.1:8082 action --session <session-id> --kind hover --json '{"x":5,"y":6,"prompt":"help tooltip"}'
 mosdat author --url http://127.0.0.1:8082 validate --session <session-id>
 mosdat author --url http://127.0.0.1:8082 export --session <session-id> --name tooltip-flow
+mosdat author --url http://127.0.0.1:8082 step --session <session-id> --json '{"key":"escape"}'
+mosdat author --url http://127.0.0.1:8082 close --session <session-id>
 ```
 
 Raw HTTP endpoints:
@@ -97,6 +101,8 @@ Raw HTTP endpoints:
 | `POST /api/author/action` | Run confirmed action |
 | `POST /api/author/validate` | Validate draft YAML through scenario parser |
 | `GET /api/author/export?session=...&name=...` | Export scenario YAML |
+| `POST /api/author/step` | Append a single step or replace full draft steps |
+| `POST /api/author/close` | Close the VNC-backed authoring session |
 
 ## How It Works
 

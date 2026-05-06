@@ -700,6 +700,13 @@ def main() -> int:
     author_export = author_sub.add_parser("export", help="Export current draft scenario YAML")
     author_export.add_argument("--session", required=True)
     author_export.add_argument("--name", default="authored-scenario")
+    author_step = author_sub.add_parser("step", help="Append or replace draft scenario steps")
+    author_step.add_argument("--session", required=True)
+    author_step_group = author_step.add_mutually_exclusive_group(required=True)
+    author_step_group.add_argument("--json", dest="step_json", help="Step JSON object to append")
+    author_step_group.add_argument("--steps-json", help="Full steps JSON array to replace draft")
+    author_close = author_sub.add_parser("close", help="Close an authoring session")
+    author_close.add_argument("--session", required=True)
 
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
@@ -748,6 +755,14 @@ def main() -> int:
             argv += ["--session", args.session, "--kind", args.kind, "--json", args.json]
         elif args.author_command in {"validate", "export"}:
             argv += ["--session", args.session, "--name", args.name]
+        elif args.author_command == "step":
+            argv += ["--session", args.session]
+            if args.step_json is not None:
+                argv += ["--json", args.step_json]
+            if args.steps_json is not None:
+                argv += ["--steps-json", args.steps_json]
+        elif args.author_command == "close":
+            argv += ["--session", args.session]
         return author_cli(argv)
 
     def cmd_visual(args) -> int:

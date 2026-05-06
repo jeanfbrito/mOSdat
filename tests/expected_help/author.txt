@@ -1,9 +1,9 @@
 usage: mosdat author [-h] [--url URL]
-                     {vms,start,session,capture,localize,verify,action,validate,export}
+                     {vms,start,session,capture,localize,verify,action,validate,export,step,close}
                      ...
 
 positional arguments:
-  {vms,start,session,capture,localize,verify,action,validate,export}
+  {vms,start,session,capture,localize,verify,action,validate,export,step,close}
     vms                 List configured VMs and Proxmox power state
     start               Create an authoring session
     session             Show authoring session state
@@ -13,6 +13,8 @@ positional arguments:
     action              Run a confirmed authoring action
     validate            Validate current draft scenario
     export              Export current draft scenario YAML
+    step                Append or replace draft scenario steps
+    close               Close an authoring session
 
 options:
   -h, --help            show this help message and exit
