@@ -123,9 +123,13 @@ class VMOperations:
         log_fn(f"Transferring test scripts to {self.vm.name}...")
 
         if self.vm.is_windows:
-            self.ssh.run(f"if (Test-Path '{self._tests_dir}') {{ Remove-Item -Recurse -Force '{self._tests_dir}' }}")
+            self.ssh.run(
+                f"if (Test-Path '{self._tests_dir}') {{ Remove-Item -Recurse -Force '{self._tests_dir}' }}"
+            )
             # scp -r src dest: when dest doesn't exist, creates dest with contents of src
-            result = self.ssh.scp_dir_to(self.config.tests_windows_path, f"{self._tmp_dir}\\tests")
+            result = self.ssh.scp_dir_to(
+                self.config.tests_windows_path, f"{self._tmp_dir}\\tests"
+            )
             if not result.success:
                 raise VMError(f"Failed to transfer tests: {result.stderr}")
             return True
@@ -134,7 +138,8 @@ class VMOperations:
             if not result.success:
                 log_fn(f"  Warning: Could not clean {self._tests_dir}: {result.stderr}")
 
-            result = self.ssh.scp_dir_to(self.config.tests_path, f"{self._tmp_dir}/")
+            # scp -r without trailing slash creates remote dir with contents
+            result = self.ssh.scp_dir_to(self.config.tests_path, f"{self._tests_dir}")
             if not result.success:
                 raise VMError(f"Failed to transfer tests: {result.stderr}")
 
@@ -168,7 +173,9 @@ class VMOperations:
 
         return pkg_file.name
 
-    def _run_tests(self, package: Package, pkg_filename: str, gpu: bool, log_fn=print) -> tuple[int, str]:
+    def _run_tests(
+        self, package: Package, pkg_filename: str, gpu: bool, log_fn=print
+    ) -> tuple[int, str]:
         label = "GPU" if gpu else "without-GPU"
         log_fn(f"Running {label} tests for {package.format} on {self.vm.name}...")
 
@@ -176,20 +183,29 @@ class VMOperations:
 
         if self.vm.is_windows:
             import base64
+
             ps_script = f"$ProgressPreference='SilentlyContinue'; {env} & '{self._tests_dir}\\run-all.ps1'"
             encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
             cmd = f"powershell.exe -ExecutionPolicy Bypass -EncodedCommand {encoded}"
         else:
-            script = f"{self._tests_dir}/run-gpu-tests.sh" if gpu else f"{self._tests_dir}/run-all.sh"
+            script = (
+                f"{self._tests_dir}/run-gpu-tests.sh"
+                if gpu
+                else f"{self._tests_dir}/run-all.sh"
+            )
             cmd = f"{env} {script}"
 
         result = self.ssh.run(cmd, timeout=600, stream_output=True)
         return result.returncode, result.stdout
 
-    def run_tests_no_gpu(self, package: Package, pkg_filename: str, log_fn=print) -> tuple[int, str]:
+    def run_tests_no_gpu(
+        self, package: Package, pkg_filename: str, log_fn=print
+    ) -> tuple[int, str]:
         return self._run_tests(package, pkg_filename, gpu=False, log_fn=log_fn)
 
-    def run_tests_gpu(self, package: Package, pkg_filename: str, log_fn=print) -> tuple[int, str]:
+    def run_tests_gpu(
+        self, package: Package, pkg_filename: str, log_fn=print
+    ) -> tuple[int, str]:
         return self._run_tests(package, pkg_filename, gpu=True, log_fn=log_fn)
 
     def reset_vm(self, log_fn=print) -> None:
@@ -225,7 +241,9 @@ class VMOperations:
             if status == "stopped":
                 exitstatus = data.get("exitstatus", "")
                 if exitstatus and exitstatus != "OK":
-                    raise VMError(f"Proxmox task {upid} failed: exitstatus={exitstatus}")
+                    raise VMError(
+                        f"Proxmox task {upid} failed: exitstatus={exitstatus}"
+                    )
                 return
         raise VMError(f"Proxmox task {upid} did not complete within {timeout}s")
 
@@ -242,7 +260,9 @@ class VMOperations:
     def rollback(self, vmid: int, name: str) -> None:
         """Rollback VM to a named snapshot and wait for completion."""
         with _vm_lock(vmid):
-            endpoint = f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}/rollback"
+            endpoint = (
+                f"/nodes/{self.api.config.node}/qemu/{vmid}/snapshot/{name}/rollback"
+            )
             response = self.api.post(endpoint)
             upid = response.get("data", "")
             if not upid:

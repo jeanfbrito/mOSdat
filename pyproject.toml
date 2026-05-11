@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 mosdat = "automation.main:main"
+mosdat-mcp = "automation.mcp_server:main"
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest", "mutmut"]
