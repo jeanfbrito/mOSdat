@@ -216,6 +216,7 @@ See [Linux Coverage Strategy](docs/LINUX-COVERAGE.md) for why these distribution
 | [Matrix Run](docs/runbooks/matrix-run.md) | Current matrix execution runbook |
 | [Agent Monitoring](docs/runbooks/agent-monitoring.md) | Long-running run monitoring patterns |
 | [Visual Regression](docs/runbooks/visual-regression.md) | Screenshot reference capture/check workflow |
+| [Auto-Authoring](docs/AUTO-AUTHORING.md) | **Generate functional test YAMLs from code changes via `mosdat draft`** |
 | [Issue Confirmation](docs/issue-confirm-tool.md) | GitHub issue confirmation workflow |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues |
 

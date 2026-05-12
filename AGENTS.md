@@ -130,5 +130,6 @@ This project is indexed by GitNexus as **mOSdat** (4508 symbols, 7424 relationsh
 | Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
 | Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| **Generate test scenarios from code changes** | **`docs/AUTO-AUTHORING.md` — `mosdat draft`** |
 
 <!-- gitnexus:end -->
