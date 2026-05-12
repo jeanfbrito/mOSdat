@@ -1,0 +1,36 @@
+name: "PR-{pr_or_desc}: Settings change — {description}"
+
+steps:
+  # ── Phase 1: clean → open settings → toggle → kill ──
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      sleep 2
+      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      echo FULL_CLEAN
+  - shell: |
+      export DISPLAY=:0
+      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      { "Workspace": "https://rocketchat.jeanbrito.com" }
+      EOF
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: "The Rocket.Chat application shows a login page or server selection"
+    verify_timeout: 20
+  - key: ctrl+comma
+  - wait: 5
+  - verify: "A settings window or preferences dialog is visible"
+  # TODO: navigate to specific setting, toggle/change it
+  - shell: pkill -9 rocketchat-desktop.bin 2>/dev/null; echo KILLED
+
+  # ── Phase 2: relaunch → verify setting persisted ──
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: "The Rocket.Chat application shows a login page"
+    verify_timeout: 20
+  - key: ctrl+comma
+  - wait: 5
+  - verify: "The same setting value from Phase 1 is still active"

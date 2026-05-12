@@ -1,0 +1,12 @@
+name: "PR-{pr_or_desc}: Autostart — {description}"
+
+steps:
+  # ── Verify .desktop file exists ──
+  - shell: |
+      test -f /etc/xdg/autostart/rocketchat-desktop.desktop          || test -f /usr/share/autostart/rocketchat-desktop.desktop          || test -f /home/jean/.config/autostart/rocketchat-desktop.desktop
+      echo AUTOSTART_FILE_OK
+  - shell: |
+      grep -q "X-GNOME-Autostart-enabled=true" \
+        /home/jean/.config/autostart/rocketchat-desktop.desktop 2>/dev/null || \
+        echo "Check autostart enabled flag manually"
+      echo AUTOSTART_CHECKED

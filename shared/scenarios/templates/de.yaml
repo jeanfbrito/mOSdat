@@ -1,0 +1,35 @@
+name: "PR-{pr_or_desc}: Desktop environment — {description}"
+
+steps:
+  # ── Verify .desktop file validity ──
+  - shell: |
+      desktop-file-validate /usr/share/applications/rocketchat-desktop.desktop
+      echo SCHEMA_OK
+
+  # ── Verify MIME type registration ──
+  - shell: |
+      grep -q "x-scheme-handler/tel" /usr/share/applications/rocketchat-desktop.desktop
+      echo TEL_DEFINED
+      grep -q "x-scheme-handler/callto" /usr/share/applications/rocketchat-desktop.desktop
+      echo CALLTO_DEFINED
+
+  # ── Verify protocol handler registration in system ──
+  - shell: |
+      xdg-mime query default x-scheme-handler/tel 2>/dev/null | grep -qi rocketchat
+      echo TEL_HANDLER
+      xdg-mime query default x-scheme-handler/callto 2>/dev/null | grep -qi rocketchat
+      echo CALLTO_HANDLER
+
+  # ── Verify app launches without crash ──
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      sleep 2
+      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      echo FULL_CLEAN
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: "The Rocket.Chat application window is visible and responsive"
+    verify_timeout: 20

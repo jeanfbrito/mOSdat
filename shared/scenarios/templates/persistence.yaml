@@ -1,0 +1,38 @@
+name: "PR-{pr_or_desc}: Persistence — {description}"
+
+steps:
+  # ══════════════ PHASE 1: clean → interact → enable → kill ══════════════
+  - shell: |
+      pkill -9 rocketchat-desktop.bin 2>/dev/null || true
+      sleep 2
+      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      echo FULL_CLEAN
+      sleep 2
+  - shell: |
+      export DISPLAY=:0
+      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      EOF
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: |
+      The Rocket.Chat application window shows a login page or
+      authentication screen with fields for email/username and password.
+    verify_timeout: 20
+  # TODO: login and navigate to feature, enable persistence setting
+  - shell: pkill -9 rocketchat-desktop.bin 2>/dev/null; echo KILLED
+
+  # ══════════════ PHASE 2: relaunch → verify persisted ══════════════
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: |
+      The Rocket.Chat application window shows a login page.
+    verify_timeout: 20
+  # TODO: navigate to same feature — verify NO modal/prompt (preference loaded)
+  - verify_not: |
+      No dialog or prompt asking the user to make a choice that
+      should have been persisted.

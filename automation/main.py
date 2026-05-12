@@ -754,6 +754,17 @@ def main() -> int:
     author_close = author_sub.add_parser("close", help="Close an authoring session")
     author_close.add_argument("--session", required=True)
 
+    # mosdat draft  (scenario authoring — generate YAML from change descriptions)
+    draft_p = sub.add_parser("draft", help="Generate functional test scenario YAML from change descriptions")
+    draft_p.add_argument("--change-type", choices=[
+        "ui", "persistence", "protocol_handler", "keyboard_shortcut",
+        "settings", "bug_fix", "de", "autostart",
+    ], help="Type of change to generate a scenario for")
+    draft_p.add_argument("--pr", default="", help="PR number (e.g. 3325)")
+    draft_p.add_argument("--description", default="unnamed", help="Short description of the change")
+    draft_p.add_argument("--output", type=Path, default=None, help="Write YAML to path instead of stdout")
+    draft_p.add_argument("--templates", action="store_true", help="Write all templates to disk and exit")
+
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
     visual_group = visual_p.add_mutually_exclusive_group(required=True)
@@ -862,6 +873,24 @@ def main() -> int:
             argv += ["--output", str(args.output)]
         return dashboard_cli(argv)
 
+    def cmd_draft(args) -> int:
+        from automation.draft import cli as draft_cli
+        argv = []
+        if args.templates:
+            argv += ["--templates"]
+        elif args.change_type:
+            argv += ["--change-type", args.change_type]
+            if args.pr:
+                argv += ["--pr", args.pr]
+            if args.description:
+                argv += ["--description", args.description]
+            if args.output:
+                argv += ["--output", str(args.output)]
+        else:
+            # list types
+            pass
+        return draft_cli(argv)
+
     handlers = {
         "run": cmd_run,
         "test": cmd_test,
@@ -872,6 +901,7 @@ def main() -> int:
         "report": cmd_report,
         "live": cmd_live,
         "author": cmd_author,
+        "draft": cmd_draft,
         "visual": cmd_visual,
         "dashboard": cmd_dashboard,
     }

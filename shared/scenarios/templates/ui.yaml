@@ -1,0 +1,35 @@
+name: "PR-{pr_or_desc}: UI change — {description}"
+
+steps:
+  # ── Pre-test cleanup ──
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      for i in 1 2 3 4 5; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      echo CLEANUP_DONE
+
+  # ── Launch app ──
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: |
+      The Rocket.Chat application window shows a server selection screen
+      or login page.  The window title bar includes "Rocket.Chat".
+    verify_timeout: 20
+
+  # ── Interact with new/changed UI element ──
+  # TODO: replace xdotool coordinates with localize or actual target
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 300 280 click 1
+      echo CLICKED
+  - wait: 5
+  - verify: "A dialog, modal, or new UI element appears in response to the click"
+  - verify_not: |
+      No error dialog, crash dialog, frozen window, or desktop environment
+      crash handler is visible.

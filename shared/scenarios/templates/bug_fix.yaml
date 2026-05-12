@@ -1,0 +1,21 @@
+name: "PR-{pr_or_desc}: Bug fix verification — {description}"
+
+steps:
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      sleep 2
+      echo CLEANUP_DONE
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: "The Rocket.Chat application window is visible and responsive"
+    verify_timeout: 20
+  # ── Trigger the condition that used to crash/fail ──
+  # TODO: describe the reproduction steps that the fix addresses
+  - wait: 5
+  - verify: |
+      The application is still running normally — no crash dialog,
+      no frozen window, no error state.  The app should respond
+      as expected.

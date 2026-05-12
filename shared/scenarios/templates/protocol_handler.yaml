@@ -1,0 +1,55 @@
+name: "PR-{pr_or_desc}: Protocol handler — {description}"
+
+steps:
+  # ── Pre-test cleanup ──
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      sleep 2
+      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      echo FULL_CLEAN
+
+  # ── Write servers.json & launch ──
+  - shell: |
+      mkdir -p "/home/jean/.config/Rocket.Chat (development)"
+      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      EOF
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: |
+      The Rocket.Chat application shows a server selection screen with
+      a list of servers to connect to.
+    verify_timeout: 20
+
+  # ── Click first workspace & wait for login ──
+  # TODO: update coordinates for current screen resolution
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 300 280 click 1
+      echo CLICKED_WORKSPACE
+  - wait: 8
+  - verify: |
+      The Rocket.Chat application shows a login page or authentication
+      screen with fields for email/username and password.
+
+  # ── Trigger deeplink (tel:) via SSH ──
+  - shell: |
+      export DISPLAY=:0
+      USERDATA_DIR="$(
+        ps aux | grep 'rocketchat-desktop' | grep -v grep |
+        grep -oP '--user-data-dir=\K\S+' || echo "/home/jean/.config/Rocket.Chat (development)"
+      )"
+      echo "USERDATA_DIR=$USERDATA_DIR"
+      # Dispatch telephony deeplink
+      xdg-open "tel:+5511999999999" &
+      sleep 2
+      echo DEEPLINK_SENT
+  - wait: 8
+  - verify: |
+      The telephony server selection modal or dialog is visible,
+      asking which telephony service to use for the call.
+  - verify_not: |
+      No crash dialog, frozen window, or desktop environment error
+      appeared after the deeplink was triggered.

@@ -1,0 +1,18 @@
+name: "PR-{pr_or_desc}: Keyboard shortcut — {description}"
+
+steps:
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      sleep 2
+      echo CLEANUP_DONE
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+  - wait: 15
+  - verify: "The Rocket.Chat application window is visible"
+    verify_timeout: 20
+  # TODO: set correct key combo
+  - key: ctrl+comma
+  - wait: 5
+  - verify: "A settings, preferences, or configuration dialog is visible"
