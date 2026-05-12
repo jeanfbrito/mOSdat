@@ -22,6 +22,28 @@ def _is_failover_error(exc: Exception) -> bool:
     Retryable: connection errors, 5xx, 429 rate-limit, timeout.
     Non-retryable: 4xx (except 429), parse errors, schema errors.
     """
+
+
+def _extract_content(resp) -> str:
+    """Extract message content, falling back to reasoning_content if content is empty.
+
+    Reasoning models (Qwen3.6, Kimi K2.x, DeepSeek R1) put the visible response
+    in reasoning_content and leave content empty.  This helper picks whichever
+    field has text.
+    """
+    msg = resp.choices[0].message
+    raw = msg.content or ""
+    if not raw:
+        raw = getattr(msg, "reasoning_content", "") or ""
+    return raw
+
+
+def _is_failover_error(exc: Exception) -> bool:
+    """Return True if the exception warrants failover to the next endpoint.
+
+    Retryable: connection errors, 5xx, 429 rate-limit, timeout.
+    Non-retryable: 4xx (except 429), parse errors, schema errors.
+    """
     import httpx
     from openai import APIConnectionError, APITimeoutError, RateLimitError
     from openai import APIStatusError
@@ -329,7 +351,7 @@ class VLMClient:
                     max_tokens=256,
                     timeout=90,
                 )
-                raw = resp.choices[0].message.content or ""
+                raw = _extract_content(resp)
                 coords = _parse_coords(raw)
                 w, h = screen_size
                 if coords.get("space") == "pixel":
@@ -388,7 +410,7 @@ class VLMClient:
             temperature=temperature,
             timeout=180,
         )
-        raw = resp.choices[0].message.content or ""
+        raw = _extract_content(resp)
         if "</think>" in raw:
             raw = raw[raw.rfind("</think>") + len("</think>"):]
         low = raw.lower().strip()
@@ -434,7 +456,7 @@ class VLMClient:
                 temperature=temperature,
                 timeout=180,
             )
-            raw = resp.choices[0].message.content or ""
+            raw = _extract_content(resp)
             responses.append(raw)
             if "</think>" in raw:
                 raw = raw[raw.rfind("</think>") + len("</think>"):]
@@ -528,7 +550,7 @@ class VLMClient:
                     temperature=temp,
                     timeout=90,
                 )
-                raw = resp.choices[0].message.content or ""
+                raw = _extract_content(resp)
                 parsed = _parse_coords(raw)
                 w, h = screen_size
                 if parsed.get("space") == "pixel":

@@ -201,6 +201,7 @@ def cmd_functional(args) -> int:
     from automation.vlm.client import VLMClient
     from automation.vlm.screenshot import Screenshotter
     from automation.vlm.input import InputInjector
+    from automation.recording import SessionRecorder
     from automation.runners.functional import FunctionalRunner, load_test_yaml
 
     vlm = VLMClient(
@@ -324,58 +325,84 @@ def cmd_functional(args) -> int:
             with VncClient(proxmox, vmid=vm.vmid) as vnc:
                 screenshotter = Screenshotter(vnc)
                 injector = InputInjector(vnc, ssh, vm.is_windows)
+                recorder = None
                 # C2: vm_ops needed only when checkpoints are enabled
                 from automation.proxmox.vm import VMOperations
                 _vm_ops_for_ckpt = None
                 if checkpoint_config.get("enabled"):
                     _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
-                runner = FunctionalRunner(
-                    vlm=vlm,
-                    screenshotter=screenshotter,
-                    injector=injector,
-                    screenshot_dir=screenshot_dir,
-                    log_fn=lambda msg: print(f"[mOSdat] {msg}"),
-                    popup_sweep=getattr(args, "popup_sweep", False),
-                    checkpoint_config=checkpoint_config,
-                    vm_ops=_vm_ops_for_ckpt,
-                    vmid=vm.vmid if checkpoint_config.get("enabled") else None,
-                    click_verify_override=getattr(args, "click_verify", "auto"),
-                    canary_override=getattr(args, "canary_override", "auto"),
-                )
-
-                # B7: VM health probe before scenario start
-                if not getattr(args, "skip_health_probe", False):
-                    print("[mOSdat]   Probing VM health...")
-                    healthy = runner._probe_vm_health()
-                    if not healthy:
-                        print("[mOSdat]   WARNING: VM appears frozen — attempting reset...")
-                        from automation.proxmox.vm import VMOperations
-                        vm_ops = VMOperations(proxmox, vm, config)
-                        vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
-                        # Wait for VM to come back
-                        import time as _time
-                        _time.sleep(15)
-                        healthy2 = runner._probe_vm_health()
-                        if not healthy2:
-                            runner._emit("vm_health_failed")
-                            print(f"[mOSdat] ERROR: VM still frozen after reset — aborting scenario for {vm.name}")
-                            overall = False
-                            continue
-
-                passed, log = runner.run_test(steps, name, vars=vm_vars)
-                # B4: partial run note
-                if partial_run and until_step < total_steps:
-                    remaining = total_steps - until_step
-                    print(f"[mOSdat]   Halted at step {until_step}; {remaining} remaining steps NOT executed. "
-                          f"VM left in current state for inspection. SSH: {vm.ip}")
-
-                # B1: Generate HTML report for this run
                 try:
-                    from automation.reporting.report import generate_html_report
-                    report_path = generate_html_report(screenshot_dir)
-                    print(f"[mOSdat] Report: file://{report_path.absolute()}")
-                except Exception as e:
-                    print(f"[mOSdat] WARN: report generation failed: {e}")
+                    if getattr(args, "record_session", False):
+                        recorder = SessionRecorder(
+                            screenshotter=screenshotter,
+                            recording_dir=screenshot_dir / "recording",
+                            fps=float(getattr(args, "record_fps", 10.0)),
+                            diff_threshold=float(getattr(args, "record_diff_threshold", 3.0)),
+                            keep_raw=bool(getattr(args, "record_keep_raw", False)),
+                            log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                        )
+                        recorder.start()
+                    runner = FunctionalRunner(
+                        vlm=vlm,
+                        screenshotter=screenshotter,
+                        injector=injector,
+                        screenshot_dir=screenshot_dir,
+                        log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                        popup_sweep=getattr(args, "popup_sweep", False),
+                        checkpoint_config=checkpoint_config,
+                        vm_ops=_vm_ops_for_ckpt,
+                        vmid=vm.vmid if checkpoint_config.get("enabled") else None,
+                        click_verify_override=getattr(args, "click_verify", "auto"),
+                        canary_override=getattr(args, "canary_override", "auto"),
+                    )
+
+                    # B7: VM health probe before scenario start
+                    if not getattr(args, "skip_health_probe", False):
+                        print("[mOSdat]   Probing VM health...")
+                        healthy = runner._probe_vm_health()
+                        if not healthy:
+                            print("[mOSdat]   WARNING: VM appears frozen — attempting reset...")
+                            from automation.proxmox.vm import VMOperations
+                            vm_ops = VMOperations(proxmox, vm, config)
+                            vm_ops.reset_vm(log_fn=lambda msg: print(f"[mOSdat] {msg}"))
+                            # Wait for VM to come back
+                            import time as _time
+                            _time.sleep(15)
+                            healthy2 = runner._probe_vm_health()
+                            if not healthy2:
+                                runner._emit("vm_health_failed")
+                                print(f"[mOSdat] ERROR: VM still frozen after reset — aborting scenario for {vm.name}")
+                                overall = False
+                                continue
+
+                    passed, log = runner.run_test(steps, name, vars=vm_vars)
+                    # B4: partial run note
+                    if partial_run and until_step < total_steps:
+                        remaining = total_steps - until_step
+                        print(f"[mOSdat]   Halted at step {until_step}; {remaining} remaining steps NOT executed. "
+                              f"VM left in current state for inspection. SSH: {vm.ip}")
+
+                    # B1: Generate HTML report for this run
+                    try:
+                        from automation.reporting.report import generate_html_report
+                        report_path = generate_html_report(screenshot_dir)
+                        print(f"[mOSdat] Report: file://{report_path.absolute()}")
+                    except Exception as e:
+                        print(f"[mOSdat] WARN: report generation failed: {e}")
+                finally:
+                    if recorder is not None:
+                        artifacts = recorder.stop_and_export(
+                            make_gif=bool(getattr(args, "record_gif", False))
+                        )
+                        print(
+                            f"[mOSdat] Recording: raw={artifacts.raw_frames} filtered={artifacts.filtered_frames}"
+                        )
+                        if artifacts.mp4_path:
+                            print(f"[mOSdat] Recording MP4: {artifacts.mp4_path}")
+                        if artifacts.gif_path:
+                            print(f"[mOSdat] Recording GIF: {artifacts.gif_path}")
+                        if artifacts.warning:
+                            print(f"[mOSdat] Recording WARN: {artifacts.warning}")
 
             status = "PASS" if passed else "FAIL"
             print(f"[mOSdat]   Result: {status}")
@@ -510,6 +537,11 @@ def cmd_confirm(args) -> int:
         refresh_issue_context=args.refresh_issue_context,
         emit_html=args.html,
         skip_state_snapshot=args.no_state_snapshot,
+        record_session=args.record_session,
+        record_fps=args.record_fps,
+        record_diff_threshold=args.record_diff_threshold,
+        record_gif=args.record_gif,
+        record_keep_raw=args.record_keep_raw,
         repro_command=repro,
         git_rev=git_rev,
     )
@@ -591,6 +623,16 @@ def main() -> int:
     fn_p.add_argument("--canary", choices=["auto", "off", "on"],
                       default="auto", dest="canary_override",
                       help="Override scenario's canary setting globally (A/B testing)")
+    fn_p.add_argument("--record-session", action="store_true",
+                      help="Record VNC frames during run and export change-filtered replay artifacts")
+    fn_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
+                      help="Recorder capture rate (default: 10.0)")
+    fn_p.add_argument("--record-diff-threshold", type=float, default=3.0, metavar="VALUE",
+                      help="Mean grayscale diff threshold for frame retention (default: 3.0)")
+    fn_p.add_argument("--record-gif", action="store_true",
+                      help="Also export recording/session.gif (MP4 is always attempted)")
+    fn_p.add_argument("--record-keep-raw", action="store_true",
+                      help="Keep recording/raw frames after export")
 
     # mosdat confirm
     confirm_p = sub.add_parser(
@@ -629,6 +671,16 @@ def main() -> int:
         "--no-state-snapshot", action="store_true", dest="no_state_snapshot",
         help="Skip VM-side state collection",
     )
+    confirm_p.add_argument("--record-session", action="store_true",
+                           help="Record VNC frames during each iteration and export change-filtered replay artifacts")
+    confirm_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
+                           help="Recorder capture rate (default: 10.0)")
+    confirm_p.add_argument("--record-diff-threshold", type=float, default=3.0, metavar="VALUE",
+                           help="Mean grayscale diff threshold for frame retention (default: 3.0)")
+    confirm_p.add_argument("--record-gif", action="store_true",
+                           help="Also export recording/session.gif (MP4 is always attempted)")
+    confirm_p.add_argument("--record-keep-raw", action="store_true",
+                           help="Keep recording/raw frames after export")
     confirm_p.set_defaults(func=cmd_confirm)
 
     # mosdat validate

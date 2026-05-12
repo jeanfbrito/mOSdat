@@ -36,6 +36,7 @@ It shows:
 - latest or selected historical runs
 - VM status (`running`, `pass`, `fail`, `stale`, `partial`)
 - latest screenshot thumbnails
+- recording artifact links when present (MP4/GIF/frame folders)
 - current step and total runtime
 - per-step status cells with slow/hot duration markers
 - failure cards with VLM question/answer and screenshots
@@ -131,6 +132,48 @@ Proxmox VNC + configured VMs -> AuthorManager -> /api/author/*
 
 The dashboard is dependency-light: stdlib HTTP server, embedded HTML/CSS/JS,
 and no frontend build step.
+
+## Session Recording Playback
+
+Use functional recording flags during the run:
+
+```bash
+mosdat functional examples/rocketchat.toml \
+  --vms windows11 \
+  --test rocketchat-smoke \
+  --record-session \
+  --record-fps 10 \
+  --record-diff-threshold 3.0
+```
+
+Recorder behavior:
+
+- captures VNC frames during execution
+- keeps only changed frames (diff-based filtering)
+- exports `recording/session.mp4` (best effort) and optional `recording/session.gif`
+- keeps metadata and filtered frames under `recording/`
+
+VNC streaming model:
+
+- VNC itself streams incremental framebuffer updates after an initial full frame
+- the recorder samples/captures at fixed FPS from that live stream
+- post-processing drops near-identical frames to reduce output size on slow runs
+
+Artifact paths (per VM run directory):
+
+```
+results/functional/<run>/<vm>/recording/
+├── session.mp4
+├── session.gif              # when --record-gif is set
+├── filtered/
+└── metadata.json
+```
+
+Dashboard/media notes:
+
+- live dashboard serves artifacts via `/artifact/<relative-path>`
+- if browser codec support is limited, open the same artifact in VLC
+- `--record-fps 10` is the current baseline for UI animation visibility
 
 ## Stopping
 

@@ -265,6 +265,31 @@ sudo dnf install -y --allowerasing package.rpm
 sudo dpkg -i --force-overwrite package.deb
 ```
 
+### Windows: Update Popup Blocks Add-Server/Login Flow
+
+**Symptom**: Functional run launches Rocket.Chat, but add-server/login steps do
+not progress.
+
+**Cause**: Rocket.Chat update popup overlays the UI and steals clicks/keys. On
+Windows this can appear either right after launch or after server URL submit.
+
+**Current handling**:
+1. `shared/scenarios/functional/rocketchat-smoke.yaml` checks and dismisses an
+update popup right after launch.
+2. The same check runs again after server URL submit to catch late popups.
+
+**Recommended run command**:
+```bash
+mosdat functional examples/rocketchat.toml --vms windows11 --test rocketchat-smoke \
+  --record-session --record-fps 10 --timeout 1800
+```
+
+**Verification**:
+1. Inspect `events.jsonl` for the first update check (`step 3`) and post-URL
+   check (`step 5`).
+2. When popup is detected, nested localize/click dismisses `Later`/`Dismiss`/
+   `Not now` or close `X`.
+
 ## Debug Mode
 
 ### Trace Wrapper Script

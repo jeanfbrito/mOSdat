@@ -30,20 +30,25 @@ steps:
       Write-Output 'cleanup:ok'
 
   - launch: "{app_path}"
-    wait: 20
+    # Windows launch + first frame can be slow; keep enough budget for multiple
+    # launch_verify calls so we don't fail before update/login branches run.
+    wait: 45
     focus: "Rocket.Chat"
-    # Strict verify: RC must actually be the foreground app, not just "open".
-    # "Open" is true even when RC is buried behind Edge or a Microsoft popup.
-    verify: "the Rocket.Chat application is the foreground window taking most of the screen, with the red rocket.chat logo clearly visible in the center of the window"
+    # Strict-but-branchable verify:
+    # RC must be foreground, and either:
+    #   1) server URL screen is visible, OR
+    #   2) RC update modal/banner is visible (handled by next if_visible step).
+    # This avoids failing before the update-dismiss branch can run.
+    verify: "the Rocket.Chat application is the foreground window taking most of the screen, and either the red rocket.chat logo with an 'Enter your server URL' input field is visible, OR an update dialog/banner with text like 'Later', 'Dismiss', 'Not now', or an X close icon is visible"
     verify_timeout: 30
     retries: 2
 
   # ── Dismiss RC's electron-updater "update available" dialog if it appears.
   #    The modal floats over the login screen and obscures the server URL input.
   #    VLM checks visibility first; skips silently if no dialog is present.
-  - if_visible: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+  - if_visible: "a Rocket.Chat update popup/banner is visible (for example text like 'Update available', with a 'Later'/'Dismiss'/'Not now' button, or an X close icon)"
     then:
-      - localize: "button with visible text 'Later', 'Dismiss', or 'Not now', OR an X close icon in the top-right corner of an update notification banner or dialog"
+      - localize: "the dismiss control for the update popup: 'Later', 'Dismiss', 'Not now', or the top-right X close icon"
 
   # ── With a wiped config, Rocket.Chat opens directly to the server URL
   #    form (rocket.chat logo + "Enter your server URL" input + Connect).
@@ -59,6 +64,12 @@ steps:
     verify_not: "the 'Enter your server URL' input field is still visible on screen, OR an error / offline / connection-failure banner is shown"
     verify_timeout: 25
     retries: 3
+
+  # Re-check update popup after workspace navigation; it can appear late and
+  # block the login inputs even if it was not visible right after launch.
+  - if_visible: "a Rocket.Chat update popup/banner is visible (for example text like 'Update available', with a 'Later'/'Dismiss'/'Not now' button, or an X close icon)"
+    then:
+      - localize: "the dismiss control for the update popup: 'Later', 'Dismiss', 'Not now', or the top-right X close icon"
 
   - localize: "the username or email input field in the login form"
     then_type: "{test_user}"

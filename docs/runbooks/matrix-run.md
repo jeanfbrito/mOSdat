@@ -117,6 +117,11 @@ mosdat run examples/rocketchat.toml --only fedora42
 mosdat functional examples/rocketchat.toml --vms fedora42,ubuntu2404 --test rocketchat-smoke-linux
 mosdat functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux --save-screenshots
 mosdat functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux --from-step 3 --until-step 5
+
+# Full Windows smoke with replay recording (10 FPS baseline)
+mosdat functional examples/rocketchat.toml --vms windows11 --test rocketchat-smoke \
+  --skip-workspace-check --skip-model-check --skip-warmup \
+  --record-session --record-fps 10 --timeout 1800
 ```
 
 Functional results are written under:
@@ -125,6 +130,8 @@ Functional results are written under:
 results/functional/<timestamp>_<test>/<vm>/
 ├── events.jsonl
 ├── *.png
+├── recording/session.mp4
+├── recording/session.gif      # optional (--record-gif)
 └── summary/report artifacts
 ```
 

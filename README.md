@@ -114,6 +114,17 @@ Run a functional VLM smoke test:
 mosdat functional examples/rocketchat.toml --vms ubuntu2404 --test rocketchat-smoke-linux
 ```
 
+Run a recorded functional session replay (change-filtered frames, smaller artifact size):
+
+```bash
+mosdat functional examples/rocketchat.toml \
+  --vms windows11 \
+  --test rocketchat-smoke \
+  --record-session \
+  --record-fps 10 \
+  --record-gif
+```
+
 Serve the live dashboard and authoring workbench:
 
 ```bash
@@ -124,6 +135,8 @@ Open:
 
 - Runs dashboard: `http://<host>:8082/`
 - Author Workbench: `http://<host>:8082/author`
+- Recording artifacts: open from the run cards or under
+  `http://<host>:8082/artifact/...`
 
 Use the agent authoring API through the CLI:
 

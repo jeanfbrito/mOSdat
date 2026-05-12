@@ -5,6 +5,7 @@ the caller; Screenshotter just forwards `capture()` to it.
 """
 
 import time
+import threading
 
 from PIL import Image
 
@@ -25,10 +26,13 @@ def _image_pixels(image: Image.Image) -> list[int]:
 class Screenshotter:
     def __init__(self, vnc: VncClient):
         self._vnc = vnc
+        # VNC recv path is not re-entrant; serialize captures across threads.
+        self._capture_lock = threading.Lock()
 
     def capture(self) -> tuple[Image.Image, tuple[int, int]]:
         try:
-            return self._vnc.capture()
+            with self._capture_lock:
+                return self._vnc.capture()
         except VncClientError as e:
             raise ScreenshotError(str(e)) from e
 

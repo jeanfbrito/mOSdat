@@ -295,7 +295,7 @@ class TestRenderDashboard:
         dashboard.render_dashboard(agg, out)
         content = out.read_text(encoding="utf-8")
 
-        for section_id in ("pass-rate-trend", "retry-rate", "duration", "regressions"):
+        for section_id in ("pass-rate-trend", "retry-rate", "duration", "recordings", "regressions"):
             assert section_id in content, f"Missing section: {section_id}"
 
     def test_html_contains_chartjs_script_tag(self, tmp_path: Path):

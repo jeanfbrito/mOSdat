@@ -28,25 +28,27 @@ steps:
       done
 
       # Wipe config dirs so servers.json takes effect fresh
-      rm -rf /home/jean/.config/Rocket.Chat\ \(development\)/
+      rm -rf /home/jean/.config/Rocket.Chat/
+      rm -rf /home/jean/.config/Rocket.Chat\\ \\(development\\)/
+      rm -f /home/jean/.config/Rocket.Chat/servers.json
       rm -rf /home/jean/.config/Rocket.Chat/logs/
       rm -f /home/jean/.config/Rocket.Chat/servers.json
       sleep 1
       echo CLEANUP_DONE
 
-  # ── Write servers.json into (development) dir ─────────────────────────────
-  # loadUserServers() reads from app.getPath('userData') which on the dev
-  # build resolves to ~/.config/Rocket.Chat (development)/servers.json
-  # It DELETES the file after reading (one-time migration).
+  # ── Write servers.json into the production userData dir ──────────────────
+  # The DEB installs to /opt/Rocket.Chat/ (production), so app.getPath('userData')
+  # resolves to ~/.config/Rocket.Chat/ (NOT the "(development)" suffix).
+  # It DELETES the file after reading (one-time migration to serversMap).
   - shell: |
-      mkdir -p "/home/jean/.config/Rocket.Chat (development)"
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      mkdir -p "/home/jean/.config/Rocket.Chat"
+      cat > "/home/jean/.config/Rocket.Chat/servers.json" << 'EOF'
       {
         "Workspace": "https://rocketchat.jeanbrito.com",
         "Mobile RC": "https://mobile.rocket.chat"
       }
       EOF
-      ls -la "/home/jean/.config/Rocket.Chat (development)/servers.json"
+      ls -la "/home/jean/.config/Rocket.Chat/servers.json"
       echo SERVERS_JSON_WRITTEN
 
   # ── Launch app clean ─────────────────────────────────────────────────────

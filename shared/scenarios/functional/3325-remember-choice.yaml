@@ -1,0 +1,218 @@
+name: "Rocket.Chat Desktop — Telephony remember choice + persist + change"
+# Extends the working 3325.yaml to also test:
+#   - "Remember this choice" checkbox persists across restarts
+#   - Settings > TelephonyServer dropdown changes preference
+#   - After change, tel: routes to new server
+
+steps:
+  # ── Pre-test cleanup ──────────────────────────────────────────────────────
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      for i in 1 2 3 4 5; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+
+      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "/home/jean/.config/Rocket.Chat (development)/servers.json"
+      sleep 1
+      echo CLEANUP_DONE
+
+  # ── Write servers.json into the (development) dir ─────────────────────────
+  - shell: |
+      mkdir -p "/home/jean/.config/Rocket.Chat (development)"
+      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      EOF
+      echo SERVERS_JSON_WRITTEN
+
+  # ── Launch app ────────────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+
+  # ── Wait for app window ──────────────────────────────────────────────────
+  - wait: 15
+
+  # ── Verify server selection screen ───────────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a server selection screen listing at least two server entries — 'Workspace' and 'Mobile RC'. Look for server name labels, buttons, or cards with these names. This is NOT the 'Add a server' empty screen with only an input field asking for a server URL. The user should see server options to click on.
+    verify_timeout: 20
+
+  # ── Click "Workspace" server to connect ──────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 300 280 click 1
+      echo CLICKED_WORKSPACE
+
+  # ── Wait for connection ──────────────────────────────────────────────────
+  - wait: 10
+
+  # ── Verify app is connected ──────────────────────────────────────────────
+  - verify: |
+      the Rocket.Chat application window no longer shows a server selection screen. It should show the main chat interface or an app view after connecting to a server.
+
+  # ── Trigger tel: deeplink (first time - should open modal) ──────────────
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED
+
+  # ── Wait for telephony modal ────────────────────────────────────────────
+  - wait: 10
+
+  # ── Verify telephony server selection modal is visible ──────────────────
+  - verify: |
+      The Rocket.Chat application window shows a dialog or modal overlay for telephony server selection. It lists available server options and has a checkbox for 'Remember this choice' or similar. The main interface behind the dialog may be dimmed. This is NOT the main server selection screen.
+    retries: 5
+
+  # ── Click "Remember this choice" checkbox ────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 350 320 click 1
+      echo CLICKED_REMEMBER_CHOICE
+
+  # ── Click "Mobile RC" server in the modal ────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 350 400 click 1
+      echo CLICKED_MOBILE_RC
+
+  # ── Wait for modal to close and call to be dispatched ────────────────────
+  - wait: 8
+
+  # ── Verify modal closed ─────────────────────────────────────────────────
+  - verify: |
+      the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window, no desktop environment crash handler. The app process should be alive.
+
+  # ── Kill app ────────────────────────────────────────────────────────────
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      for i in 1 2 3 4 5; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      echo KILLED
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 2: Reopen → tel: → should skip modal (remembered choice persisted)
+  # ══════════════════════════════════════════════════════════════════════════
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+
+  - wait: 15
+
+  - verify: |
+      The Rocket.Chat application window shows a server selection screen listing at least two server entries — 'Workspace' and 'Mobile RC'. Look for server name labels, buttons, or cards with these names. This is NOT the 'Add a server' empty screen.
+    verify_timeout: 20
+
+  - shell: |
+      export DISPLAY=:0
+      # Click "Mobile RC" server
+      xdotool mousemove 300 370 click 1
+      echo CLICKED_MOBILE_RC
+
+  - wait: 10
+
+  - verify: |
+      the Rocket.Chat application window no longer shows a server selection screen. It should show the main chat interface.
+
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED
+
+  - wait: 8
+
+  # ⭐ KEY TEST: should route directly, no modal
+  - verify: |
+      the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window, no desktop environment crash handler. The app process should be alive. There should be no dialog or modal for server selection visible.
+    retries: 3
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 3: Change preference in Settings
+  # ══════════════════════════════════════════════════════════════════════════
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+comma
+      echo CTRL_COMMA_SENT
+
+  - wait: 5
+
+  - verify: |
+      the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window, no error message. The Settings panel may have opened inside the main window.
+
+  - shell: |
+      export DISPLAY=:0
+      # Click Telephony Server dropdown
+      xdotool mousemove 350 420 click 1
+      echo CLICKED_TELEPHONY_DROPDOWN
+
+  - wait: 3
+
+  - shell: |
+      export DISPLAY=:0
+      # Select "Workspace" option
+      xdotool mousemove 350 440 click 1
+      echo CLICKED_WORKSPACE_OPTION
+
+  - wait: 3
+
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      for i in 1 2 3 4 5; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      echo KILLED
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 4: Reopen → tel: → should route to NEW preference (Workspace)
+  # ══════════════════════════════════════════════════════════════════════════
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo LAUNCHED
+
+  - wait: 15
+
+  - verify: |
+      The Rocket.Chat application window shows a server selection screen listing at least two server entries — 'Workspace' and 'Mobile RC'. Look for server name labels, buttons, or cards with these names. This is NOT the 'Add a server' empty screen.
+    verify_timeout: 20
+
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 300 280 click 1
+      echo CLICKED_WORKSPACE
+
+  - wait: 10
+
+  - verify: |
+      the Rocket.Chat application window no longer shows a server selection screen. It should show the main chat interface.
+
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED
+
+  - wait: 8
+
+  # ⭐ KEY TEST: should route to new preference
+  - verify: |
+      the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window, no desktop environment crash handler. The call was dispatched to the preferred server.
+
+  # ── Final cleanup ─────────────────────────────────────────────────────────
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      for i in 1 2 3 4 5; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      echo DONE

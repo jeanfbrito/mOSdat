@@ -64,6 +64,7 @@ def build_dashboard_state(
 def _build_vm_state(run: str, vm_dir: Path, now: datetime, warn_after: int, stale_after: int) -> dict:
     events = _read_events(vm_dir / "events.jsonl")
     screenshots = _collect_screenshots(run, vm_dir)
+    recording = _collect_recording(run, vm_dir)
     steps = _group_steps(events, screenshots)
     latest_event = events[-1] if events else None
     first_event = events[0] if events else None
@@ -87,6 +88,7 @@ def _build_vm_state(run: str, vm_dir: Path, now: datetime, warn_after: int, stal
         "steps": steps,
         "failures": failures,
         "latest_screenshot": _latest_screenshot(screenshots),
+        "recording": recording,
     }
 
 
@@ -118,6 +120,35 @@ def _collect_screenshots(run: str, vm_dir: Path) -> dict[str, list[dict]]:
             "kind": _screenshot_kind(path.name),
         })
     return screenshots
+
+
+def _collect_recording(run: str, vm_dir: Path) -> Optional[dict]:
+    rec_dir = vm_dir / "recording"
+    if not rec_dir.exists():
+        return None
+
+    payload: dict = {}
+    mp4 = rec_dir / "session.mp4"
+    gif = rec_dir / "session.gif"
+    manifest = rec_dir / "manifest.json"
+
+    if mp4.exists():
+        payload["mp4"] = {
+            "filename": "recording/session.mp4",
+            "url": f"/artifact/{run}/{vm_dir.name}/recording/session.mp4",
+        }
+    if gif.exists():
+        payload["gif"] = {
+            "filename": "recording/session.gif",
+            "url": f"/artifact/{run}/{vm_dir.name}/recording/session.gif",
+        }
+    if manifest.exists():
+        payload["manifest"] = {
+            "filename": "recording/manifest.json",
+            "url": f"/artifact/{run}/{vm_dir.name}/recording/manifest.json",
+        }
+
+    return payload or None
 
 
 def _group_steps(events: list[dict], screenshots: dict[str, list[dict]]) -> list[dict]:

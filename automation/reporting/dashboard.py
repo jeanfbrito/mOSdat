@@ -140,11 +140,13 @@ def aggregate_runs(results_root: Path) -> dict[str, Any]:
                 continue
 
             pass_rate = (vm_step_pass / vm_step_total) if vm_step_total else None
+            recording = _collect_recording(vm_dir)
             per_vm[vm_name][run_id] = {
                 "pass_rate": pass_rate,
                 "run_ts": run_ts,
                 "passed": vm_step_pass,
                 "total": vm_step_total,
+                "recording": recording,
             }
 
         runs_meta.append({"run_id": run_id, "run_ts": run_ts})
@@ -155,6 +157,17 @@ def aggregate_runs(results_root: Path) -> dict[str, Any]:
         "per_step": dict(per_step),
         "results_root": str(results_root),
     }
+
+
+def _collect_recording(vm_dir: Path) -> dict[str, str]:
+    rec = {}
+    mp4 = vm_dir / "recording" / "session.mp4"
+    gif = vm_dir / "recording" / "session.gif"
+    if mp4.exists():
+        rec["mp4"] = "recording/session.mp4"
+    if gif.exists():
+        rec["gif"] = "recording/session.gif"
+    return rec
 
 
 def _parse_ts(ts_raw: Any) -> float | None:
@@ -491,12 +504,47 @@ def render_dashboard(aggregates: dict[str, Any], output: Path) -> None:
         for s, avg_s, n in duration_items
     )
 
+    # ---- Section 4: session recording artifacts ----
+    output_base = output.parent
+    results_root_path = Path(results_root) if results_root else Path(".")
+    recording_rows = []
+    for vm_name, run_map in sorted(per_vm.items()):
+        for run_id, info in sorted(run_map.items()):
+            recording = info.get("recording") or {}
+            if not recording:
+                continue
+            rec_cells = []
+            for kind in ("mp4", "gif"):
+                rel = recording.get(kind)
+                if not rel:
+                    continue
+                target = results_root_path / "functional" / run_id / vm_name / rel
+                href = os.path.relpath(target, start=output_base).replace(os.sep, "/")
+                rec_cells.append(f"<a href=\"{_esc(href)}\">{kind}</a>")
+            if rec_cells:
+                recording_rows.append(
+                    "<tr>"
+                    f"<td>{_esc(run_id)}</td>"
+                    f"<td>{_esc(vm_name)}</td>"
+                    f"<td>{' · '.join(rec_cells)}</td>"
+                    "</tr>"
+                )
+    recordings_section = f"""
+<section id="recordings">
+  <h2>Session Recordings</h2>
+  <p>Change-filtered replay artifacts exported by the recorder.</p>
+  <table>
+    <thead><tr><th>Run</th><th>VM</th><th>Artifacts</th></tr></thead>
+    <tbody>{''.join(recording_rows) if recording_rows else '<tr><td colspan="3">No recording artifacts found.</td></tr>'}</tbody>
+  </table>
+</section>"""
+
     # Bar chart: top 15 by mean duration
     top15_dur = duration_items[:15]
     dur_labels = _js([_truncate(s, 40) for s, *_ in top15_dur])
     dur_values = _js([round(avg_s, 2) for _, avg_s, _ in top15_dur])
 
-    # ---- Section 4: regression table ----
+    # ---- Section 5: regression table ----
     if regressions:
         reg_rows = "".join(
             "<tr>"
@@ -586,6 +634,8 @@ def render_dashboard(aggregates: dict[str, Any], output: Path) -> None:
     <tbody>{duration_table_rows if duration_table_rows else '<tr><td colspan="3">No timing data recorded.</td></tr>'}</tbody>
   </table>
 </section>
+
+{recordings_section}
 
 {reg_section}
 

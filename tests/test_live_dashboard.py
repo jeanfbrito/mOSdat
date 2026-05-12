@@ -442,6 +442,24 @@ class TestHTTPHandler:
         finally:
             server.shutdown()
 
+    def test_artifact_served(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "vm1" / "recording"
+        run_dir.mkdir(parents=True)
+        mp4_data = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 16
+        (run_dir / "session.mp4").write_bytes(mp4_data)
+
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path)
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/artifact/run1/vm1/recording/session.mp4")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            assert resp.getheader("Content-Type") == "video/mp4"
+            assert resp.read() == mp4_data
+        finally:
+            server.shutdown()
+
     def test_path_traversal_rejected(self, tmp_path):
         bc = live.SSEBroadcaster()
         server, port = _start_server(bc, tmp_path)
@@ -460,6 +478,18 @@ class TestHTTPHandler:
         try:
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("GET", "/png/run1/../../../etc/passwd")
+            resp = conn.getresponse()
+            resp.read()
+            assert resp.status in (400, 403, 404)
+        finally:
+            server.shutdown()
+
+    def test_artifact_path_traversal_rejected(self, tmp_path):
+        bc = live.SSEBroadcaster()
+        server, port = _start_server(bc, tmp_path)
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/artifact/run1/vm1/../../../etc/passwd")
             resp = conn.getresponse()
             resp.read()
             assert resp.status in (400, 403, 404)
@@ -710,6 +740,17 @@ class TestAuthorAPI:
 
 
 class TestDashboardState:
+    def test_recording_artifacts_exposed(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "fedora" / "recording"
+        run_dir.mkdir(parents=True)
+        (run_dir / "session.mp4").write_bytes(b"mp4")
+        (run_dir / "session.gif").write_bytes(b"gif")
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 3, 10, 0, 10))
+        vm = state["runs"][0]["vms"][0]
+        assert vm["recording"]["mp4"]["url"] == "/artifact/run1/fedora/recording/session.mp4"
+        assert vm["recording"]["gif"]["url"] == "/artifact/run1/fedora/recording/session.gif"
+
     def test_failure_summary_includes_vlm_and_screenshot(self, tmp_path):
         run_dir = tmp_path / "functional" / "run1" / "fedora"
         run_dir.mkdir(parents=True)

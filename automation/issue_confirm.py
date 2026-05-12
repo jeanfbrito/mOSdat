@@ -36,6 +36,11 @@ class ConfirmInvocation:
     refresh_issue_context: bool = False
     emit_html: bool = False
     skip_state_snapshot: bool = False
+    record_session: bool = False
+    record_fps: float = 10.0
+    record_diff_threshold: float = 3.0
+    record_gif: bool = False
+    record_keep_raw: bool = False
     repro_command: str = ""                    # the original CLI string for reporter footer
     git_rev: Optional[str] = None
 
@@ -332,6 +337,7 @@ def run_confirm(inv: ConfirmInvocation) -> ConfirmRunArtifacts:
         iter_result = None
         vm_state = None
         vnc_ctx = None
+        recorder = None
 
         try:
             # Build runner with iter_dir as screenshot dir
@@ -342,6 +348,18 @@ def run_confirm(inv: ConfirmInvocation) -> ConfirmRunArtifacts:
 
             # Open VNC context manager manually so we can keep connection for vm_state
             vnc_ctx.__enter__()
+            if inv.record_session:
+                from automation.recording import SessionRecorder
+
+                recorder = SessionRecorder(
+                    screenshotter=runner.screenshotter,
+                    recording_dir=iter_dir / "recording",
+                    fps=inv.record_fps,
+                    diff_threshold=inv.record_diff_threshold,
+                    keep_raw=inv.record_keep_raw,
+                    log_fn=lambda msg: print(f"[mosdat] {msg}"),
+                )
+                recorder.start()
 
             # Drive the scenario
             iter_result = run_scenario_via_runner(runner, scenario, {})
@@ -375,6 +393,15 @@ def run_confirm(inv: ConfirmInvocation) -> ConfirmRunArtifacts:
             )
 
         finally:
+            if recorder is not None:
+                artifacts = recorder.stop_and_export(make_gif=inv.record_gif)
+                print(f"[mosdat]   recording raw={artifacts.raw_frames} filtered={artifacts.filtered_frames}")
+                if artifacts.mp4_path:
+                    print(f"[mosdat]   recording mp4: {artifacts.mp4_path}")
+                if artifacts.gif_path:
+                    print(f"[mosdat]   recording gif: {artifacts.gif_path}")
+                if artifacts.warning:
+                    print(f"[mosdat]   recording warn: {artifacts.warning}")
             # Close VNC context if we entered it
             if vnc_ctx is not None:
                 try:
