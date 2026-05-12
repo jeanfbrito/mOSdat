@@ -1,5 +1,8 @@
 # AI Agent Instructions
 
+> **Single source of truth.** This file is the canonical agent entry point.
+> `CLAUDE.md` redirects here. All agents — Claude, Hermes, Codex, Cline, Copilot — must load this file for project context.
+
 ## TOP RULE: NEVER BLOCK ON WAITS
 
 **NEVER use long `sleep` commands or blocking waits while the user sits idle.**
