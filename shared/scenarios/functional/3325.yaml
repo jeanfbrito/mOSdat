@@ -3,12 +3,19 @@ name: "Rocket.Chat Desktop — Telephony deeplink / protocol handler test"
 #   - `tel:` / `callto:` protocol handlers registered in electron-builder.json
 #   - IPC channel `telephony/call-requested` exposed via preload
 #   - Protocol handlers don't crash the app
+#   - OS desktop entry includes MimeType registration
 #   - Servers.json loads correctly (server selection screen appears)
 #   - Settings window shortcut works (Ctrl+,)
 #
 # The app is NOT logged in — we're testing that the framework
 # (protocol registration, IPC transport, server selection UI) survives
 # dispatch, not end-to-end dialing.
+#
+# New commits since initial scenario:
+#   - 9d0a4d30f: Fuselage modal replaces native dialog for server selection
+#   - 6ddda80cc: i18n translations for telephony modal
+#   - c83728f10: Settings > TelephonyServer dropdown (hidden when ≤1 server)
+#   - ab816c0db: Dialog attaches to root window, guards duplicate IPC listener
 
 steps:
   # ── Pre-test cleanup ──────────────────────────────────────────────────────
@@ -50,17 +57,19 @@ steps:
 
   - wait: 10
 
-  - verify: "The Rocket.Chat application window shows a server selection screen listing at least two servers — 'Workspace' and 'Mobile RC'. This is NOT the 'Add a server' empty screen. Look for server name labels, buttons, or cards that show configured servers. The key: the user should see server options to click on, not just an empty input field asking for a server URL"
+  - verify: "The Rocket.Chat application window shows a server selection screen listing at least two server entries — 'Workspace' and 'Mobile RC'. Look for server name labels, buttons, or cards with these names. This is NOT the 'Add a server' empty screen with only an input field asking for a server URL. The user should see server options to click on"
     verify_timeout: 20
 
   # ── Tel protocol handler ─────────────────────────────────────────────────
+  # With 2+ servers, dispatch triggers the Fuselage server selection modal
+  # (introduced in 9d0a4d30f). Not testing modal visual — just crash/no-crash.
   - shell: |
       xdg-open "tel:+5511999999999"
       echo TEL_DISPATCHED
 
   - wait: 6
 
-  - verify: "the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window, no desktop environment crash handler. The app process should be alive and the window interactive"
+  - verify: "the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window, no desktop environment crash handler. The app process should be alive"
     verify_timeout: 10
 
   # ── Re-launch fresh ──────────────────────────────────────────────────────
@@ -78,7 +87,7 @@ steps:
 
   - wait: 10
 
-  - verify: "a Rocket.Chat application window is visible on screen"
+  - verify: "a Rocket.Chat application window is visible on screen — the standard add-server screen with input field and Rocket.Chat logo"
     verify_timeout: 10
 
   # ── Callto protocol handler ──────────────────────────────────────────────
@@ -91,14 +100,34 @@ steps:
   - verify: "the Rocket.Chat application window is still visible and responsive — no crash dialog, no frozen window"
     verify_timeout: 10
 
+  # ── Verify desktop entry includes MimeType for tel:/callto: ───────────
+  # Shell exit code check — no VLM since we're checking text output, not GUI
+  - shell: |
+      ENTRY=$(cat /usr/share/applications/rocketchat-desktop.desktop 2>/dev/null | grep -c "x-scheme-handler/tel")
+      ENTRY2=$(cat /usr/share/applications/rocketchat-desktop.desktop 2>/dev/null | grep -c "x-scheme-handler/callto")
+      if [ "$ENTRY" -gt 0 ] && [ "$ENTRY2" -gt 0 ]; then
+        echo "MIMETYPE_OK: tel and callto found in desktop entry"
+        exit 0
+      else
+        echo "MIMETYPE_FAIL: tel=$ENTRY callto=$ENTRY2"
+        exit 1
+      fi
+
   # ── Verify Settings shortcut doesn't crash (Ctrl+,) ──────────────────────
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  - wait: 10
+
   - shell: |
       xdotool key ctrl+comma
       echo CTRL_COMMA_SENT
 
   - wait: 5
 
-  - verify: "the Rocket.Chat application window is still visible and responsive — no crash dialog, frozen window, or error message. The Settings window may have opened as a separate native window (not visible via VNC), but the main app window should remain stable"
+  - verify: "the Rocket.Chat application window is still visible and responsive — no crash dialog, frozen window, or error message. The Settings panel may have opened inside the main window (not a separate native window), but the main app window should remain stable"
     verify_timeout: 10
 
   # ── Kill app ─────────────────────────────────────────────────────────────
