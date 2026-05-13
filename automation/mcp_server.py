@@ -89,7 +89,21 @@ def jsonrpc_error(req: Request, code: int, message: str, data: Any = None) -> st
 
 
 def jsonrpc_result(req: Request, result: Any) -> str:
-    return json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": result}) + "\n"
+    """Return a JSON-RPC result.
+
+    MCP uses raw result objects for initialize/tools/list, but tools/call must
+    return a CallToolResult shape: {content: [{type: "text", text: "..."}]}.
+    """
+    if req.get("method") == "tools/call" and "content" not in (result or {}):
+        text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        result = {"content": [{"type": "text", "text": text}]}
+
+    resp = {
+        "jsonrpc": "2.0",
+        "id": req.get("id"),
+        "result": result,
+    }
+    return json.dumps(resp) + "\n"
 
 
 def jsonrpc_notification(method: str, params: dict = None) -> str:

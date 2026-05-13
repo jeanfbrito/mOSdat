@@ -1,0 +1,393 @@
+name: "Rocket.Chat Desktop — Click-to-Call edge cases"
+# Covers edge cases for PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325:
+#   - callto: protocol (not just tel:)
+#   - xdg-open dispatch with callto:+5511999999999
+#   - App remains alive after dispatch
+#   - Protocol registration: MimeType in .desktop entry contains
+#     x-scheme-handler/callto and x-scheme-handler/tel
+#
+# Unlike 3325-feature.yaml, this scenario focuses on:
+#   - The callto: alternative protocol
+#   - Both xdg-open and direct second-instance dispatch
+#   - OS-level desktop entry verification (the .desktop file)
+#   - App survival checks after each protocol dispatch
+
+steps:
+  # ── Pre-test cleanup + deterministic persisted servers ────────────────────
+  - shell: |
+      set -u
+      export DISPLAY=:0
+      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
+
+      # Stop every Rocket.Chat process, including wrapper, child renderers, and
+      # protocol-handler second instances. Previous runs left stale processes
+      # alive and kept old config loaded, so loop until pgrep is empty.
+      for attempt in 1 2 3 4 5 6 7 8; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
+          break
+        fi
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+
+      # Close windows/dialogs that can survive the process or steal focus.
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
+        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
+
+      # Reset both possible userData dirs: dev builds use "Rocket.Chat (development)";
+      # packaged DEBs use "Rocket.Chat". Recreate both so the active one is deterministic.
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+        {
+          "Workspace": "https://rocketchat.jeanbrito.com",
+          "Mobile RC": "https://mobile.rocket.chat"
+        }
+        JSON
+        cat > "$d/config.json" <<'JSON'
+        {
+          "servers": [
+            { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },
+            { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }
+          ],
+          "currentView": { "url": "https://rocketchat.jeanbrito.com/" },
+          "isMenuBarEnabled": true,
+          "isSideBarEnabled": true,
+          "isTrayIconEnabled": false,
+          "isMinimizeOnCloseEnabled": false,
+          "doCheckForUpdatesOnStartup": false,
+          "isUpdatingEnabled": false,
+          "rootWindowState": {
+            "focused": true,
+            "visible": true,
+            "maximized": false,
+            "minimized": false,
+            "fullscreen": false,
+            "normal": true,
+            "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }
+          }
+        }
+        JSON
+      done
+
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
+      echo CLEANUP_AND_SERVERS_READY
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 1: Verify OS-level protocol registration
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Check .desktop file contains both protocol handlers ─────────────────
+  # The electron-builder.json registers MimeType entries for tel: and callto:
+  # These must be present in the installed .desktop file for OS-level dispatch
+  - shell: |
+      DESKTOP_FILE="/usr/share/applications/rocketchat-desktop.desktop"
+      if [ -f "$DESKTOP_FILE" ]; then
+        echo "DESKTOP_FILE_EXISTS"
+        grep -o 'x-scheme-handler/[^;]\+' "$DESKTOP_FILE" | sort -u
+      else
+        echo "DESKTOP_FILE_NOT_FOUND"
+        find /usr/share/applications -name '*rocketchat*' 2>/dev/null || true
+      fi
+
+  # ── Verify specifically x-scheme-handler/tel and callto ─────────────────
+  - shell: |
+      DESKTOP_FILE="/usr/share/applications/rocketchat-desktop.desktop"
+      HAS_TEL=$(grep -c 'x-scheme-handler/tel' "$DESKTOP_FILE" 2>/dev/null || echo 0)
+      HAS_CALLTO=$(grep -c 'x-scheme-handler/callto' "$DESKTOP_FILE" 2>/dev/null || echo 0)
+      echo "HAS_TEL=$HAS_TEL"
+      echo "HAS_CALLTO=$HAS_CALLTO"
+      if [ "$HAS_TEL" -gt 0 ] && [ "$HAS_CALLTO" -gt 0 ]; then
+        echo "PROTOCOL_REGISTRATION_OK"
+      else
+        echo "PROTOCOL_REGISTRATION_MISSING"
+      fi
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 2: Launch app + connect to server
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Launch app clean ─────────────────────────────────────────────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  # ── Wait for app window ──────────────────────────────────────────────────
+  - wait: 15
+
+  # ── Verify login page from deterministic currentView ─────────────────────
+  - verify: |
+      The Rocket.Chat application window shows the Workspace server login or
+      authentication page. Look for an email/username input field, password field,
+      a login/sign-in button, or any connected Workspace page content. It must NOT
+      be the empty 'Add a server' screen and must NOT be a crash dialog.
+    verify_timeout: 30
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 3: Test callto: protocol via xdg-open
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Test 1: callto: via xdg-open ─────────────────────────────────────────
+  # callto: is an alternative to tel: used by SIP clients and some VoIP apps.
+  # The app must register and handle this protocol the same way as tel:.
+  - shell: |
+      export DISPLAY=:0
+      # Use xdg-open which goes through the OS protocol handler registry
+      xdg-open "callto:+5511999999999"
+      echo CALLTO_DISPATCHED_XDG
+
+  # ── Wait for telephony modal to appear ──────────────────────────────────
+  - wait: 10
+
+  # ── Verify Fuselage modal appeared for callto: ─────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers ('Workspace' and
+      'Mobile RC') as clickable options and has a 'Remember this choice' checkbox.
+      This modal appeared in response to a callto: protocol dispatch via xdg-open.
+    retries: 5
+    verify_timeout: 20
+
+  # ── Verify app still alive after callto: dispatch ──────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app survived the
+      callto: protocol dispatch via xdg-open.
+    verify_timeout: 10
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 4: Test callto: via direct second-instance dispatch
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Cancel the current modal first ──────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      # Click center of screen to close/dismiss the modal
+      xdotool mousemove 960 540 click 1
+      echo CLICKED_CLOSE
+
+  - wait: 4
+
+  # ── Test 2: callto: via direct second-instance dispatch ──────────────────
+  # Some scenarios may not have xdg-open working correctly — test direct
+  # second-instance dispatch as the app's fallback dispatch mechanism.
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "callto:+5511999999999" > /dev/null 2>&1 &
+      echo CALLTO_DISPATCHED_DIRECT
+
+  - wait: 10
+
+  # ── Verify modal appeared again ─────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers and has a
+      'Remember this choice' checkbox. This modal appeared in response to a
+      direct second-instance dispatch with callto: protocol.
+    retries: 5
+    verify_timeout: 20
+
+  # ── Verify app alive after direct callto: dispatch ─────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app survived the
+      direct second-instance dispatch of callto: protocol.
+    verify_timeout: 10
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 5: Test tel: via xdg-open (OS-level handler)
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Cancel the current modal ────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1
+      echo CLICKED_CLOSE
+
+  - wait: 4
+
+  # ── Test 3: tel: via xdg-open ────────────────────────────────────────────
+  # xdg-open is the standard way browsers and other apps dispatch tel: links.
+  # This tests the OS-level protocol handler registration pathway.
+  - shell: |
+      export DISPLAY=:0
+      xdg-open "tel:+5511999999999"
+      echo TEL_DISPATCHED_XDG
+
+  - wait: 10
+
+  # ── Verify modal appeared for tel: via xdg-open ────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers and has a
+      'Remember this choice' checkbox. This modal appeared in response to a
+      tel: protocol dispatch via xdg-open.
+    retries: 5
+    verify_timeout: 20
+
+  # ── Verify app alive after tel: via xdg-open ───────────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app survived the
+      tel: protocol dispatch via xdg-open.
+    verify_timeout: 10
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 6: Test tel: via direct second-instance dispatch
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Cancel the current modal ────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1
+      echo CLICKED_CLOSE
+
+  - wait: 4
+
+  # ── Test 4: tel: via direct second-instance dispatch ────────────────────
+  # Direct dispatch bypasses the OS protocol handler and sends the tel: URL
+  # via the app's second-instance mechanism. This is the primary path used
+  # when the app is already running.
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_DIRECT
+
+  - wait: 10
+
+  # ── Verify modal appeared for tel: direct ──────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers and has a
+      'Remember this choice' checkbox. This modal appeared in response to a
+      direct second-instance dispatch with tel: protocol.
+    retries: 5
+    verify_timeout: 20
+
+  # ── Verify app alive after tel: direct dispatch ────────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app survived the
+      direct second-instance dispatch of tel: protocol.
+    verify_timeout: 10
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 7: Big number / non-Brazilian format
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Cancel the current modal ────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1
+      echo CLICKED_CLOSE
+
+  - wait: 4
+
+  # ── Test 5: US-format number via tel: ────────────────────────────────────
+  # US numbers use different digit count — ensure the parser handles it
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+14155551234" > /dev/null 2>&1 &
+      echo TEL_US_NUMBER_DISPATCHED
+
+  - wait: 10
+
+  # ── Verify modal appeared ──────────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers and has a
+      'Remember this choice' checkbox. The modal appeared after dispatching a
+      US-format phone number (+14155551234).
+    retries: 5
+    verify_timeout: 20
+
+  # ── Verify app alive after US number dispatch ──────────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app survived the
+      US-format phone number dispatch.
+    verify_timeout: 10
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 8: Rapid successive dispatches (spam test)
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Cancel the current modal ────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1
+      echo CLICKED_CLOSE
+
+  - wait: 4
+
+  # ── Test 6: Rapid successive calls to tel: ───────────────────────────────
+  # Dispatching multiple tel: calls in quick succession should not crash the app.
+  # The duplicate IPC listener guard (ab816c0db) should prevent multiple modals.
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511888888888" > /dev/null 2>&1 &
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511777777777" > /dev/null 2>&1 &
+      echo TEL_RAPID_DISPATCHED
+
+  - wait: 8
+
+  # ── Verify app alive after rapid dispatches ────────────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app survived
+      rapid successive tel: dispatches. There may be at most one telephony
+      modal visible (duplicate guard prevents multiple).
+    retries: 3
+    verify_timeout: 20
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 9: Verify callto: MimeType in .desktop file (final double-check)
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Final check: MimeType line contains both handlers ───────────────────
+  - shell: |
+      DESKTOP_FILE="/usr/share/applications/rocketchat-desktop.desktop"
+      echo "=== Desktop file MimeType line ==="
+      grep '^MimeType=' "$DESKTOP_FILE" 2>/dev/null || echo "NO_MIMETYPE_LINE"
+      echo ""
+      echo "=== Checking for tel handler ==="
+      grep -q 'x-scheme-handler/tel' "$DESKTOP_FILE" && echo "TEL_FOUND" || echo "TEL_MISSING"
+      echo "=== Checking for callto handler ==="
+      grep -q 'x-scheme-handler/callto' "$DESKTOP_FILE" && echo "CALLTO_FOUND" || echo "CALLTO_MISSING"
+      echo "=== All MimeType entries ==="
+      grep -oP '(?<=MimeType=).*' "$DESKTOP_FILE" | tr ';' '\n' | grep -v '^$'
+
+  # ── Final app alive check ──────────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window is still visible and responsive after
+      all edge case tests. The app should be alive and showing the login page
+      or a visible state. No crash dialog should be present.
+    verify_timeout: 15
+
+  # ── Final cleanup ──────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true; done
+      echo DONE

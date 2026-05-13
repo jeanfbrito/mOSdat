@@ -20,12 +20,18 @@ name: "Rocket.Chat Desktop — Telephony deeplink / protocol handler test"
 steps:
   # ── Pre-test cleanup ──────────────────────────────────────────────────────
   - shell: |
-      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      # Kill ALL RC instances AND persistent apport crash dialog
+      pkill -9 -f rocketchat-desktop.bin 2>/dev/null || true
+      pkill -9 rocketchat-desktop.bin 2>/dev/null || true
       for i in 1 2 3 4 5; do
         sleep 1
-        pgrep -x rocketchat-desktop.bin >/dev/null || break
-        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+        pgrep -f rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -f rocketchat-desktop.bin 2>/dev/null || true
       done
+
+      # Kill the persistent apport crash dialog (process is python3, not apport-gtk)
+      pkill -9 -f "apport-gtk" 2>/dev/null || true
+      pkill -9 -f "apport.*rocketchat" 2>/dev/null || true
 
       # Wipe config dirs so servers.json takes effect fresh
       rm -rf /home/jean/.config/Rocket.Chat/
@@ -52,9 +58,14 @@ steps:
       echo SERVERS_JSON_WRITTEN
 
   # ── Launch app clean ─────────────────────────────────────────────────────
+  # wrapper.sh (PR 3325) forces --ozone-platform=x11 when it can't confirm
+  # Wayland is running. Via SSH, XDG_SESSION_TYPE is "tty" and
+  # WAYLAND_DISPLAY is unset — set all three so wrapper passes through
+  # to Wayland (X11 via SSH crashes: no xauth).
   - shell: |
-      export DISPLAY=:0
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH" XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
       echo APP_LAUNCHED
 
   - wait: 10
@@ -84,7 +95,7 @@ steps:
 
   - shell: |
       export DISPLAY=:0
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu > /dev/null 2>&1 &
       echo APP_LAUNCHED
 
   - wait: 10
@@ -118,7 +129,7 @@ steps:
   # ── Verify Settings shortcut doesn't crash (Ctrl+,) ──────────────────────
   - shell: |
       export DISPLAY=:0
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu > /dev/null 2>&1 &
       echo APP_LAUNCHED
 
   - wait: 10

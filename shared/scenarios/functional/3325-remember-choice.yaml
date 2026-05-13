@@ -7,12 +7,18 @@ name: "Rocket.Chat Desktop — Telephony remember choice + persist + change"
 steps:
   # ── Pre-test cleanup ──────────────────────────────────────────────────────
   - shell: |
-      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      # Kill ALL RC instances AND persistent apport crash dialog
+      pkill -9 -f rocketchat-desktop.bin 2>/dev/null || true
+      pkill -9 rocketchat-desktop.bin 2>/dev/null || true
       for i in 1 2 3 4 5; do
         sleep 1
-        pgrep -x rocketchat-desktop.bin >/dev/null || break
-        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+        pgrep -f rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -f rocketchat-desktop.bin 2>/dev/null || true
       done
+
+      # Kill the persistent apport crash dialog (apport-gtk stays alive)
+      pkill -9 -x apport-gtk 2>/dev/null || true
+      pkill -9 -f "apport.*rocketchat" 2>/dev/null || true
 
       rm -rf "/home/jean/.config/Rocket.Chat (development)"/
       rm -rf "/home/jean/.config/Rocket.Chat (development)/servers.json"
@@ -28,9 +34,20 @@ steps:
       echo SERVERS_JSON_WRITTEN
 
   # ── Launch app ────────────────────────────────────────────────────────────
+  # wrapper.sh (PR 3325) forces --ozone-platform=wayland when it detects a
+  # Wayland socket. Via SSH, the user env has a real Wayland socket, so the
+  # wrapper passes through to Wayland.
+  #
+  # Problem: QEMU virtual GPU (driver null, pci 1234:1111) doesn't support
+  # Wayland rendering — compositor can't paint the window.
+  #
+  # Fix: explicitly pass --disable-gpu --ozone-platform=x11. Electron takes
+  # last occurrence on cmdline, so user args beat wrapper's EXTRA_ARGS.
+  # Also set XAUTHORITY for X11 auth on SSH (no xauth cookies by default).
   - shell: |
-      export DISPLAY=:0
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH" XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
       echo LAUNCHED
 
   # ── Wait for app window ──────────────────────────────────────────────────

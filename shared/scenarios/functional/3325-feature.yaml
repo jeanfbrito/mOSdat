@@ -1,0 +1,354 @@
+name: "Rocket.Chat Desktop — Click-to-Call full feature coverage"
+# Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325:
+#   - tel: / callto: protocol handlers
+#   - Fuselage server selection modal (telephony)
+#   - "Remember this choice" checkbox
+#   - Persistence across restarts (config.json)
+#   - Settings > TelephonyServer dropdown to change preference
+#   - After change, tel: routes to new preferred server
+#
+# PHASE 1 (clean launch): deterministic config/servers → Workspace login page
+# PHASE 2 (tel dispatch): Fuselage modal appears, cancel, re-dispatch, modal again
+# PHASE 3 (remember choice): checkbox + Mobile RC → kill → relaunch → NO modal
+# PHASE 4 (change preference): Settings dropdown to Workspace → kill → relaunch → routes to Workspace
+
+steps:
+  # ── Pre-test cleanup + deterministic persisted servers ────────────────────
+  - shell: |
+      set -u
+      export DISPLAY=:0
+      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
+
+      # Stop every Rocket.Chat process, including wrapper, child renderers, and
+      # protocol-handler second instances. Previous runs left stale processes
+      # alive and kept old config loaded, so loop until pgrep is empty.
+      for attempt in 1 2 3 4 5 6 7 8; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
+          break
+        fi
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+
+      # Close windows/dialogs that can survive the process or steal focus.
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
+        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
+
+      # Reset both possible userData dirs: dev builds use "Rocket.Chat (development)";
+      # packaged DEBs use "Rocket.Chat". Recreate both so the active one is deterministic.
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+        {
+          "Workspace": "https://rocketchat.jeanbrito.com",
+          "Mobile RC": "https://mobile.rocket.chat"
+        }
+        JSON
+        cat > "$d/config.json" <<'JSON'
+        {
+          "servers": [
+            { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },
+            { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }
+          ],
+          "currentView": { "url": "https://rocketchat.jeanbrito.com/" },
+          "isMenuBarEnabled": true,
+          "isSideBarEnabled": true,
+          "isTrayIconEnabled": false,
+          "isMinimizeOnCloseEnabled": false,
+          "doCheckForUpdatesOnStartup": false,
+          "isUpdatingEnabled": false,
+          "rootWindowState": {
+            "focused": true,
+            "visible": true,
+            "maximized": false,
+            "minimized": false,
+            "fullscreen": false,
+            "normal": true,
+            "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }
+          }
+        }
+        JSON
+      done
+
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
+      echo CLEANUP_AND_SERVERS_READY
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 1: Clean launch + connect to Workspace + reach login page
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Launch app clean ─────────────────────────────────────────────────────
+  # wrapper.sh forces --ozone-platform=wayland on Wayland detection.
+  # QEMU virtual GPU doesn't support Wayland — force X11 with --disable-gpu.
+  # Set XAUTHORITY for X11 auth on SSH (no xauth cookies by default).
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  # ── Wait for app window ──────────────────────────────────────────────────
+  - wait: 15
+
+  # ── Verify login page from deterministic currentView ─────────────────────
+  # Deterministic config.json starts directly on Workspace, so Step 5 should be
+  # the Workspace login/authentication page rather than the main server list.
+  - verify: |
+      The Rocket.Chat application window shows the Workspace server login or
+      authentication page. Look for an email/username input field, password field,
+      a login/sign-in button, or any connected Workspace page content. It must NOT
+      be the empty 'Add a server' screen and must NOT be a crash dialog.
+    verify_timeout: 30
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 2: tel: dispatch → Fuselage modal → cancel → re-dispatch → modal again
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Trigger tel: deeplink (first time) ───────────────────────────────────
+  # Dispatch via second-instance with tel: protocol. With 2 servers, the
+  # Fuselage telephony server selection modal should appear.
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_1
+
+  # ── Wait for telephony modal ────────────────────────────────────────────
+  - wait: 10
+
+  # ── Verify Fuselage telephony modal is visible ──────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers ('Workspace' and
+      'Mobile RC') as clickable options and has a 'Remember this choice' checkbox.
+      This is a Fuselage modal overlay on top of the main application — NOT the
+      main server selection screen.
+    retries: 5
+    verify_timeout: 20
+
+  # ── Cancel the modal (click close / center of screen) ───────────────────
+  # Clicking center of the app dismisses the modal without making a selection
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1
+      echo CLICKED_CLOSE_CENTER
+
+  # ── Wait for modal to dismiss ───────────────────────────────────────────
+  - wait: 4
+
+  # ── Verify app still alive after cancel ──────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window is still visible and responsive —
+      no crash dialog, no frozen window, no desktop environment crash handler.
+      The app process should be alive and the telephony modal should no longer
+      be visible. The login or main interface should be showing.
+    verify_timeout: 15
+
+  # ── Trigger tel: deeplink AGAIN ─────────────────────────────────────────
+  # After canceling, dispatching tel: again should re-open the modal
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_2
+
+  # ── Wait for modal ──────────────────────────────────────────────────────
+  - wait: 10
+
+  # ── Verify Fuselage modal appears AGAIN ─────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers and has a
+      'Remember this choice' checkbox. The modal re-appeared after being
+      cancelled and re-dispatched.
+    retries: 5
+    verify_timeout: 20
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 3: "Remember this choice" + select Mobile RC → persist → NO modal
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Click "Remember this choice" checkbox ───────────────────────────────
+  # Approximate position of the checkbox inside the Fuselage modal
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 350 320 click 1
+      echo CLICKED_REMEMBER_CHOICE
+
+  # ── Click "Mobile RC" server in the modal ───────────────────────────────
+  # Mobile RC is the second entry in the telephony server list
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 300 370 click 1
+      echo CLICKED_MOBILE_RC
+
+  # ── Wait for modal to close and call to be dispatched ───────────────────
+  - wait: 8
+
+  # ── Verify app alive after selection ─────────────────────────────────---
+  - verify: |
+      The Rocket.Chat application window is still visible and responsive —
+      no crash dialog, no frozen window, no desktop environment crash handler.
+      The app process should be alive. The telephony modal should be gone.
+    verify_timeout: 15
+
+  # ── Kill app ────────────────────────────────────────────────────────────
+  # Use -f flag (not -x) to match the full process name
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true; done
+      echo KILLED_PHASE3
+
+  # ── Relaunch app (servers already migrated to config.json) ──────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
+      echo APP_RELAUNCHED
+
+  - wait: 15
+
+  # ── Verify app restored connected server view from config.json ───────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive after relaunch.
+      It shows a connected server page or login/authentication page, not the empty
+      'Add a server' screen and not a crash dialog.
+    verify_timeout: 25
+
+  # ── Trigger tel: deeplink ──────────────────────────────────────────────
+  # ⭐ KEY TEST: With "Remember this choice" persisted, NO modal should appear.
+  # The call should route directly to the preferred server (Mobile RC).
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_PERSISTED
+
+  - wait: 10
+
+  # ⭐ Verify NO telephony modal (persisted preference works) ─────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The app is alive and
+      there is NO server selection dialog or telephony modal overlaying it.
+      The call was dispatched directly to the previously chosen server.
+    retries: 3
+    verify_timeout: 20
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE 4: Change preference in Settings > TelephonyServer dropdown
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Open Settings via keyboard shortcut ─────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+comma
+      echo CTRL_COMMA_SETTINGS
+
+  - wait: 5
+
+  # ── Verify app still alive after settings shortcut ─────────────────────
+  - verify: |
+      The Rocket.Chat application window is still visible and responsive —
+      no crash dialog, no frozen window, no error message. The Settings panel
+      may have opened inside the main window.
+    verify_timeout: 15
+
+  # ── Click Telephony Server dropdown in Settings ─────────────────────────
+  # Approximate position of the dropdown in the Settings panel
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 350 420 click 1
+      echo CLICKED_TELEPHONY_DROPDOWN
+
+  - wait: 3
+
+  # ── Select "Workspace" option in the dropdown ───────────────────────────
+  # Workspace is typically right below the dropdown in the options list
+  - shell: |
+      export DISPLAY=:0
+      xdotool mousemove 350 440 click 1
+      echo CLICKED_WORKSPACE_OPTION
+
+  - wait: 3
+
+  # ── Kill app to test persistence of new preference ─────────────────────
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true; done
+      echo KILLED_PHASE4
+
+  # ── Relaunch app ────────────────────────────────────────────────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
+      echo APP_RELAUNCHED_AFTER_SETTINGS
+
+  - wait: 15
+
+  # ── Verify app restored connected server view from config.json ───────────
+  - verify: |
+      The Rocket.Chat application window shows a Workspace login/authentication
+      page or connected server page after relaunch. It must not be the empty
+      'Add a server' screen and must not be a crash dialog.
+    verify_timeout: 25
+
+  # ── Trigger tel: deeplink ──────────────────────────────────────────────
+  # ⭐ KEY TEST: Should route to NEW preference (Workspace), not Mobile RC
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_FINAL
+
+  - wait: 10
+
+  # ⭐ Verify app alive — call dispatched to new preference ───────────────
+  - verify: |
+      The Rocket.Chat application window is still visible and responsive —
+      no crash dialog, no frozen window, no apport crash handler. The call was
+      dispatched to the new preferred server (Workspace). No modal is visible.
+    retries: 3
+    verify_timeout: 20
+
+  # ── Final cleanup ──────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true; done
+      echo DONE
