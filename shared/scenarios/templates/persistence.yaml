@@ -3,15 +3,15 @@ name: "PR-{pr_or_desc}: Persistence — {description}"
 steps:
   # ══════════════ PHASE 1: clean → interact → enable → kill ══════════════
   - shell: |
-      pkill -9 rocketchat-desktop.bin 2>/dev/null || true
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
       sleep 2
   - shell: |
       export DISPLAY=:0
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
-      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      cat > "$HOME/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      {{ "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }}
       EOF
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
       echo LAUNCHED
@@ -21,7 +21,7 @@ steps:
       authentication screen with fields for email/username and password.
     verify_timeout: 20
   # TODO: login and navigate to feature, enable persistence setting
-  - shell: pkill -9 rocketchat-desktop.bin 2>/dev/null; echo KILLED
+  - shell: pkill -9 -x rocketchat-desktop.bin 2>/dev/null; echo KILLED
 
   # ══════════════ PHASE 2: relaunch → verify persisted ══════════════
   - shell: |

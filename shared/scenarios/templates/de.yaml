@@ -24,7 +24,7 @@ steps:
   - shell: |
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
   - shell: |
       export DISPLAY=:0

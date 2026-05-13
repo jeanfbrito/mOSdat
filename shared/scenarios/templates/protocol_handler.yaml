@@ -5,14 +5,14 @@ steps:
   - shell: |
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
 
   # ── Write servers.json & launch ──
   - shell: |
-      mkdir -p "/home/jean/.config/Rocket.Chat (development)"
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
-      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      mkdir -p "$HOME/.config/Rocket.Chat (development)"
+      cat > "$HOME/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      {{ "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }}
       EOF
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
@@ -39,7 +39,7 @@ steps:
       export DISPLAY=:0
       USERDATA_DIR="$(
         ps aux | grep 'rocketchat-desktop' | grep -v grep |
-        grep -oP '--user-data-dir=\K\S+' || echo "/home/jean/.config/Rocket.Chat (development)"
+        grep -oP '--user-data-dir=\K\S+' || echo "$HOME/.config/Rocket.Chat (development)"
       )"
       echo "USERDATA_DIR=$USERDATA_DIR"
       # Dispatch telephony deeplink

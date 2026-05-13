@@ -5,12 +5,12 @@ steps:
   - shell: |
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
   - shell: |
       export DISPLAY=:0
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
-      { "Workspace": "https://rocketchat.jeanbrito.com" }
+      cat > "$HOME/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      {{ "Workspace": "https://rocketchat.jeanbrito.com" }}
       EOF
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
       echo LAUNCHED
@@ -21,7 +21,7 @@ steps:
   - wait: 5
   - verify: "A settings window or preferences dialog is visible"
   # TODO: navigate to specific setting, toggle/change it
-  - shell: pkill -9 rocketchat-desktop.bin 2>/dev/null; echo KILLED
+  - shell: pkill -9 -x rocketchat-desktop.bin 2>/dev/null; echo KILLED
 
   # ── Phase 2: relaunch → verify setting persisted ──
   - shell: |

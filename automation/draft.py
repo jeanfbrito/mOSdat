@@ -70,15 +70,15 @@ TEMPLATES["persistence"] = """name: "PR-{pr_or_desc}: Persistence — {descripti
 steps:
   # ══════════════ PHASE 1: clean → interact → enable → kill ══════════════
   - shell: |
-      pkill -9 rocketchat-desktop.bin 2>/dev/null || true
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
       sleep 2
   - shell: |
       export DISPLAY=:0
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
-      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      cat > "$HOME/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      {{ "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }}
       EOF
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
       echo LAUNCHED
@@ -88,7 +88,7 @@ steps:
       authentication screen with fields for email/username and password.
     verify_timeout: 20
   # TODO: login and navigate to feature, enable persistence setting
-  - shell: pkill -9 rocketchat-desktop.bin 2>/dev/null; echo KILLED
+  - shell: pkill -9 -x rocketchat-desktop.bin 2>/dev/null; echo KILLED
 
   # ══════════════ PHASE 2: relaunch → verify persisted ══════════════
   - shell: |
@@ -112,14 +112,14 @@ steps:
   - shell: |
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
 
   # ── Write servers.json & launch ──
   - shell: |
-      mkdir -p "/home/jean/.config/Rocket.Chat (development)"
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
-      { "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }
+      mkdir -p "$HOME/.config/Rocket.Chat (development)"
+      cat > "$HOME/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      {{ "Workspace": "https://rocketchat.jeanbrito.com", "Mobile RC": "https://mobile.rocket.chat" }}
       EOF
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
@@ -146,7 +146,7 @@ steps:
       export DISPLAY=:0
       USERDATA_DIR="$(
         ps aux | grep 'rocketchat-desktop' | grep -v grep |
-        grep -oP '--user-data-dir=\\K\\S+' || echo "/home/jean/.config/Rocket.Chat (development)"
+        grep -oP '--user-data-dir=\\K\\S+' || echo "$HOME/.config/Rocket.Chat (development)"
       )"
       echo "USERDATA_DIR=$USERDATA_DIR"
       # Dispatch telephony deeplink
@@ -189,12 +189,12 @@ steps:
   - shell: |
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
   - shell: |
       export DISPLAY=:0
-      cat > "/home/jean/.config/Rocket.Chat (development)/servers.json" << 'EOF'
-      { "Workspace": "https://rocketchat.jeanbrito.com" }
+      cat > "$HOME/.config/Rocket.Chat (development)/servers.json" << 'EOF'
+      {{ "Workspace": "https://rocketchat.jeanbrito.com" }}
       EOF
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox > /dev/null 2>&1 &
       echo LAUNCHED
@@ -205,7 +205,7 @@ steps:
   - wait: 5
   - verify: "A settings window or preferences dialog is visible"
   # TODO: navigate to specific setting, toggle/change it
-  - shell: pkill -9 rocketchat-desktop.bin 2>/dev/null; echo KILLED
+  - shell: pkill -9 -x rocketchat-desktop.bin 2>/dev/null; echo KILLED
 
   # ── Phase 2: relaunch → verify setting persisted ──
   - shell: |
@@ -269,7 +269,7 @@ steps:
   - shell: |
       pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
       sleep 2
-      rm -rf "/home/jean/.config/Rocket.Chat (development)"/
+      rm -rf "$HOME/.config/Rocket.Chat (development)"/
       echo FULL_CLEAN
   - shell: |
       export DISPLAY=:0
@@ -287,11 +287,11 @@ steps:
   - shell: |
       test -f /etc/xdg/autostart/rocketchat-desktop.desktop \
          || test -f /usr/share/autostart/rocketchat-desktop.desktop \
-         || test -f /home/jean/.config/autostart/rocketchat-desktop.desktop
+         || test -f $HOME/.config/autostart/rocketchat-desktop.desktop
       echo AUTOSTART_FILE_OK
   - shell: |
       grep -q "X-GNOME-Autostart-enabled=true" \\
-        /home/jean/.config/autostart/rocketchat-desktop.desktop 2>/dev/null || \\
+        $HOME/.config/autostart/rocketchat-desktop.desktop 2>/dev/null || \\
         echo "Check autostart enabled flag manually"
       echo AUTOSTART_CHECKED
 """
