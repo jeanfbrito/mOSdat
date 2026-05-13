@@ -94,7 +94,10 @@ def jsonrpc_result(req: Request, result: Any) -> str:
     MCP uses raw result objects for initialize/tools/list, but tools/call must
     return a CallToolResult shape: {content: [{type: "text", text: "..."}]}.
     """
-    if req.get("method") == "tools/call" and "content" not in (result or {}):
+    needs_wrap = req.get("method") == "tools/call" and not (
+        isinstance(result, dict) and "content" in result
+    )
+    if needs_wrap:
         text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         result = {"content": [{"type": "text", "text": text}]}
 
