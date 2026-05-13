@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
 
 
 @dataclass
@@ -156,8 +156,10 @@ class SessionRecorder:
                 frame_path = self.raw_dir / frame_name
                 img.save(frame_path)
                 self._append_index(frame_name)
-            except Exception:
+            except Exception as exc:
                 self._capture_errors += 1
+                if self._capture_errors == 1 or self._capture_errors % 10 == 0:
+                    self._log(f"capture error #{self._capture_errors}: {exc}")
 
     def _append_index(self, frame_name: str) -> None:
         record = {
@@ -168,19 +170,16 @@ class SessionRecorder:
             f.write(json.dumps(record) + "\n")
 
     @staticmethod
-    def _thumb(image_path: Path) -> list[int]:
+    def _thumb(image_path: Path) -> Image.Image:
         with Image.open(image_path) as img:
-            thumb = img.convert("L").resize((64, 64), Image.Resampling.BILINEAR)
-            return list(thumb.getdata())
+            return img.convert("L").resize((64, 64), Image.Resampling.BILINEAR)
 
     @staticmethod
-    def _mean_abs_diff(a: list[int], b: list[int]) -> float:
-        if not a or not b or len(a) != len(b):
+    def _mean_abs_diff(a: Image.Image, b: Image.Image) -> float:
+        if a.size != b.size or a.mode != b.mode:
             return 255.0
-        total = 0
-        for i, px in enumerate(a):
-            total += abs(px - b[i])
-        return total / len(a)
+        diff = ImageChops.difference(a, b)
+        return float(ImageStat.Stat(diff).mean[0])
 
     def _filter_and_copy(self, raw_frames: list[Path]) -> list[Path]:
         if self.filtered_dir.exists():
@@ -231,7 +230,10 @@ class SessionRecorder:
                 line = raw_line.strip()
                 if not line:
                     continue
-                rec = json.loads(line)
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 name = rec.get("frame")
                 ts_raw = rec.get("ts")
                 if not isinstance(name, str) or not isinstance(ts_raw, str):
