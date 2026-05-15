@@ -1,0 +1,555 @@
+name: "Rocket.Chat Desktop — Global Telephony Shortcut (PR #3325 §F5)"
+# Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325
+# Feature area: F5 — configurable global keyboard shortcut for telephony.
+#
+# Shortcut choice: Ctrl+Shift+T
+#   - Unlikely to clash with GNOME/KDE defaults (Ctrl+T opens terminal in GNOME Files,
+#     not in the desktop env itself; Ctrl+Shift+T reopens tabs in terminals but only
+#     when a terminal window is focused — an acceptable trade-off).
+#   - If this clashes in the target DE, change to Ctrl+Shift+F8 in step "capture shortcut".
+#
+# Tool dependencies (must be pre-installed on test VM):
+#   - xdotool   — key synthesis + window focus
+#   - wmctrl    — window listing/closing
+#   - xclip     — clipboard manipulation (preferred); fallback: xsel
+#   - /opt/Rocket.Chat/rocketchat-desktop — packaged DEB install
+#
+# Dependency on other scenarios:
+#   Master toggle (F1) must work. If the toggle toggle fails to persist ON,
+#   the shortcut will never register and Phases 3-7 will all fail.
+#
+# PHASES:
+#   1. Clean state + deterministic servers + launch
+#   2. Enable master toggle (Settings > General → Telephony ON)
+#   3. Configure shortcut (Settings > General → capture Ctrl+Shift+T → Save)
+#   4. Trigger shortcut with phone-like clipboard (+1 800 555-0199) → dial pad pre-filled
+#   5. Trigger shortcut with non-phone clipboard ("hello") → dial pad open, input EMPTY
+#   6. Clear shortcut → subsequent trigger does NOT focus RC
+#   7. Disable master toggle → shortcut unregistered, trigger does nothing
+
+steps:
+  # ════════════════════════════════════════════════════════════════════════════
+  # PRE-TEST: Verify tool dependencies
+  # ════════════════════════════════════════════════════════════════════════════
+  - shell: |
+      set -e
+      missing=""
+      for tool in xdotool wmctrl; do
+        which "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+      done
+      # xclip or xsel — at least one required
+      if ! which xclip >/dev/null 2>&1 && ! which xsel >/dev/null 2>&1; then
+        missing="$missing xclip-or-xsel"
+      fi
+      if [ -n "$missing" ]; then
+        echo "MISSING TOOLS:$missing"
+        echo "Install with: sudo apt-get install xdotool wmctrl xclip"
+        exit 1
+      fi
+      # Set CLIP variable for all clipboard steps below
+      which xclip >/dev/null 2>&1 && echo "CLIP_CMD=xclip" || echo "CLIP_CMD=xsel"
+      echo TOOLS_OK
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 1: Clean state + deterministic servers + launch
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Kill any running RC instances and reset userData ─────────────────────
+  - shell: |
+      set -u
+      export DISPLAY=:0
+      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
+
+      for attempt in 1 2 3 4 5 6 7 8; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
+          break
+        fi
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+
+      # Close any crash/apport dialogs that steal focus
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
+        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
+
+      # Reset both possible userData dirs (dev build uses "Rocket.Chat (development)")
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+        {
+          "Workspace": "https://rocketchat.jeanbrito.com",
+          "Mobile RC": "https://mobile.rocket.chat"
+        }
+        JSON
+        cat > "$d/config.json" <<'JSON'
+        {
+          "servers": [
+            { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },
+            { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }
+          ],
+          "currentView": { "url": "https://rocketchat.jeanbrito.com/" },
+          "isMenuBarEnabled": true,
+          "isSideBarEnabled": true,
+          "isTrayIconEnabled": false,
+          "isMinimizeOnCloseEnabled": false,
+          "doCheckForUpdatesOnStartup": false,
+          "isUpdatingEnabled": false,
+          "rootWindowState": {
+            "focused": true,
+            "visible": true,
+            "maximized": false,
+            "minimized": false,
+            "fullscreen": false,
+            "normal": true,
+            "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }
+          }
+        }
+        JSON
+      done
+
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
+      echo CLEANUP_AND_SERVERS_READY
+
+  # ── Launch app (X11 over SSH, virtual GPU, no sandbox) ───────────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  - wait: 15
+
+  # ── Verify login/workspace page loaded ───────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows the Workspace server login or
+      authentication page. An email/username field, password field, and
+      login button are visible, or the server's main interface is shown.
+      Must NOT be the empty 'Add a server' screen. Must NOT be a crash dialog.
+    verify_timeout: 30
+    retries: 0
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 2: Enable master toggle (Settings > General → Telephony ON)
+  # Prerequisite: shortcut will not register until master toggle is ON
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Open Settings via keyboard shortcut ──────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+comma
+      echo SETTINGS_OPENED
+  - wait: 5
+
+  # ── Verify Settings panel is open ────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat Settings panel is open and visible. A settings or
+      preferences panel with configuration options is shown — General tab
+      or a similar section with toggles and controls.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Locate the Telephony master toggle and click it ON ───────────────────
+  - localize: "Telephony toggle or switch in Settings > General — the master on/off switch for the Telephony feature, currently in OFF state"
+    click: true
+  - wait: 3
+
+  # ── Verify Telephony toggle is now ON ────────────────────────────────────
+  - verify: |
+      The Telephony toggle or switch in the Settings panel is now in the ON
+      or enabled state. The toggle appears active, checked, or highlighted.
+      Subordinate controls such as 'Telephony Server' and 'Telephony Global
+      Shortcut' should be visible and enabled (not greyed out).
+    verify_timeout: 15
+    retries: 5
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 3: Configure global shortcut (Ctrl+Shift+T)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Navigate to Settings > General (already open from Phase 2) ───────────
+  # Settings panel should still be open. Locate the shortcut capture field.
+  - localize: "Telephony Global Shortcut input or key-capture field in Settings > General"
+    click: true
+  - wait: 2
+
+  # ── Press the desired shortcut keys into the capture field ───────────────
+  # Ctrl+Shift+T chosen: safe on GNOME/KDE when no terminal is focused.
+  # The capture field intercepts key events and records the combo.
+  - key: ctrl+shift+t
+  - wait: 2
+
+  # ── Verify the capture field now shows the recorded shortcut ─────────────
+  - verify: |
+      The Telephony Global Shortcut capture field in Settings shows a keyboard
+      shortcut — likely 'Ctrl+Shift+T', 'Ctrl+⇧+T', or similar representation
+      of the combo just pressed. The field should not be empty.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Click Save next to the shortcut field ───────────────────────────────
+  - localize: "Save button next to the Telephony Global Shortcut field"
+    click: true
+  - wait: 3
+
+  # ── Verify the shortcut is saved and field still shows the combo ─────────
+  - verify: |
+      The Telephony Global Shortcut field in Settings shows the saved
+      keyboard combo 'Ctrl+Shift+T', 'Ctrl+⇧+T', or equivalent notation.
+      The Save button has been clicked and the field retains its value.
+      No error or validation dialog is visible.
+    verify_timeout: 20
+    retries: 5
+
+  # ── Close Settings (press Escape) ────────────────────────────────────────
+  - key: Escape
+  - wait: 3
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 4: Trigger shortcut with phone-like clipboard
+  # Expected: RC focuses + dial pad opens with number pre-filled
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Set clipboard to a phone number (≥3 digits → should pre-fill) ────────
+  - shell: |
+      export DISPLAY=:0
+      PHONE='+1 (800) 555-0199'
+      if which xclip >/dev/null 2>&1; then
+        printf '%s' "$PHONE" | xclip -selection clipboard
+      elif which xsel >/dev/null 2>&1; then
+        printf '%s' "$PHONE" | xsel --clipboard --input
+      else
+        echo "ERROR: neither xclip nor xsel found — cannot set clipboard"
+        exit 1
+      fi
+      echo CLIPBOARD_SET_PHONE
+
+  # ── Focus a different window so RC is in background ──────────────────────
+  # wmctrl -a finds an existing terminal-like window by title fragment.
+  # If not found, open file manager as fallback so focus leaves RC.
+  - shell: |
+      export DISPLAY=:0
+      # Try to focus a terminal window
+      if wmctrl -a 'Terminal' 2>/dev/null; then
+        echo FOCUSED_TERMINAL
+      elif wmctrl -a 'terminal' 2>/dev/null; then
+        echo FOCUSED_TERMINAL_LC
+      elif wmctrl -a 'Files' 2>/dev/null; then
+        echo FOCUSED_FILES
+      else
+        # Open a fresh terminal to ensure something else is focused
+        nohup xterm -geometry 80x24+100+100 > /dev/null 2>&1 &
+        sleep 2
+        echo OPENED_XTERM_FOR_FOCUS
+      fi
+
+  - wait: 2
+
+  # ── Verify RC is NOT the focused/foreground window ───────────────────────
+  - verify: |
+      The Rocket.Chat application window is NOT the currently focused window.
+      Another window (terminal, file manager, or similar) is in the foreground.
+      RC may be visible in the background but should not have keyboard focus.
+    verify_timeout: 10
+    retries: 3
+
+  # ── Fire the global shortcut from outside RC ─────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+shift+t
+      echo SHORTCUT_FIRED_PHONE
+
+  - wait: 5
+
+  # ── Verify RC came to foreground and dial pad shows pre-filled number ─────
+  - verify: |
+      The Rocket.Chat application window is now focused and in the foreground.
+      A dial pad or telephony dialer panel is visible. The number input field
+      is pre-filled with the phone number from clipboard — expect to see
+      '+18005550199', '18005550199', '(800) 555-0199', '+1 (800) 555-0199',
+      or a similar normalized form of the clipboard number.
+      Must NOT be empty input. Must NOT show any error dialog or alert.
+    verify_timeout: 20
+    verify_consistent: true
+    retries: 5
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 5: Trigger shortcut with non-phone clipboard (< 3 digits)
+  # Expected: dial pad opens with EMPTY input, NO error dialog
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Close any open dial pad (press Escape) ───────────────────────────────
+  - key: Escape
+  - wait: 2
+
+  # ── Set clipboard to non-phone text ──────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      TEXT='hello'
+      if which xclip >/dev/null 2>&1; then
+        printf '%s' "$TEXT" | xclip -selection clipboard
+      elif which xsel >/dev/null 2>&1; then
+        printf '%s' "$TEXT" | xsel --clipboard --input
+      else
+        echo "ERROR: neither xclip nor xsel found"
+        exit 1
+      fi
+      echo CLIPBOARD_SET_NONPHONE
+
+  # ── Focus a different window ──────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      if wmctrl -a 'Terminal' 2>/dev/null; then
+        echo FOCUSED_TERMINAL
+      elif wmctrl -a 'terminal' 2>/dev/null; then
+        echo FOCUSED_TERMINAL_LC
+      elif wmctrl -a 'xterm' 2>/dev/null; then
+        echo FOCUSED_XTERM
+      else
+        nohup xterm -geometry 80x24+100+100 > /dev/null 2>&1 &
+        sleep 2
+        echo OPENED_XTERM
+      fi
+
+  - wait: 2
+
+  # ── Fire global shortcut ─────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+shift+t
+      echo SHORTCUT_FIRED_NONPHONE
+
+  - wait: 5
+
+  # ── Verify dial pad open with EMPTY input — no error ────────────────────
+  - verify: |
+      The Rocket.Chat application window is focused and a dial pad or telephony
+      dialer panel is visible. The number input field is EMPTY — no digits are
+      pre-filled. There is no error dialog, no alert, no warning notification.
+      The dial pad simply opened empty because the clipboard text 'hello' does
+      not contain enough digits (< 3) to be treated as a phone number.
+    verify_timeout: 20
+    retries: 5
+  - verify_not: "any error dialog, alert box, or warning notification is visible on screen"
+    verify_timeout: 10
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 6: Clear shortcut → shortcut no longer triggers RC focus
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Close dial pad (Escape) and open Settings ────────────────────────────
+  - key: Escape
+  - wait: 2
+
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+comma
+      echo SETTINGS_OPENED_FOR_CLEAR
+  - wait: 5
+
+  # ── Verify Settings open ─────────────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat Settings panel is open showing General settings with
+      Telephony controls visible. The Telephony Global Shortcut field shows
+      the previously saved combo (Ctrl+Shift+T or equivalent).
+    verify_timeout: 15
+    retries: 3
+
+  # ── Click Clear button next to the shortcut field ────────────────────────
+  - localize: "Clear button next to the Telephony Global Shortcut field"
+    click: true
+  - wait: 3
+
+  # ── Verify shortcut field is now empty ───────────────────────────────────
+  - verify: |
+      The Telephony Global Shortcut field in Settings is now empty — it shows
+      a placeholder or blank state. No keyboard shortcut combo is displayed in
+      the field. No error dialog is visible.
+    verify_timeout: 15
+    retries: 5
+
+  # ── Close Settings ────────────────────────────────────────────────────────
+  - key: Escape
+  - wait: 3
+
+  # ── Set clipboard to phone text to confirm shortcut is gone ──────────────
+  - shell: |
+      export DISPLAY=:0
+      PHONE='+1 (800) 555-0199'
+      if which xclip >/dev/null 2>&1; then
+        printf '%s' "$PHONE" | xclip -selection clipboard
+      elif which xsel >/dev/null 2>&1; then
+        printf '%s' "$PHONE" | xsel --clipboard --input
+      else
+        echo "ERROR: neither xclip nor xsel found"
+        exit 1
+      fi
+      echo CLIPBOARD_SET_PHONE_AFTER_CLEAR
+
+  # ── Focus a different window ──────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      if wmctrl -a 'Terminal' 2>/dev/null; then
+        echo FOCUSED_TERMINAL
+      elif wmctrl -a 'xterm' 2>/dev/null; then
+        echo FOCUSED_XTERM
+      else
+        nohup xterm -geometry 80x24+100+100 > /dev/null 2>&1 &
+        sleep 2
+        echo OPENED_XTERM
+      fi
+
+  - wait: 2
+
+  # ── Record which window currently has focus (pre-trigger baseline) ────────
+  # We capture the active window ID before triggering the (now cleared) shortcut.
+  - shell: |
+      export DISPLAY=:0
+      ACTIVE=$(xdotool getactivewindow 2>/dev/null || echo "UNKNOWN")
+      echo "ACTIVE_BEFORE_TRIGGER=$ACTIVE"
+
+  # ── Trigger the cleared shortcut combo ───────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+shift+t
+      echo SHORTCUT_FIRED_AFTER_CLEAR
+
+  - wait: 5
+
+  # ── Verify RC did NOT come to foreground (shortcut is cleared/unregistered)
+  - verify: |
+      The Rocket.Chat application window did NOT come to the foreground.
+      The previously focused non-RC window (terminal, xterm, etc.) is still
+      the active/focused window. RC has NOT jumped to the front, no dial pad
+      opened, and the keyboard focus remained on the other application.
+    verify_timeout: 20
+    retries: 5
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 7: Disable master toggle → shortcut unregistered even if re-set
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Bring RC to focus to open Settings ───────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      # Attempt wmctrl first, fall back to xdotool
+      wmctrl -a 'Rocket.Chat' 2>/dev/null || xdotool search --name 'Rocket.Chat' windowfocus 2>/dev/null || true
+      echo RC_FOCUSED_FOR_SETTINGS
+  - wait: 2
+
+  # ── Open Settings ────────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+comma
+      echo SETTINGS_OPENED_FOR_TOGGLE_OFF
+  - wait: 5
+
+  # ── Verify Settings open with Telephony toggle still ON ──────────────────
+  - verify: |
+      The Rocket.Chat Settings panel is open. The Telephony master toggle
+      is visible and in the ON/enabled state. The shortcut field is empty
+      (cleared in Phase 6).
+    verify_timeout: 15
+    retries: 3
+
+  # ── Re-configure a shortcut so there IS a shortcut to test ───────────────
+  # (We cleared it in Phase 6; need it set again to test toggle-OFF behavior)
+  - localize: "Telephony Global Shortcut input or key-capture field in Settings > General"
+    click: true
+  - wait: 2
+  - key: ctrl+shift+t
+  - wait: 2
+  - localize: "Save button next to the Telephony Global Shortcut field"
+    click: true
+  - wait: 3
+
+  # ── Verify shortcut is configured again ──────────────────────────────────
+  - verify: |
+      The Telephony Global Shortcut field shows 'Ctrl+Shift+T' or equivalent.
+      The shortcut has been re-saved for the master-toggle-OFF test.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Now disable the master toggle (Telephony OFF) ────────────────────────
+  - localize: "Telephony toggle or switch in Settings > General — the master on/off switch for Telephony, currently in ON state"
+    click: true
+  - wait: 3
+
+  # ── Verify master toggle is now OFF ──────────────────────────────────────
+  - verify: |
+      The Telephony master toggle in Settings is now in the OFF or disabled state.
+      The toggle appears inactive or unchecked. Subordinate controls such as
+      'Telephony Server' and 'Telephony Global Shortcut' may still be visible
+      but should appear greyed out or disabled.
+    verify_timeout: 15
+    retries: 5
+
+  # ── Close Settings ────────────────────────────────────────────────────────
+  - key: Escape
+  - wait: 3
+
+  # ── Focus a different window ──────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      if wmctrl -a 'xterm' 2>/dev/null; then
+        echo FOCUSED_XTERM
+      elif wmctrl -a 'Terminal' 2>/dev/null; then
+        echo FOCUSED_TERMINAL
+      else
+        nohup xterm -geometry 80x24+100+100 > /dev/null 2>&1 &
+        sleep 2
+        echo OPENED_XTERM
+      fi
+
+  - wait: 2
+
+  # ── Fire the shortcut combo (toggle is OFF → should be unregistered) ─────
+  - shell: |
+      export DISPLAY=:0
+      xdotool key ctrl+shift+t
+      echo SHORTCUT_FIRED_TOGGLE_OFF
+
+  - wait: 5
+
+  # ── Verify RC did NOT come to foreground (shortcut unregistered) ──────────
+  - verify: |
+      The Rocket.Chat application window did NOT come to the foreground.
+      The non-RC window (terminal or xterm) is still focused and active.
+      RC has NOT jumped to front, no dial pad opened. The keyboard shortcut
+      was effectively unregistered because the master Telephony toggle is OFF.
+    verify_timeout: 20
+    retries: 5
+  - verify_not: "Rocket.Chat dial pad or telephony panel is visible in the foreground"
+    verify_timeout: 10
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # FINAL CLEANUP
+  # ════════════════════════════════════════════════════════════════════════════
+
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
+        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      # Kill any xterm instances opened during test
+      pkill -KILL -x xterm 2>/dev/null || true
+      echo DONE

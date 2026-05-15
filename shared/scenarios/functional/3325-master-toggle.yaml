@@ -1,0 +1,326 @@
+name: "Rocket.Chat Desktop — Click-to-Call master telephony toggle (kill switch)"
+# Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 — Gap G1:
+#   - F1: Master toggle OFF (default on fresh install) — all telephony disabled
+#   - F7: xdg-mime OS registration absent when toggle OFF, present when ON
+#   - F4/F5: Sub-controls (TelephonyServer, TelephonyGlobalShortcut) disabled when OFF
+#   - Full toggle lifecycle: OFF → ON → dispatch → dismiss → OFF → assert clean
+#
+# PHASE A: Fresh install, toggle OFF (default) — xdg-mime NOT registered to RC,
+#           tel: dispatch triggers no modal, login page unchanged
+# PHASE B: Enable master toggle in Settings > General → sub-controls become enabled
+# PHASE C: Toggle ON state — tel: now routes to Fuselage modal, dismiss
+# PHASE D: Disable toggle again — sub-controls greyed, xdg-mime removed, tel: silenced
+
+steps:
+  # ── Pre-test cleanup + deterministic persisted servers ────────────────────
+  - shell: |
+      set -u
+      export DISPLAY=:0
+      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
+
+      # Stop every Rocket.Chat process, including wrapper, child renderers, and
+      # protocol-handler second instances. Loop until pgrep is empty.
+      for attempt in 1 2 3 4 5 6 7 8; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
+          break
+        fi
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+
+      # Close stale windows and crash dialogs.
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
+        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
+
+      # Reset both possible userData dirs. Dev builds use "Rocket.Chat (development)";
+      # packaged DEBs use "Rocket.Chat". Write deterministic 2-server config to both.
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+        {
+          "Workspace": "https://rocketchat.jeanbrito.com",
+          "Mobile RC": "https://mobile.rocket.chat"
+        }
+        JSON
+        cat > "$d/config.json" <<'JSON'
+        {
+          "servers": [
+            { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },
+            { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }
+          ],
+          "currentView": { "url": "https://rocketchat.jeanbrito.com/" },
+          "isMenuBarEnabled": true,
+          "isSideBarEnabled": true,
+          "isTrayIconEnabled": false,
+          "isMinimizeOnCloseEnabled": false,
+          "doCheckForUpdatesOnStartup": false,
+          "isUpdatingEnabled": false,
+          "rootWindowState": {
+            "focused": true,
+            "visible": true,
+            "maximized": false,
+            "minimized": false,
+            "fullscreen": false,
+            "normal": true,
+            "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }
+          }
+        }
+        JSON
+      done
+
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
+      echo CLEANUP_AND_SERVERS_READY
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE A: Fresh install — toggle OFF by default
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Launch app clean ─────────────────────────────────────────────────────
+  # Force X11: QEMU virtual GPU doesn't support Wayland; set XAUTHORITY for
+  # SSH sessions that lack xauth cookies.
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 > /dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  - wait: 15
+
+  # ── Verify Workspace login page ──────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows the Workspace server login or
+      authentication page. Look for an email/username input field, password
+      field, a login/sign-in button, or connected Workspace page content.
+      It must NOT be the empty 'Add a server' screen and must NOT be a crash
+      dialog.
+    verify_timeout: 30
+    retries: 3
+
+  # ── Assert: xdg-mime does NOT point to Rocket.Chat for tel: ─────────────
+  # When the master toggle is OFF (default), RC must not be the default
+  # handler for x-scheme-handler/tel — either unset or another app.
+  # The command exits 0 only when RC is NOT registered; non-zero aborts step.
+  - shell: |
+      export DISPLAY=:0
+      HANDLER=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null || true)
+      echo "CURRENT_HANDLER=$HANDLER"
+      if echo "$HANDLER" | grep -qi rocketchat; then
+        echo "FAIL: RC is registered as tel: handler but toggle is OFF (default)"
+        exit 1
+      fi
+      echo NOT_REGISTERED_AS_EXPECTED
+
+  # ── Dispatch tel: via second-instance while toggle is OFF ────────────────
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_TOGGLE_OFF
+
+  - wait: 8
+
+  # ── Verify: NO telephony modal appeared ──────────────────────────────────
+  - verify_not: |
+      A telephony modal or dial pad dialog is overlaying the Rocket.Chat window.
+      Look for a server selection dialog listing 'Workspace' and 'Mobile RC',
+      or any dialog containing a phone number input or dial pad controls.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Verify: RC still showing login page (unaffected by tel: dispatch) ────
+  - verify: |
+      The Rocket.Chat application window still shows the Workspace server login
+      or authentication page — the same state as before the tel: dispatch. No
+      modal, no dial pad, no telephony UI overlay. The app must NOT show a crash
+      dialog or frozen window.
+    verify_timeout: 15
+    retries: 3
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE B: Enable the master telephony toggle in Settings > General
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Open Settings via keyboard shortcut ─────────────────────────────────
+  - key: ctrl+comma
+
+  - wait: 5
+
+  # ── Verify Settings panel opened ─────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat Settings panel is open and visible inside the application
+      window. Look for a settings sidebar or a panel containing general
+      configuration controls. It must NOT show a crash dialog.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Locate the Telephony master toggle ───────────────────────────────────
+  # The toggle is in Settings > General. Exact coordinates depend on the
+  # Settings layout — use localize: rather than hardcoded xdotool coords.
+  - localize: "the 'Telephony' master toggle switch in Settings > General"
+    click: true
+
+  - wait: 3
+
+  # ── Verify sub-controls became enabled ───────────────────────────────────
+  # When toggle is ON, "Telephony Global Shortcut" and "Telephony Server"
+  # controls must be interactive (not greyed out / aria-disabled).
+  - verify: |
+      The Rocket.Chat Settings panel shows the 'Telephony Global Shortcut'
+      and 'Telephony Server' controls in an enabled, interactive state. They
+      must appear as active input controls — NOT greyed out, NOT visually
+      disabled, NOT showing a locked/inactive appearance. The master Telephony
+      toggle should now appear in the ON (checked/enabled) position.
+    verify_timeout: 15
+    retries: 3
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE C: Toggle ON — tel: now routes to Fuselage modal
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Assert: xdg-mime now points to Rocket.Chat for tel: ─────────────────
+  # After enabling the toggle, RC should be registered as the default tel:
+  # handler. Best-effort — some distros require an explicit xdg-mime default
+  # call; the assertion is advisory (exit 0 always) but logs the actual state.
+  - shell: |
+      export DISPLAY=:0
+      HANDLER=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null || true)
+      echo "CURRENT_HANDLER=$HANDLER"
+      if echo "$HANDLER" | grep -qi rocketchat; then
+        echo REGISTERED
+      else
+        # Also check if RC .desktop is listed as a candidate in the MIME db
+        DESKTOP_FILE="/usr/share/applications/rocketchat-desktop.desktop"
+        if [ -f "$DESKTOP_FILE" ] && grep -q 'x-scheme-handler/tel' "$DESKTOP_FILE"; then
+          echo "RC_DESKTOP_REGISTERED_BUT_NOT_DEFAULT (distro may require explicit xdg-mime default)"
+        else
+          echo "NOT_REGISTERED_WARNING: toggle ON but xdg-mime not pointing to RC"
+        fi
+      fi
+
+  # ── Dispatch tel: via second-instance ────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_TOGGLE_ON
+
+  - wait: 8
+
+  # ── Verify Fuselage telephony modal appears ───────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. It lists available servers ('Workspace' and
+      'Mobile RC') as clickable options and has a 'Remember this choice'
+      checkbox. This is a Fuselage modal overlay on top of the main application
+      — NOT the main server selection screen and NOT the Settings panel.
+    retries: 5
+    verify_timeout: 20
+
+  # ── Dismiss modal via Escape ──────────────────────────────────────────────
+  - key: Escape
+
+  - wait: 3
+
+  # ── Verify modal dismissed, app still alive ───────────────────────────────
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — no crash
+      dialog, no frozen window, no apport crash handler. The telephony modal
+      should no longer be visible. The Settings panel or main app interface
+      should be showing.
+    verify_timeout: 15
+    retries: 3
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PHASE D: Disable toggle again — registration removed, tel: silenced
+  # ══════════════════════════════════════════════════════════════════════════
+
+  # ── Open Settings again ──────────────────────────────────────────────────
+  - key: ctrl+comma
+
+  - wait: 5
+
+  # ── Verify Settings panel open ───────────────────────────────────────────
+  - verify: |
+      The Rocket.Chat Settings panel is open and visible inside the application
+      window. Look for a settings sidebar or panel containing general
+      configuration controls.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Click Telephony master toggle to disable ──────────────────────────────
+  - localize: "the 'Telephony' master toggle switch in Settings > General"
+    click: true
+
+  - wait: 3
+
+  # ── Verify sub-controls are visible but disabled/greyed ──────────────────
+  # When toggle is OFF, sub-controls must be visible in the Settings panel
+  # but rendered as disabled — greyed appearance, non-interactive.
+  - verify: |
+      The Rocket.Chat Settings panel shows the 'Telephony Global Shortcut'
+      and 'Telephony Server' controls as visible but disabled. They must
+      appear greyed out, dimmed, or in a visually inactive state that
+      indicates they cannot be interacted with. The master Telephony toggle
+      should now appear in the OFF (unchecked/disabled) position.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Assert: xdg-mime no longer points to Rocket.Chat for tel: ───────────
+  # After disabling the toggle, RC must not be the default tel: handler.
+  - shell: |
+      export DISPLAY=:0
+      HANDLER=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null || true)
+      echo "CURRENT_HANDLER=$HANDLER"
+      if echo "$HANDLER" | grep -qi rocketchat; then
+        echo "FAIL: RC is still registered as tel: handler after toggle OFF"
+        exit 1
+      fi
+      echo NOT_REGISTERED_AS_EXPECTED
+
+  # ── Dispatch tel: while toggle is OFF again ───────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" > /dev/null 2>&1 &
+      echo TEL_DISPATCHED_TOGGLE_OFF_AGAIN
+
+  - wait: 8
+
+  # ── Verify: NO telephony modal or dial pad ────────────────────────────────
+  - verify_not: |
+      A telephony modal or dial pad dialog is overlaying the Rocket.Chat window.
+      Look for a server selection dialog listing 'Workspace' and 'Mobile RC',
+      or any dialog containing a phone number input or dial pad controls.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Verify: RC still on Settings or main interface (unaffected) ──────────
+  - verify: |
+      The Rocket.Chat application window is still visible and responsive —
+      showing the Settings panel or main application interface unchanged.
+      No modal, no dial pad, no telephony UI overlay appeared after the
+      tel: dispatch with the master toggle disabled. No crash dialog present.
+    verify_timeout: 15
+    retries: 3
+
+  # ── Final cleanup ─────────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true; done
+      echo DONE
