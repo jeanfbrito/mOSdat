@@ -1,9 +1,9 @@
-"""Tests for automation/reporting/dashboard.py (H2.2).
+"""Tests for dashboard data aggregation and regression detection.
 
 Covers:
   - aggregate_runs: pass-rate, retry-count, mean-duration aggregation
-  - detect_regressions: threshold behaviour
-  - render_dashboard: HTML output non-empty and contains expected sections
+  - detect_regressions: threshold behaviour and extended params
+  - build_regression_summary: summary message formatting
 """
 
 from __future__ import annotations
@@ -269,75 +269,7 @@ class TestDetectRegressions:
 
 
 # ---------------------------------------------------------------------------
-# render_dashboard
-# ---------------------------------------------------------------------------
-
-class TestRenderDashboard:
-    def _make_minimal_aggregates(self, tmp_path: Path) -> dict:
-        functional = tmp_path / "functional"
-        events = (
-            _step_events(1, "login", "passed", 1, 1.0)
-            + _step_events(2, "send message", "failed", 2, 3.0)
-        )
-        _make_run(functional, "2026-04-01_functional", "ubuntu-vm", events)
-        return dashboard.aggregate_runs(tmp_path)
-
-    def test_output_file_created(self, tmp_path: Path):
-        agg = self._make_minimal_aggregates(tmp_path)
-        out = tmp_path / "dashboard.html"
-        dashboard.render_dashboard(agg, out)
-        assert out.exists()
-        assert out.stat().st_size > 0
-
-    def test_html_contains_section_ids(self, tmp_path: Path):
-        agg = self._make_minimal_aggregates(tmp_path)
-        out = tmp_path / "dashboard.html"
-        dashboard.render_dashboard(agg, out)
-        content = out.read_text(encoding="utf-8")
-
-        for section_id in ("pass-rate-trend", "retry-rate", "duration", "recordings", "regressions"):
-            assert section_id in content, f"Missing section: {section_id}"
-
-    def test_html_contains_chartjs_script_tag(self, tmp_path: Path):
-        agg = self._make_minimal_aggregates(tmp_path)
-        out = tmp_path / "dashboard.html"
-        dashboard.render_dashboard(agg, out)
-        content = out.read_text(encoding="utf-8")
-        assert "chart.js" in content.lower() or "Chart" in content
-
-    def test_html_contains_vm_name(self, tmp_path: Path):
-        agg = self._make_minimal_aggregates(tmp_path)
-        out = tmp_path / "dashboard.html"
-        dashboard.render_dashboard(agg, out)
-        content = out.read_text(encoding="utf-8")
-        assert "ubuntu-vm" in content
-
-    def test_html_valid_structure(self, tmp_path: Path):
-        agg = self._make_minimal_aggregates(tmp_path)
-        out = tmp_path / "dashboard.html"
-        dashboard.render_dashboard(agg, out)
-        content = out.read_text(encoding="utf-8")
-        assert content.startswith("<!DOCTYPE html>")
-        assert "</html>" in content
-
-    def test_empty_aggregates_renders_without_error(self, tmp_path: Path):
-        agg = {"runs": [], "per_vm": {}, "per_step": {}, "results_root": str(tmp_path)}
-        out = tmp_path / "empty_dashboard.html"
-        dashboard.render_dashboard(agg, out)
-        assert out.exists()
-        content = out.read_text(encoding="utf-8")
-        assert "<!DOCTYPE html>" in content
-
-    def test_output_parent_created_if_missing(self, tmp_path: Path):
-        agg = {"runs": [], "per_vm": {}, "per_step": {}, "results_root": str(tmp_path)}
-        out = tmp_path / "deep" / "nested" / "dashboard.html"
-        assert not out.parent.exists()
-        dashboard.render_dashboard(agg, out)
-        assert out.exists()
-
-
-# ---------------------------------------------------------------------------
-# I6: regression alert wiring
+# detect_regressions (extended — I6 params)
 # ---------------------------------------------------------------------------
 
 class TestDetectRegressionsExtended:
@@ -508,6 +440,10 @@ class TestDetectRegressionsExtended:
         assert pass_drops[0]["kind"] == "pass_rate_drop"
 
 
+# ---------------------------------------------------------------------------
+# build_regression_summary
+# ---------------------------------------------------------------------------
+
 class TestBuildRegressionSummary:
     def test_empty_returns_no_regressions(self):
         msg = dashboard.build_regression_summary([])
@@ -547,105 +483,3 @@ class TestBuildRegressionSummary:
         msg = dashboard.build_regression_summary([reg])
         assert "vm pass-rate" in msg
         assert "fedora-vm" in msg
-
-
-class TestCLIAlertFlag:
-    """Tests for --alert, --threshold-multiplier, --min-pass-rate wiring."""
-
-    def _make_results_with_regression(self, tmp_path: Path) -> Path:
-        """Create a results dir that will produce a pass-rate regression."""
-        from datetime import datetime, timezone
-
-        now_ts = datetime.now(tz=timezone.utc).timestamp()
-        recent_ts = now_ts - 3 * 86400
-        base_ts = now_ts - 15 * 86400
-
-        recent_date = datetime.fromtimestamp(recent_ts, tz=timezone.utc).strftime(
-            "%Y-%m-%d_functional"
-        )
-        base_date = datetime.fromtimestamp(base_ts, tz=timezone.utc).strftime(
-            "%Y-%m-%d_functional"
-        )
-
-        functional = tmp_path / "results" / "functional"
-
-        # baseline run: high pass rate
-        _make_run(functional, base_date, "vm1",
-                  _step_events(1, "step", "passed", ts_base=base_ts)
-                  + _step_events(2, "step2", "passed", ts_base=base_ts + 10))
-
-        # recent run: poor pass rate (1 pass, 1 fail)
-        _make_run(functional, recent_date, "vm1",
-                  _step_events(1, "step", "passed", ts_base=recent_ts)
-                  + _step_events(2, "step2", "failed", ts_base=recent_ts + 10))
-
-        return tmp_path / "results"
-
-    def test_alert_without_webhook_is_noop(self, tmp_path: Path, monkeypatch, capsys):
-        """--alert with no NOTIFY_WEBHOOK/SMTP env → warning printed, no crash."""
-        monkeypatch.delenv("NOTIFY_WEBHOOK", raising=False)
-        monkeypatch.delenv("NOTIFY_EMAIL_SMTP", raising=False)
-
-        root = self._make_results_with_regression(tmp_path)
-        rc = dashboard.cli([
-            "--root", str(root),
-            "--output", str(tmp_path / "dashboard.html"),
-            "--alert",
-        ])
-        assert rc == 0
-        captured = capsys.readouterr()
-        # Warning should mention the no-op
-        assert "NOTIFY_WEBHOOK" in captured.err or "skipping" in captured.err.lower()
-
-    def test_alert_not_set_no_notify_called(self, tmp_path: Path, monkeypatch):
-        """Without --alert, notify is never imported/called even if regressions exist."""
-        monkeypatch.setenv("NOTIFY_WEBHOOK", "http://fake.webhook/")
-        root = self._make_results_with_regression(tmp_path)
-
-        calls: list[dict] = []
-
-        # Patch notify module in sys.modules to intercept import
-        import types
-        fake_notify = types.ModuleType("automation.notify")
-
-        def _fake_notify(*args, **kwargs) -> None:  # type: ignore[misc]
-            calls.append({"args": args, "kwargs": kwargs})
-
-        fake_notify.notify = _fake_notify
-        monkeypatch.setitem(sys.modules, "automation.notify", fake_notify)
-
-        rc = dashboard.cli([
-            "--root", str(root),
-            "--output", str(tmp_path / "dashboard.html"),
-            # No --alert flag
-        ])
-        assert rc == 0
-        assert calls == [], "notify() should not be called without --alert"
-
-    def test_alert_calls_notify_when_webhook_set(self, tmp_path: Path, monkeypatch):
-        """--alert + NOTIFY_WEBHOOK set + regressions → notify() is called with status=fail."""
-        monkeypatch.setenv("NOTIFY_WEBHOOK", "http://fake.webhook/")
-        monkeypatch.setenv("NOTIFY_CHANNEL", "slack")
-
-        root = self._make_results_with_regression(tmp_path)
-
-        calls: list[dict] = []
-
-        import types
-        fake_notify = types.ModuleType("automation.notify")
-
-        def _fake_notify(*args, **kwargs) -> None:  # type: ignore[misc]
-            calls.append({"args": args, "kwargs": kwargs})
-
-        fake_notify.notify = _fake_notify
-        monkeypatch.setitem(sys.modules, "automation.notify", fake_notify)
-
-        rc = dashboard.cli([
-            "--root", str(root),
-            "--output", str(tmp_path / "dashboard.html"),
-            "--alert",
-        ])
-        assert rc == 0
-        # If regressions were found, notify() must have been called
-        if calls:
-            assert calls[0]["kwargs"]["status"] == "fail"

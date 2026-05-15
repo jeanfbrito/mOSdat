@@ -1,60 +1,18 @@
-#!/usr/bin/env python3
-import argparse
+"""cmd_functional and its helpers — extracted from automation/main.py."""
 import os
 import signal
-import sys
+import time as _time
 import urllib.request
 import urllib.error
-import time as _time
 from pathlib import Path
 
-from automation.config import load_config
+
+class RuntimeWatchdogTimeout(Exception):
+    pass
 
 
-def cmd_run(args) -> int:
-    config = load_config(args.config)
-    config.skip_build = args.skip_build
-    config.resume = args.resume
-    config.only_vm = args.only
-    config.allow_incomplete = args.allow_incomplete
-    if args.results_dir:
-        config.results_dir = args.results_dir
-
-    from automation.runners.smoke import TestRunner
-    runner = TestRunner(config)
-
-    try:
-        success = runner.run()
-        return 0 if success else 1
-    except KeyboardInterrupt:
-        print("\n[mOSdat] Interrupted by user")
-        return 130
-
-
-def cmd_test(args) -> int:
-    config = load_config(args.config)
-    config.skip_build = True
-    if args.results_dir:
-        config.results_dir = args.results_dir
-
-    vm_names = [v.strip() for v in args.vms.split(",")]
-    for name in vm_names:
-        if name not in config.vm_by_name:
-            print(f"[mOSdat] ERROR: Unknown VM '{name}'. Available: {', '.join(config.vm_by_name.keys())}")
-            return 1
-
-    config.vms = [config.vm_by_name[name] for name in vm_names]
-
-    from automation.runners.smoke import TestRunner
-    runner = TestRunner(config)
-
-    try:
-        success = runner.run_quick(args.package)
-        return 0 if success else 1
-    except KeyboardInterrupt:
-        print("\n[mOSdat] Interrupted by user")
-        return 130
-
+def _watchdog_handler(signum, frame):
+    raise RuntimeWatchdogTimeout()
 
 
 def _preflight_workspace(url: str, timeout: int = 10, retries: int = 2) -> tuple[bool, str]:
@@ -120,21 +78,14 @@ def _warmup_vlm(vlm) -> bool:
         return False
 
 
-class RuntimeWatchdogTimeout(Exception):
-    pass
-
-
-def _watchdog_handler(signum, frame):
-    raise RuntimeWatchdogTimeout()
-
-
 def cmd_functional(args) -> int:
+    from automation.commands.record_cmd import cmd_record
     if getattr(args, "record", False):
-        from automation.commands.record_cmd import cmd_record
         return cmd_record(args)
 
     from pathlib import Path as P
 
+    from automation.config import load_config
     config = load_config(args.config)
 
     vm_names = [v.strip() for v in args.vms.split(",")]
@@ -381,88 +332,3 @@ def cmd_functional(args) -> int:
             print(f"[mOSdat] WARN: notification failed: {_notify_err}")
 
     return 0 if overall else 1
-
-
-def cmd_validate(args) -> int:
-    try:
-        config = load_config(args.config)
-        print(f"[mOSdat] Config OK: {args.config}")
-        print(f"  App: {config.app.name} {config.app.version}")
-        print(f"  Binary: {config.app.binary}")
-        print(f"  Proxmox: {config.proxmox.host}:{config.proxmox.port}")
-        print(f"  VMs: {len(config.vms)}")
-        for vm in config.vms:
-            pkgs = ", ".join(p.format for p in vm.packages)
-            print(f"    {vm.name} (VMID {vm.vmid}, {vm.ip}) [{pkgs}]")
-        print(f"  Tests: {len(config.tests)}")
-        for t in config.tests:
-            gpu_label = "GPU" if t.gpu else "no-GPU"
-            print(f"    {t.name} ({gpu_label}) -> {t.script}")
-        if config.build:
-            print(f"  Build: {config.build.repo_path}")
-        else:
-            print("  Build: disabled (pre-built packages only)")
-        if config.report.critical_tests:
-            print(f"  Critical tests: {', '.join(config.report.critical_tests)}")
-        return 0
-    except Exception as e:
-        print(f"[mOSdat] Config ERROR: {e}")
-        return 1
-
-
-def cmd_list_vms(args) -> int:
-    config = load_config(args.config)
-    print(f"{'Name':<15} {'VMID':<6} {'IP':<16} {'Desktop':<20} {'Packages'}")
-    print(f"{'─'*15} {'─'*6} {'─'*16} {'─'*20} {'─'*20}")
-    for vm in config.vms:
-        pkgs = ", ".join(p.format for p in vm.packages)
-        print(f"{vm.name:<15} {vm.vmid:<6} {vm.ip:<16} {vm.desktop:<20} {pkgs}")
-    return 0
-
-
-def main() -> int:
-    from automation.commands.parser import build_parser
-    from automation.commands.dispatchers import (
-        cmd_author,
-        cmd_confirm,
-        cmd_dashboard,
-        cmd_draft,
-        cmd_live,
-        cmd_report,
-        cmd_visual,
-    )
-
-    parser = build_parser()
-    args = parser.parse_args()
-
-    if not args.command:
-        parser.print_help()
-        return 0
-
-    handlers = {
-        "run": cmd_run,
-        "test": cmd_test,
-        "functional": cmd_functional,
-        "confirm": cmd_confirm,
-        "validate": cmd_validate,
-        "list-vms": cmd_list_vms,
-        "report": cmd_report,
-        "live": cmd_live,
-        "author": cmd_author,
-        "draft": cmd_draft,
-        "visual": cmd_visual,
-        "dashboard": cmd_dashboard,
-    }
-
-    try:
-        return handlers[args.command](args)
-    except Exception as e:
-        print(f"\n[mOSdat] ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-

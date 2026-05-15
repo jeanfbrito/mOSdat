@@ -33,13 +33,14 @@ import PIL.Image as _pil_image_mod
 if getattr(_pil_image_mod, "Image", None) is object:
     _importlib.reload(_pil_image_mod)
 from PIL import Image
+# Re-register plugins after potential reload so PNG save works regardless of
+# collection order (reload resets the SAVE registry to empty).
+Image.init()
 
 _PROJ = Path(__file__).parent.parent
 
 
-# ---------------------------------------------------------------------------
-# Force-replace stubs so runner re-executes with real PIL
-# ---------------------------------------------------------------------------
+# === Force-replace stubs so runner re-executes with real PIL ===
 
 # Also stub automation.vlm.agent — runner imports it lazily inside run_step
 # for C1 agent fallback. The stale installed copy doesn't have AgentLoop.
@@ -72,9 +73,15 @@ StepFailed = _fmod.StepFailed
 BugConfirmationResult = _fmod.BugConfirmationResult
 
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _pin_fmod_in_sys_modules():
+    # Other tests overwrite sys.modules["automation.runners.functional"]; re-pin
+    # so isinstance(BugConfirmationResult) sees the same class.
+    sys.modules["automation.runners.functional"] = _fmod
+    yield
+
+
+# === Helper ===
 
 def _fake_image():
     return Image.new("RGB", (1920, 1080), (128, 128, 128))
@@ -102,9 +109,7 @@ def _make_runner(vlm_verify=True, process_running=True, screenshot_dir=None):
     return runner, vlm, ss, inj
 
 
-# ---------------------------------------------------------------------------
-# B6: launch poll — VLM call cap
-# ---------------------------------------------------------------------------
+# === B6: launch poll — VLM call cap ===
 
 class TestLaunchPollVlmCap:
     def test_vlm_verify_capped_at_two(self):
@@ -129,9 +134,7 @@ class TestLaunchPollVlmCap:
                 )
 
 
-# ---------------------------------------------------------------------------
-# B7: SSH + VNC health probe
-# ---------------------------------------------------------------------------
+# === B7: SSH + VNC health probe ===
 
 class TestProbeVmHealth:
     def test_both_ok_returns_true(self):
@@ -159,9 +162,7 @@ class TestProbeVmHealth:
         assert runner._probe_vm_health() is False
 
 
-# ---------------------------------------------------------------------------
-# F1: popup sweep
-# ---------------------------------------------------------------------------
+# === F1: popup sweep ===
 
 class TestPopupSweep:
     def test_popup_found_escape_sent(self):
@@ -186,9 +187,7 @@ class TestPopupSweep:
         assert dismissed == 0
 
 
-# ---------------------------------------------------------------------------
-# C1: agent fallback
-# ---------------------------------------------------------------------------
+# === C1: agent fallback ===
 
 class TestAgentFallback:
     def test_fallback_invoked_after_verify_exhaustion(self):
@@ -235,9 +234,7 @@ class TestAgentFallback:
                 ), 1)
 
 
-# ---------------------------------------------------------------------------
-# Diff-click verify and canary
-# ---------------------------------------------------------------------------
+# === Diff-click verify and canary ===
 
 class TestDiffClickVerify:
     def test_diff_mode_emits_verify_click_diff_event(self, tmp_path):
@@ -361,9 +358,7 @@ class TestCanaryVerify:
         assert vlm.localize.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# Bug-confirmation mode
-# ---------------------------------------------------------------------------
+# === Bug-confirmation mode ===
 
 class TestBugConfirmationMode:
     """Tests for _run_bug_confirmation_scenario."""
@@ -380,7 +375,6 @@ class TestBugConfirmationMode:
 
     def test_precondition_yes_bug_yes_is_bug_confirmed(self, tmp_path):
         runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
-        # precondition_check=yes, bug_signal=yes
         vlm.verify.side_effect = [True, True]
         result = runner._run_bug_confirmation_scenario(
             steps=self._minimal_steps(),
@@ -394,7 +388,6 @@ class TestBugConfirmationMode:
 
     def test_precondition_yes_bug_no_is_bug_not_visible(self, tmp_path):
         runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
-        # precondition_check=yes, bug_signal=no
         vlm.verify.side_effect = [True, False]
         result = runner._run_bug_confirmation_scenario(
             steps=self._minimal_steps(),
@@ -408,7 +401,6 @@ class TestBugConfirmationMode:
 
     def test_precondition_no_bug_yes_is_inconclusive(self, tmp_path):
         runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
-        # precondition_check=no, bug_signal=yes
         vlm.verify.side_effect = [False, True]
         result = runner._run_bug_confirmation_scenario(
             steps=self._minimal_steps(),
@@ -421,7 +413,6 @@ class TestBugConfirmationMode:
 
     def test_precondition_no_bug_no_is_inconclusive(self, tmp_path):
         runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
-        # precondition_check=no, bug_signal=no
         vlm.verify.side_effect = [False, False]
         result = runner._run_bug_confirmation_scenario(
             steps=self._minimal_steps(),
@@ -436,11 +427,7 @@ class TestBugConfirmationMode:
     def test_non_must_pass_step_failure_is_non_fatal(self, tmp_path):
         """A step with must_pass=False that raises StepFailed does not abort the run."""
         runner, vlm, ss, inj = self._make_bc_runner(tmp_path)
-        bad_step = FunctionalStep(
-            shell="echo ok",
-            must_pass=False,
-        )
-        # Patch run_step to raise StepFailed for this step — isolates BC error-handling logic
+        bad_step = FunctionalStep(shell="echo ok", must_pass=False)
         original_run_step = runner.run_step
         call_count = [0]
         def _failing_run_step(step, step_num):
@@ -450,14 +437,13 @@ class TestBugConfirmationMode:
             return original_run_step(step, step_num)
         runner.run_step = _failing_run_step
 
-        vlm.verify.side_effect = [True, False]  # precondition=yes, bug=no
+        vlm.verify.side_effect = [True, False]
         result = runner._run_bug_confirmation_scenario(
             steps=[bad_step],
             name="test",
             bug_signal="is picker visible",
             precondition_check="is main window visible",
         )
-        # Run continued — we get a result
         assert isinstance(result, BugConfirmationResult)
         assert len(result.step_failures) == 1
         assert result.step_failures[0]["step_num"] == 1
@@ -470,7 +456,7 @@ class TestBugConfirmationMode:
             verify="something that never appears",
             verify_timeout=1,
             retries=1,
-            must_pass=True,  # default — must raise
+            must_pass=True,
         )
         vlm.verify.return_value = False
         with patch("time.sleep"):

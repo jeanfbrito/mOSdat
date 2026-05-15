@@ -53,14 +53,17 @@ if "automation.vlm.agent" not in sys.modules:
     _agent_mod.AgentLoop = MagicMock
     sys.modules["automation.vlm.agent"] = _agent_mod
 
-_fspec = importlib.util.spec_from_file_location(
-    "automation.runners.functional",
-    _PROJ / "automation" / "runners" / "functional.py",
-)
-_fmod = importlib.util.module_from_spec(_fspec)
-_fmod.__package__ = "automation.runners"
-sys.modules["automation.runners.functional"] = _fmod
-_fspec.loader.exec_module(_fmod)
+if "automation.runners.functional" in sys.modules:
+    _fmod = sys.modules["automation.runners.functional"]
+else:
+    _fspec = importlib.util.spec_from_file_location(
+        "automation.runners.functional",
+        _PROJ / "automation" / "runners" / "functional.py",
+    )
+    _fmod = importlib.util.module_from_spec(_fspec)
+    _fmod.__package__ = "automation.runners"
+    sys.modules["automation.runners.functional"] = _fmod
+    _fspec.loader.exec_module(_fmod)
 
 load_test_yaml = _fmod.load_test_yaml
 

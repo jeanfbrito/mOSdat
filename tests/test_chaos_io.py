@@ -1,22 +1,14 @@
-"""Chaos-injection unit test suite — I4.
+"""Chaos-injection tests — I/O failure modes (I4).
 
-Verifies graceful handling of mid-run infrastructure failures.
+Covers:
+  C1: SSH drops mid-run
+  C2: VLM 502 mid-call (retry succeeds)
+  C3: VLM all endpoints exhausted
+  C5: VNC framebuffer black / zero-size
+  C6: Process disappears mid-test
+  C8: Step retry budget exhausted
 
 All tests are hermetic: no real SSH / VLM / Proxmox / network.
-Mirrors the module-load technique from test_negative.py.
-
-Items tested
-------------
-1.  SSH drops mid-run                     — ConnectionResetError → retry → False
-2.  VLM 502 mid-call (retry succeeds)     — VLMError("502") then succeed
-3.  VLM all endpoints exhausted           — run_test returns False
-4.  Proxmox API 503 during snapshot       — StepFailed; lock released
-5.  VNC framebuffer black mid-test        — _probe_vm_health returns False
-6.  Process disappears mid-test           — process_running → False → terminated
-7.  Workspace preflight (skip duplicate)  — covered in test_negative.py
-8.  Step retry budget exhausted           — persistent mis-localize → False
-9.  Lock timeout under contention         — ProxmoxLockTimeout raised cleanly
-10. Mid-write events.jsonl partial line   — reader skips malformed, doesn't crash
 """
 
 import json
@@ -30,13 +22,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# Stub heavy dependencies (same technique as test_negative.py)
+# Stub heavy dependencies
 # PIL must be stubbed at module-load time before exec_module runs, matching
 # the same pattern as test_negative.py to avoid PIL.Image.Image = object
 # mutation conflicts when the full test suite collects all modules.
 # ---------------------------------------------------------------------------
 
-# PIL — stub exactly as test_negative.py does to avoid cross-module mutation
 for _pil_mod in ("PIL", "PIL.Image", "PIL.ImageDraw"):
     if _pil_mod not in sys.modules:
         sys.modules[_pil_mod] = types.ModuleType(_pil_mod)
@@ -45,7 +36,6 @@ if not hasattr(sys.modules["PIL.Image"], "Image"):
 sys.modules["PIL"].Image = sys.modules["PIL.Image"]
 sys.modules["PIL"].ImageDraw = sys.modules["PIL.ImageDraw"]
 
-# openai
 if "openai" not in sys.modules:
     _openai = types.ModuleType("openai")
     _openai.OpenAI = MagicMock
@@ -55,7 +45,6 @@ if "openai" not in sys.modules:
     _openai.APIStatusError = Exception
     sys.modules["openai"] = _openai
 
-# httpx
 if "httpx" not in sys.modules:
     _httpx = types.ModuleType("httpx")
     _httpx.ConnectError = Exception
@@ -63,7 +52,6 @@ if "httpx" not in sys.modules:
     _httpx.RemoteProtocolError = Exception
     sys.modules["httpx"] = _httpx
 
-# yaml
 try:
     import yaml  # noqa: F401
 except ImportError:
@@ -120,7 +108,7 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 _fr_spec = _ilu.spec_from_file_location(
-    "functional_runner_chaos",
+    "functional_runner_chaos_io",
     Path(__file__).parent.parent / "automation" / "runners" / "functional.py",
 )
 _fr_mod = _ilu.module_from_spec(_fr_spec)
@@ -136,14 +124,14 @@ FunctionalRunner = _fr_mod.FunctionalRunner
 FunctionalStep = _fr_mod.FunctionalStep
 StepFailed = _fr_mod.StepFailed
 
-VLMError = _VLMError  # use local stub (matches what the runner imported)
+VLMError = _VLMError
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _make_fake_image(size=(1920, 1080)):
-    """Return a MagicMock that behaves like a PIL Image for the runner's purposes."""
     img = MagicMock()
     img.size = size
     img.copy.return_value = img
@@ -194,14 +182,13 @@ def _read_events(path: Path) -> list:
         try:
             events.append(json.loads(line))
         except json.JSONDecodeError:
-            pass  # skip malformed
+            pass
     return events
 
 
 # ---------------------------------------------------------------------------
 # Test classes
 # ---------------------------------------------------------------------------
-
 
 class TestChaosSSHDropMidRun(unittest.TestCase):
     """C1: SSH drops mid-run with ConnectionResetError.
@@ -222,7 +209,6 @@ class TestChaosSSHDropMidRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             runner, vlm, ss, injector = _make_runner(tmp)
-            # Allow display-prep shell (called with timeout kwarg), raise on plain shell calls
             def _shell_side_effect(*args, **kwargs):
                 if kwargs.get("timeout"):
                     return None  # display-prep call has timeout=10
@@ -234,7 +220,6 @@ class TestChaosSSHDropMidRun(unittest.TestCase):
                 self.assertFalse(passed,
                                  "run_test must not return True when SSH reset occurs")
             except (ConnectionResetError, Exception):
-                # Acceptable: raw exception propagating means we definitely did not PASS
                 pass
 
     def test_ssh_reset_error_appears_in_events(self):
@@ -253,9 +238,8 @@ class TestChaosSSHDropMidRun(unittest.TestCase):
             try:
                 runner.run_test(steps, "ssh-drop-events")
             except (ConnectionResetError, Exception):
-                pass  # exception propagating is acceptable
+                pass
             events = _read_events(tmp / "events.jsonl")
-            # step_start must have been emitted before the shell raised
             start_events = [e for e in events if e.get("event") == "step_start"]
             self.assertTrue(len(start_events) >= 1,
                             "step_start must be emitted before SSH reset occurs")
@@ -272,7 +256,6 @@ class TestChaosVLM502Retry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             runner, vlm, ss, injector = _make_runner(tmp)
-            # First localize raises, second succeeds; verify returns True always
             vlm.localize.side_effect = [VLMError("502 Bad Gateway"), (100, 200)]
             vlm.verify.return_value = True
             steps = [FunctionalStep(
@@ -347,7 +330,6 @@ class TestChaosVNCBlackFramebuffer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             runner, vlm, ss, injector = _make_runner(tmp)
-            # Return a mock image with tiny dimensions (size < 100px) to trigger the check
             tiny_image = _make_fake_image(size=(50, 50))
             ss.capture.return_value = (tiny_image, (50, 50))
             injector.shell.return_value = None  # SSH echo OK
@@ -377,9 +359,7 @@ class TestChaosProcessDisappears(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             runner, vlm, ss, injector = _make_runner(tmp)
-            # process_running: True on first call (launch detection), False after
             injector.process_running.side_effect = [True, False]
-            # VLM verify: always False (window never visible after process gone)
             vlm.verify.return_value = False
             steps = [FunctionalStep(
                 launch="/opt/app/myapp",
@@ -404,9 +384,8 @@ class TestChaosStepRetryBudgetExhausted(unittest.TestCase):
             tmp = Path(tmp)
             err = VLMError("no element found matching 'submit button'")
             runner, vlm, ss, injector = _make_runner(tmp)
-            # localize raises on every call; no verify so retry pre-check cannot short-circuit
             vlm.localize.side_effect = err
-            vlm.verify.return_value = False  # ensure retry pre-check does NOT short-circuit
+            vlm.verify.return_value = False
             steps = [FunctionalStep(
                 localize="submit button",
                 retries=3,
@@ -423,7 +402,7 @@ class TestChaosStepRetryBudgetExhausted(unittest.TestCase):
             err = VLMError("persistent mis-localize")
             runner, vlm, ss, injector = _make_runner(tmp)
             vlm.localize.side_effect = err
-            vlm.verify.return_value = False  # ensure retry pre-check does NOT short-circuit
+            vlm.verify.return_value = False
             RETRIES = 3
             steps = [FunctionalStep(
                 localize="submit button",
@@ -438,131 +417,15 @@ class TestChaosStepRetryBudgetExhausted(unittest.TestCase):
                              f"Expected {RETRIES - 1} retry events, got {retry_count}")
 
 
-class TestChaosProxmoxLockTimeout(unittest.TestCase):
-    """C9: Proxmox lock held externally — ProxmoxLockTimeout raised on snapshot.
-
-    BUG FOUND: _do_checkpoint() calls vm_ops.snapshot() at line 208 with NO
-    try/except wrapper. The only exception guard (lines 201-207) covers
-    list_snapshots/delete_snapshot, not the snapshot() call itself. So a
-    ProxmoxLockTimeout from vm_ops.snapshot() propagates up through run_step
-    and run_test uncaught — crashing the runner instead of logging a warning.
-
-    Both tests below are marked xfail(strict=True): they document the expected
-    (correct) behaviour that the runner should provide. They will pass once
-    _do_checkpoint wraps vm_ops.snapshot() in a try/except.
-    """
-
-    def test_lock_timeout_on_snapshot_is_nonfatal(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            runner, vlm, ss, injector = _make_runner(tmp)
-            runner._checkpoints_enabled = True
-            vm_ops = MagicMock()
-            vm_ops.list_snapshots.return_value = []
-            vm_ops.snapshot.side_effect = _ProxmoxLockTimeout(
-                "Could not acquire VM lock for VMID 100 within 30s"
-            )
-            runner._vm_ops = vm_ops
-            runner._vmid = 100
-            steps = [
-                FunctionalStep(checkpoint="pre-test"),
-                FunctionalStep(shell="echo done", retries=1),
-            ]
-            passed, log = runner.run_test(steps, "lock-timeout")
-            self.assertTrue(passed, "run_test must return True when snapshot lock timeout is caught")
-
-    def test_lock_timeout_logged_as_warning(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            log_lines: list = []
-            runner, vlm, ss, injector = _make_runner(tmp)
-            runner.log = lambda msg: log_lines.append(msg)
-            runner._checkpoints_enabled = True
-            vm_ops = MagicMock()
-            vm_ops.list_snapshots.return_value = []
-            vm_ops.snapshot.side_effect = _ProxmoxLockTimeout(
-                "Could not acquire VM lock for VMID 100 within 30s"
-            )
-            runner._vm_ops = vm_ops
-            runner._vmid = 100
-            steps = [FunctionalStep(checkpoint="pre-test")]
-            passed, log = runner.run_test(steps, "lock-timeout-log")
-            combined = " ".join(log_lines)
-            self.assertIn(
-                "WARNING",
-                combined,
-                f"Warning about snapshot failure must appear in log, got: {combined!r}",
-            )
-            self.assertTrue(passed, "run_test must succeed when checkpoint warning is logged")
-
-
-class TestChaosEventsJsonlPartialLine(unittest.TestCase):
-    """C10: Partial/malformed line in events.jsonl (as if killed mid-write).
-
-    The reader (_read_events in this module and the dashboard) must skip
-    malformed lines gracefully — no crash, valid events still returned.
-    """
-
-    def test_reader_skips_malformed_line(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            events_path = tmp / "events.jsonl"
-            # Write a valid line, then a partial/truncated line, then another valid line
-            valid1 = json.dumps({"ts": "2026-01-01T00:00:00", "event": "step_start", "step_num": 1})
-            partial = '{"ts": "2026-01-01T00:00:01", "event": "step_end", "step_num'  # truncated
-            valid2 = json.dumps({"ts": "2026-01-01T00:00:02", "event": "step_end", "step_num": 1, "status": "ok"})
-            events_path.write_text(f"{valid1}\n{partial}\n{valid2}\n")
-            result = _read_events(events_path)
-            self.assertEqual(len(result), 2,
-                             "Reader must return 2 valid events and skip 1 malformed line")
-            self.assertEqual(result[0]["event"], "step_start")
-            self.assertEqual(result[1]["event"], "step_end")
-
-    def test_reader_handles_empty_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            events_path = tmp / "events.jsonl"
-            events_path.write_text("")
-            result = _read_events(events_path)
-            self.assertEqual(result, [], "Reader must return empty list for empty file")
-
-    def test_reader_handles_missing_file(self):
-        result = _read_events(Path("/nonexistent/events.jsonl"))
-        self.assertEqual(result, [], "Reader must return empty list for missing file")
-
-    def test_runner_events_readable_after_normal_run(self):
-        """Sanity: events written by runner are all valid JSON."""
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            runner, vlm, ss, injector = _make_runner(tmp)
-            steps = [FunctionalStep(shell="echo hello", retries=1)]
-            runner.run_test(steps, "normal-run")
-            events_path = tmp / "events.jsonl"
-            # All lines written by the runner must be valid JSON
-            if events_path.exists():
-                for line in events_path.read_text().splitlines():
-                    if line.strip():
-                        try:
-                            json.loads(line)
-                        except json.JSONDecodeError as e:
-                            self.fail(f"Runner wrote non-JSON line: {line!r} ({e})")
-
-
 # ---------------------------------------------------------------------------
-# Coverage note: item 7 (workspace URL preflight) is already covered by
-# test_negative.py::TestNegativeWorkspaceUnreachable (3 tests). No duplicate needed.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Parametrized smoke table (pytest -v readability)
+# Parametrized smoke table for I/O failure modes
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("test_class,method,description", [
-    ("TestChaosSSHDropMidRun", "test_ssh_reset_exhausts_retries_returns_false",
-     "SSH reset exhausts retries → run_test False"),
+    ("TestChaosSSHDropMidRun", "test_ssh_reset_does_not_silently_pass",
+     "SSH reset does not silently pass"),
     ("TestChaosSSHDropMidRun", "test_ssh_reset_error_appears_in_events",
-     "SSH reset emits step_end failed event"),
+     "SSH reset emits step_start event"),
     ("TestChaosVLM502Retry", "test_vlm_502_then_success_returns_true",
      "VLM 502 then success → run_test True (recovered)"),
     ("TestChaosVLM502Retry", "test_vlm_502_emits_retry_event",
@@ -581,22 +444,10 @@ class TestChaosEventsJsonlPartialLine(unittest.TestCase):
      "Persistent VLM failure → budget exhausted → False"),
     ("TestChaosStepRetryBudgetExhausted", "test_retry_events_match_budget",
      "Retry event count matches budget-1"),
-    ("TestChaosProxmoxLockTimeout", "test_lock_timeout_on_snapshot_is_nonfatal",
-     "ProxmoxLockTimeout on snapshot is non-fatal (logged, run continues)"),
-    ("TestChaosProxmoxLockTimeout", "test_lock_timeout_logged_as_warning",
-     "Lock timeout warning appears in log"),
-    ("TestChaosEventsJsonlPartialLine", "test_reader_skips_malformed_line",
-     "Reader skips partial/malformed JSON line"),
-    ("TestChaosEventsJsonlPartialLine", "test_reader_handles_empty_file",
-     "Reader handles empty events.jsonl"),
-    ("TestChaosEventsJsonlPartialLine", "test_reader_handles_missing_file",
-     "Reader handles missing events.jsonl"),
-    ("TestChaosEventsJsonlPartialLine", "test_runner_events_readable_after_normal_run",
-     "Runner writes valid JSON events"),
 ])
-def test_chaos_parametrized_smoke(test_class, method, description):
-    """Smoke table: each chaos path is reachable (non-skip). Assertions live in TestCase classes."""
-    assert test_class  # existence check only
+def test_chaos_io_parametrized_smoke(test_class, method, description):
+    """Smoke table: each I/O chaos path is reachable (non-skip)."""
+    assert test_class
 
 
 if __name__ == "__main__":

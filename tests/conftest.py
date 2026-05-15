@@ -23,6 +23,13 @@ from PIL import Image
 
 _PROJ = Path(__file__).parent.parent   # .../mOSdat
 
+# Pre-load real ``automation.runners`` package so test files using
+# ``sys.modules.setdefault("automation.runners", stub)`` get a no-op,
+# preserving __path__ for submodule imports like
+# ``automation.runners.functional_verify``.
+import automation  # noqa: E402,F401
+import automation.runners  # noqa: E402,F401
+
 
 def _stub(name: str, **attrs) -> types.ModuleType:
     """Create a minimal stub module and register it in sys.modules."""
