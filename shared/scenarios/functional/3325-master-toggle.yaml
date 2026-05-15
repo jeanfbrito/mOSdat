@@ -128,7 +128,12 @@ steps:
   - wait: 8
 
   # ── Verify: NO telephony modal appeared ──────────────────────────────────
-  - verify_not: |
+  - verify: |
+      The Rocket.Chat application window is visible and responsive on its normal
+      main screen (login page or connected server view) — no overlay dialogs,
+      no crash banner, no apport handler. The master toggle is OFF so the
+      telephony subsystem is dormant.
+    verify_not: |
       A telephony modal or dial pad dialog is overlaying the Rocket.Chat window.
       Look for a server selection dialog listing 'Workspace' and 'Mobile RC',
       or any dialog containing a phone number input or dial pad controls.
@@ -165,7 +170,7 @@ steps:
   # The toggle is in Settings > General. Exact coordinates depend on the
   # Settings layout — use localize: rather than hardcoded xdotool coords.
   - localize: "the 'Telephony' master toggle switch in Settings > General"
-    click: true
+    click: left
 
   - wait: 3
 
@@ -256,7 +261,7 @@ steps:
 
   # ── Click Telephony master toggle to disable ──────────────────────────────
   - localize: "the 'Telephony' master toggle switch in Settings > General"
-    click: true
+    click: left
 
   - wait: 3
 
@@ -293,7 +298,11 @@ steps:
   - wait: 8
 
   # ── Verify: NO telephony modal or dial pad ────────────────────────────────
-  - verify_not: |
+  - verify: |
+      The Rocket.Chat application window is visible and responsive on its normal
+      Settings panel or main interface — no overlay dialogs, no crash banner,
+      no apport handler. The master toggle is OFF again so telephony is silenced.
+    verify_not: |
       A telephony modal or dial pad dialog is overlaying the Rocket.Chat window.
       Look for a server selection dialog listing 'Workspace' and 'Mobile RC',
       or any dialog containing a phone number input or dial pad controls.

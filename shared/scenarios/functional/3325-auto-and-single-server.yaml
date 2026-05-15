@@ -135,11 +135,11 @@ steps:
     verify_timeout: 15
 
   - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: true
+    click: left
   - wait: 2
 
   - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently OFF or disabled"
-    click: true
+    click: left
   - wait: 3
 
   # Confirm toggle is now ON (enabled).
@@ -173,11 +173,11 @@ steps:
   # ── A5: Check "Remember this choice" + click Mobile RC ──────────────────
   # Use localize for both — modal position varies by window size.
   - localize: "the 'Remember this choice' checkbox inside the telephony server selection modal"
-    click: true
+    click: left
   - wait: 2
 
   - localize: "the 'Mobile RC' server option inside the telephony server selection modal"
-    click: true
+    click: left
   - wait: 8
 
   # Verify modal gone, app alive.
@@ -213,7 +213,7 @@ steps:
   - wait: 4
 
   - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: true
+    click: left
   - wait: 2
 
   # Scroll down to bring the Telephony Server dropdown into view.
@@ -229,7 +229,7 @@ steps:
   # ── A8a: Click TelephonyServer dropdown (currently showing "Mobile RC") ──
   # localize finds it even when coords shift due to scroll position.
   - localize: "the Telephony Server dropdown control in the Settings General tab showing 'Mobile RC' as the current selection"
-    click: true
+    click: left
   - wait: 3
 
   # Verify dropdown opened (options are visible).
@@ -243,7 +243,7 @@ steps:
 
   # ── A8b: Click "Auto (ask each time)" option ────────────────────────────
   - localize: "the 'Auto (ask each time)' option in the expanded Telephony Server dropdown menu"
-    click: true
+    click: left
   - wait: 3
 
   # Verify dropdown now reflects "Auto" selection.
@@ -401,11 +401,11 @@ steps:
     verify_timeout: 15
 
   - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: true
+    click: left
   - wait: 2
 
   - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently OFF or disabled"
-    click: true
+    click: left
   - wait: 3
 
   - verify: |
@@ -426,7 +426,12 @@ steps:
   - wait: 2
 
   # KEY assertion: dropdown must NOT be present with only 1 server.
-  - verify_not: |
+  - verify: |
+      The Rocket.Chat Settings panel General tab shows the Telephony section
+      with its controls rendered normally — the 'Telephony Global Shortcut'
+      field is visible and enabled. The app is alive and the Settings panel
+      is open and responsive with no crash dialogs.
+    verify_not: |
       A Telephony Server dropdown control is visible in the Settings General
       panel — a labeled dropdown or select control showing a server name or
       'Auto (ask each time)' as the selected value. With only 1 server

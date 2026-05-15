@@ -159,7 +159,7 @@ steps:
 
   # ── Locate the Telephony master toggle and click it ON ───────────────────
   - localize: "Telephony toggle or switch in Settings > General — the master on/off switch for the Telephony feature, currently in OFF state"
-    click: true
+    click: left
   - wait: 3
 
   # ── Verify Telephony toggle is now ON ────────────────────────────────────
@@ -178,7 +178,7 @@ steps:
   # ── Navigate to Settings > General (already open from Phase 2) ───────────
   # Settings panel should still be open. Locate the shortcut capture field.
   - localize: "Telephony Global Shortcut input or key-capture field in Settings > General"
-    click: true
+    click: left
   - wait: 2
 
   # ── Press the desired shortcut keys into the capture field ───────────────
@@ -197,7 +197,7 @@ steps:
 
   # ── Click Save next to the shortcut field ───────────────────────────────
   - localize: "Save button next to the Telephony Global Shortcut field"
-    click: true
+    click: left
   - wait: 3
 
   # ── Verify the shortcut is saved and field still shows the combo ─────────
@@ -338,7 +338,11 @@ steps:
       not contain enough digits (< 3) to be treated as a phone number.
     verify_timeout: 20
     retries: 5
-  - verify_not: "any error dialog, alert box, or warning notification is visible on screen"
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — the dial pad
+      is open with an empty input field, and the main application is functioning
+      normally with no crash dialogs or error banners.
+    verify_not: "any error dialog, alert box, or warning notification is visible on screen"
     verify_timeout: 10
 
   # ════════════════════════════════════════════════════════════════════════════
@@ -365,7 +369,7 @@ steps:
 
   # ── Click Clear button next to the shortcut field ────────────────────────
   - localize: "Clear button next to the Telephony Global Shortcut field"
-    click: true
+    click: left
   - wait: 3
 
   # ── Verify shortcut field is now empty ───────────────────────────────────
@@ -463,12 +467,12 @@ steps:
   # ── Re-configure a shortcut so there IS a shortcut to test ───────────────
   # (We cleared it in Phase 6; need it set again to test toggle-OFF behavior)
   - localize: "Telephony Global Shortcut input or key-capture field in Settings > General"
-    click: true
+    click: left
   - wait: 2
   - key: ctrl+shift+t
   - wait: 2
   - localize: "Save button next to the Telephony Global Shortcut field"
-    click: true
+    click: left
   - wait: 3
 
   # ── Verify shortcut is configured again ──────────────────────────────────
@@ -480,7 +484,7 @@ steps:
 
   # ── Now disable the master toggle (Telephony OFF) ────────────────────────
   - localize: "Telephony toggle or switch in Settings > General — the master on/off switch for Telephony, currently in ON state"
-    click: true
+    click: left
   - wait: 3
 
   # ── Verify master toggle is now OFF ──────────────────────────────────────
@@ -527,7 +531,12 @@ steps:
       was effectively unregistered because the master Telephony toggle is OFF.
     verify_timeout: 20
     retries: 5
-  - verify_not: "Rocket.Chat dial pad or telephony panel is visible in the foreground"
+  - verify: |
+      The Rocket.Chat application window is in the background — the non-RC
+      window (terminal or xterm) remains the active foreground window. The
+      Rocket.Chat application is alive but not focused, with no telephony UI
+      overlaying the screen.
+    verify_not: "Rocket.Chat dial pad or telephony panel is visible in the foreground"
     verify_timeout: 10
 
   # ════════════════════════════════════════════════════════════════════════════

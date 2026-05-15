@@ -144,13 +144,13 @@ steps:
 
   # ── 2e: Navigate to General tab ─────────────────────────────────────────
   - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: true
+    click: left
   - wait: 2
 
   # ── 2f: Enable the Telephony master toggle ───────────────────────────────
   # Master toggle is OFF by default — must be enabled or tel: URIs are ignored.
   - localize: "the 'Telephony' master toggle switch in Settings > General"
-    click: true
+    click: left
   - wait: 3
 
   # ── 2g: Confirm toggle is ON ─────────────────────────────────────────────

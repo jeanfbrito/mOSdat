@@ -132,11 +132,11 @@ steps:
     verify_timeout: 15
 
   - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: true
+    click: left
   - wait: 2
 
   - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently OFF or disabled"
-    click: true
+    click: left
   - wait: 3
 
   # Confirm toggle is now ON.
@@ -238,12 +238,12 @@ steps:
     verify_timeout: 15
 
   - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: true
+    click: left
   - wait: 2
 
   # The toggle is currently ON — click to disable it.
   - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently ON or enabled"
-    click: true
+    click: left
   - wait: 3
 
   # Confirm toggle is now OFF.
@@ -313,7 +313,12 @@ steps:
     verify_timeout: 30
 
   # ── P4f: Verify NO telephony modal specifically ──────────────────────────────
-  - verify_not: |
+  - verify: |
+      The Rocket.Chat application window is visible and responsive after the
+      cold-start launch with toggle OFF — showing the normal Workspace login
+      or server page with no telephony UI. The app is alive with no crash
+      dialogs, no apport error handler, and no frozen window.
+    verify_not: |
       A telephony server selection modal or dialog is visible overlaying the
       Rocket.Chat main window, listing server options ('Workspace', 'Mobile RC')
       with a 'Remember this choice' checkbox. With the master toggle OFF, this
