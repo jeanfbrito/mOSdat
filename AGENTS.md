@@ -69,6 +69,7 @@ See [docs/HARDWARE.md](docs/HARDWARE.md) for full specs.
 | `automation/transport/vlm_cache.py` | VLM response cache (stats/clear/prune) |
 | `automation/transport/x11_preamble.py` | Auto-inject DISPLAY/XAUTHORITY/ozone for `x11 = "auto"` VMs |
 | `automation/runners/var_subst.py` | Jinja `{{ key }}` substitution for scenario `vars:` blocks |
+| `shared/routines/` | Parameterized + tested reusable UI procedures (routines). Composed into scenarios via `- routine: <name>`. |
 | `shared/config.sh` | (legacy) Shell config with env var defaults |
 | `shared/proxmox-api.sh` | (legacy) Shell REST API helpers |
 | `os/*/config.sh` | (legacy) OS-specific shell config |
@@ -116,7 +117,7 @@ For task-specific procedures, see `docs/runbooks/`:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mOSdat** (7129 symbols, 12434 relationships, 201 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mOSdat** (7732 symbols, 13431 relationships, 202 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
