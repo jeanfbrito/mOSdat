@@ -26,8 +26,21 @@ class _VerifyMixin:
 
     # ---- B3: Popup sweeper ----
 
+    _APPORT_CRASH_QUESTION = (
+        "is this an Ubuntu/GNOME apport crash report dialog with text like "
+        "'The application Rocket.Chat has closed unexpectedly' or "
+        "'System program problem detected', or any system-crash report dialog "
+        "indicating the application terminated abnormally"
+    )
+
     def _sweep_popups(self, step_num, max_attempts: int = 2) -> int:
         """Dismiss modal dialogs / popups before a localize step (B3).
+
+        For each popup detected:
+          1. Probe if it's an apport crash dialog. If yes, raise AppCrashedError
+             — the app window is gone, the scenario MUST stop. Do not try to
+             dismiss; treating a crash as recoverable hides regressions.
+          2. Otherwise send Escape (legacy path).
 
         Returns the count of popups dismissed.
         Only called when self.popup_sweep is True.
@@ -47,14 +60,43 @@ class _VerifyMixin:
                            answer="yes" if found else "no", latency_ms=latency_ms, kind="popup_sweep")
                 if not found:
                     break
+                # A2: Detect apport/system-crash dialog BEFORE attempting any dismiss.
+                # If present, the app window is closed → raise to halt scenario.
+                self._fail_if_apport_visible(screenshot, step_num)
                 self.injector.key("escape")
                 time.sleep(0.5)
                 dismissed += 1
             except Exception as e:
+                from automation.runners.functional import AppCrashedError
+                if isinstance(e, AppCrashedError):
+                    raise
                 self.log(f"    → popup sweep error ({e}), skipping")
                 break
         self._emit("popup_sweep", step_num=step_num, dismissed=dismissed)
         return dismissed
+
+    def _fail_if_apport_visible(self, screenshot, step_num) -> None:
+        """A2: Raise AppCrashedError if an apport crash dialog is visible.
+
+        Called both from popup-sweep and as an explicit guard. Caller is
+        responsible for catching nothing — the exception is meant to abort
+        the entire scenario because the app under test has died.
+        """
+        from automation.runners.functional import AppCrashedError
+        t0 = time.perf_counter()
+        is_apport = self.vlm.verify(screenshot, self._APPORT_CRASH_QUESTION)
+        self._emit("vlm_verify", step_num=step_num, attempt=1,
+                   question=self._APPORT_CRASH_QUESTION[:80],
+                   answer="yes" if is_apport else "no",
+                   latency_ms=round((time.perf_counter() - t0) * 1000),
+                   kind="apport_crash_probe")
+        if is_apport:
+            self.log("    → APP CRASHED — apport dialog detected, halting scenario")
+            self._emit("app_crashed", step_num=step_num, source="apport_dialog_detected")
+            raise AppCrashedError(
+                "Rocket.Chat crashed — apport dialog visible. Scenario aborted; "
+                "the app window has closed and no further steps can run."
+            )
 
     def _verify_call(
         self,

@@ -1,0 +1,11 @@
+name: detect-apport-crash-dialog
+description: Hard-fail the scenario if an Ubuntu/GNOME apport crash dialog is visible ("The application Rocket.Chat has closed unexpectedly" or any system-crash report). Composed into scenarios where a mid-run crash is an automatic failure, not a recoverable popup. No-op when no dialog is present.
+schema_version: v1
+tags: [health, crash, rocketchat, apport]
+
+steps:
+  - verify: |
+      The desktop is in a normal state. The Rocket.Chat application window may or may not be visible, but the screen is not blocked by a system crash report dialog.
+    verify_not: |
+      An Ubuntu/GNOME apport crash report dialog is visible — typically with text "The application Rocket.Chat has closed unexpectedly", "System program problem detected", a red exclamation icon, or buttons labelled "Show Details", "Don't Send", "Send". Any system-crash report indicating an application terminated abnormally counts.
+    verify_timeout: 5

@@ -20,7 +20,7 @@ from automation.runners.scenario_loader import (
     resolve_vars as _resolve_vars,
 )
 from automation.runners.functional_verify import _VerifyMixin
-from automation.runners.functional_steps import _StepsMixin, StepFailed
+from automation.runners.functional_steps import _StepsMixin, StepFailed, AppCrashedError
 from automation.runners.functional_lifecycle import _LifecycleMixin
 
 # Regex for redacting sensitive text values in event log

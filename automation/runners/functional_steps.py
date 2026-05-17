@@ -16,6 +16,16 @@ class StepFailed(Exception):
     pass
 
 
+class AppCrashedError(StepFailed):
+    """A2: Raised when an apport/system-crash dialog is detected.
+
+    Subclass of StepFailed so the retry loop already propagates it without
+    swallowing. Carries the semantic that the app under test has died —
+    further steps cannot proceed and the scenario MUST halt.
+    """
+    pass
+
+
 class _StepsMixin:
     """Mixin supplying step-level dispatch logic to FunctionalRunner.
 
@@ -465,6 +475,10 @@ class _StepsMixin:
                                latency_ms=latency_ms_verify, kind="verify")
                     screenshot, _ = self.screenshotter.capture()
                     self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
+                    # A4: short-circuit verify retries when an apport crash dialog is the cause.
+                    # Without this, 3 verify retries on greg burn 90-120s before the eventual
+                    # FAIL — and the operator can't tell from logs that the app crashed.
+                    self._fail_if_apport_visible(screenshot, step_num)
                     if attempt < step.retries:
                         self.log("    ✗ not verified, retrying...")
                         self._emit("retry", step_num=step_num, attempt=attempt, reason="verify_failed")
@@ -511,6 +525,8 @@ class _StepsMixin:
                         return
                     screenshot, _ = self.screenshotter.capture()
                     self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
+                    # A4: same short-circuit as verify path
+                    self._fail_if_apport_visible(screenshot, step_num)
                     if attempt < step.retries:
                         self.log("    ✗ accept_any: no prompt matched, retrying...")
                         self._emit("retry", step_num=step_num, attempt=attempt,

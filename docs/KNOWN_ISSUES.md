@@ -179,3 +179,37 @@
   `_cache_path` instead of `CACHE_DIR` so it can't accidentally write
   outside tmp_path even if the module reference goes stale.
 - **Ref**: Observed during Phase F live validation, 2026-05-02.
+
+---
+
+## Rocket.Chat.Electron PR #3325 (HEAD) — app crashes when isTelephonyEnabled is pre-staged in config.json
+
+- **Status**: Upstream regression in the PR3325 branch; mosdat side is correct.
+- **Issue**: When mosdat pre-stages `"isTelephonyEnabled": true` (or `false`) in
+  `~/.config/Rocket.Chat*/config.json` and launches the app, the main process
+  crashes during init with `SIGTRAP` (V8 uncaught exception). Apport raises
+  "The application Rocket.Chat has closed unexpectedly". The app wipes both
+  `config.json` files to 0 bytes on the way out.
+- **Root cause** (per finder investigation against
+  `linux-testing/Rocket.Chat.Electron` on the `pr-3325` branch):
+  1. `src/app/PersistableValues.ts` does NOT include `isTelephonyEnabled` in
+     the persisted-values type, so the field is silently dropped at hydration
+     and the persistence/migration code throws.
+  2. `src/telephony/main.ts` is MISSING from `pr-3325` HEAD; it exists on
+     `pr-3325-latest` and contains the reactive watcher + handler gating.
+  3. `src/deepLinks/main.ts:98-110` `performTelephonyCall` has no
+     `isTelephonyEnabled` gate.
+- **Reproducer**: `mosdat functional examples/rocketchat.toml --vms ubuntu2204
+  --test 3325-master-toggle --popup-sweep` — fails at Phase A step 7 with
+  `app_crashed` (apport_dialog_detected). Crash dump:
+  `/var/crash/_opt_Rocket.Chat_rocketchat-desktop.bin.1000.crash`, signal 5.
+- **mOSdat side**: As of 2026-05-17 the runner detects this via apport-probe
+  in popup-sweep + verify-failure paths and emits `app_crashed` event with
+  `AppCrashedError` halting the scenario (saves ~70s vs blind retry loops).
+- **Fix upstream**: Merge `src/telephony/main.ts` from `pr-3325-latest` and
+  add `isTelephonyEnabled` to `PersistableValues`. Until then,
+  3325-master-toggle and any scenario that pre-stages `isTelephonyEnabled`
+  will fail on this branch — and that failure is correct signal, not a
+  mosdat bug.
+- **Ref**: Observed 2026-05-17 during V3 master-toggle validation with greg
+  via crof.ai; finder agent verdict + live VM crash inspection.
