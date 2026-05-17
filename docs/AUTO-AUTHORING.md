@@ -17,6 +17,31 @@
 
 ---
 
+## Routines-first authoring workflow (recommended)
+
+When you sit down to author tests for a new feature, **do not start by writing a scenario**. Start by listing the atomic UI interactions the feature needs (open Settings, toggle X, select Y from a modal, dispatch a deeplink, etc.). Each becomes a **routine** at `shared/routines/<name>.yaml`.
+
+Workflow:
+1. List the atomic interactions you'll need.
+2. For each one: check `mosdat routines list` for an existing match. If present, reuse. Else, author it.
+3. Author a routine: define inputs, preconditions, steps, postconditions, optional fallbacks. Save under `shared/routines/`.
+4. Test the routine in isolation: `mosdat routines test <name> --vms <vm>`. Iterate until green.
+5. Compose the feature scenario by stitching `- routine: <name>` calls together, plus the feature-specific assertions.
+
+Why this beats writing scenarios from scratch:
+- **Debug once, reuse forever** — a failing routine fails the same way across every scenario that uses it, so you fix once.
+- **Atomic test coverage** — `mosdat routines test` proves each interaction works before you compose. No 200-line scenario where step 47 fails for unclear reasons.
+- **Capability-aware** — routines can declare fallbacks (e.g. alt+w → sidebar kebab if alt+w is swallowed) consumed from F1c capability manifests.
+- **Compose, don't copy-paste** — the routines library grows. New features stand on the shoulders of every prior feature's plumbing.
+
+When NOT to write a routine:
+- One-off scenario logic that has zero chance of reuse (e.g. a specific verify prompt tied to one feature).
+- Pure orchestration (cleanup → launch → dispatch → verify is the scenario's job).
+
+See `docs/routines.md` for the schema + a worked example. See `docs/skills/state-first-testing.md` for when to prefer pre-stage over UI routine.
+
+---
+
 ## Step 1: Understand What Changed
 
 Before generating anything, read the source. **Every agent must do this first.**
@@ -96,6 +121,7 @@ This produces a scaffold with TODOs marking where you need to insert specific de
 > - `vars:` + `{{ key }}` substitution — see `shared/scenarios/functional/example-vars.yaml`
 > - `accept_any:` union step (succeeds on first VLM yes) — see `shared/scenarios/functional/example-accept-any.yaml`
 > - `imports:` + reusable step fragments — see `shared/scenarios/imports/` (ships `cleanup-rocketchat`, `install-x11-deps`, `launch-rocketchat`)
+> - `- routine:` + parameterized UI procedures — see `shared/routines/` and `docs/routines.md`
 
 ---
 

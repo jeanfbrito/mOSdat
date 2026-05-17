@@ -136,6 +136,8 @@ pre-staged:
 A useful heuristic: if you can find the key in `PersistableValues` in the source,
 it's persisted. If you cannot, UI nav is probably required.
 
+For UI nav that IS unavoidable (modals, dial pad, animations), prefer a tested ROUTINE over inline steps. See `docs/AUTO-AUTHORING.md` § Routines-first authoring.
+
 ---
 
 ## 6. Worked Example — PR3325 master-toggle.yaml

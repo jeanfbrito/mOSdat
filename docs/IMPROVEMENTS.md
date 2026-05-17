@@ -325,6 +325,93 @@ Touches: new `tests/negative_fixtures/`, `tests/test_negative_fixtures.py`.
 
 ## Tier 4 — pivot-faster tooling
 
+### R1. `automation/routines/` — parameterized reusable procedure library — IMPLEMENTED 2026-05-17
+
+Routines are parameterized, tested, reusable procedures that wrap a sequence of scenario steps with pre/postcondition verification and optional fallback branches. Composable into scenarios as `- routine: foo` or `- routine: { name: foo, with: { key: val } }`.
+
+```yaml
+# shared/routines/launch-rocketchat.yaml
+name: launch-rocketchat
+description: Kill any running RC, wipe userData, relaunch
+inputs:
+  app_path:
+    name: app_path
+    required: true
+preconditions:
+  - verify_not: "RC window or crash dialog visible"
+steps:
+  - shell: pkill -f rocketchat-desktop || true
+  - shell: "{{ app_path }} --no-sandbox &"
+postconditions:
+  - verify: "RC login screen visible"
+```
+
+Usage in scenarios:
+```yaml
+steps:
+  - routine: launch-rocketchat
+  # or with inputs:
+  - routine:
+      name: launch-rocketchat
+      with:
+        app_path: /opt/Rocket.Chat/rocketchat-desktop
+```
+
+CLI:
+```
+mosdat routines list
+mosdat routines show launch-rocketchat
+```
+
+Schema: `automation/routines/schema.py` — `Routine`, `RoutineInput`, `RoutineFallback` Pydantic models. Validated: name is kebab-case, preconditions/postconditions must be verify steps only, required inputs without default error on missing call arg.
+
+Expansion: `automation/routines/runner.py` `expand_call()` — resolves inputs (call args > scenario vars > defaults), renders jinja subst over all steps, selects fallback branch if capability_manifest present and `when:` expression matches, recursively expands nested routine calls, cycle detection via `_resolving` frozenset.
+
+Scenario integration: `automation/runners/scenario_loader.py` recognizes `- routine:` (both short string form and long `{name, with}` form), expands via `expand_call` BEFORE `ScenarioModel.model_validate`. Happens after I11 import expansion, before I8 var substitution. Internal metadata keys (`_routine_event`, `_on_failure`) stripped before schema validation.
+
+Touches:
+- `automation/routines/__init__.py` — package init
+- `automation/routines/schema.py` — Pydantic models
+- `automation/routines/loader.py` — `load_routine(slug)`, `list_routines()`, `routines_dir()`
+- `automation/routines/runner.py` — `expand_call()` expansion engine
+- `automation/commands/routines.py` — `list` / `show` / `test` (R3 stub) subcommands
+- `automation/commands/parser.py` — `routines` subparser wired
+- `automation/main.py` — `run_routines` added to dispatch dict
+- `automation/runners/scenario_loader.py` — R1 expansion block in `load_test_yaml`
+- `tests/test_routines_schema.py` — 12 schema unit tests
+- `tests/test_routines_loader.py` — 6 loader tests
+- `tests/test_routines_runner.py` — 10 runner tests
+- `tests/test_routines_scenario_integration.py` — 4 integration tests
+- `tests/expected_help/mosdat.txt` — updated snapshot
+- `docs/routines.md` — schema reference + worked example
+
+### R7. Routine schema versioning + PR #3325 master-toggle conversion — IMPLEMENTED 2026-05-17
+
+Schema versioning enforcement for routine YAML files plus a routines-first rewrite of the 3325-master-toggle scenario as a worked example.
+
+**Versioning (Part A):**
+- `CURRENT_SCHEMA_VERSION = "v1"` and `SUPPORTED_SCHEMA_VERSIONS = ["v1"]` exported from `automation/routines/__init__.py`.
+- `Routine.schema_version` field validated against supported list; unknown future versions raise `ValidationError` with clear upgrade message.
+- `_migrate_to_current(data)` stub added to `loader.py`, called before `Routine.model_validate` in both `load_routine` and `list_routines`. Documents migration pattern for future schema bumps.
+- `mosdat routines version` subcommand prints current and supported versions.
+
+**Scenario conversion (Part B):**
+- `shared/scenarios/functional/3325-master-toggle.yaml`: **236 → 76 lines (-160, -68%)**.
+- Expanded step count: 32 (same behavior, just expressed via routine calls).
+- Inline shell config-staging + launch + kill blocks replaced with `cleanup-rocketchat`, `launch-rocketchat`, `dispatch-tel-link`, `verify-app-alive` routine calls.
+- Also fixed pre-existing bug in `dispatch-tel-link.yaml`: `- wait: "{{ settle_seconds }}"` (string, never rendered) → `- wait: 8` (int, validated correctly).
+
+Touches:
+- `automation/routines/__init__.py` — `CURRENT_SCHEMA_VERSION`, `SUPPORTED_SCHEMA_VERSIONS`
+- `automation/routines/schema.py` — `_schema_version_supported` field validator
+- `automation/routines/loader.py` — `_migrate_to_current` stub + wired into `load_routine` / `list_routines`
+- `automation/commands/routines.py` — `_cmd_version` + `version` dispatch
+- `automation/commands/parser.py` — `version` subparser wired
+- `shared/routines/dispatch-tel-link.yaml` — `wait: 8` fix
+- `shared/scenarios/functional/3325-master-toggle.yaml` — routines-first rewrite
+- `tests/test_routines_versioning.py` — 7 versioning tests
+- `docs/routines.md` — schema versioning + worked example sections
+
 ### F2. `mosdat recipes` — platform-constraint corpus + pivot browser — IMPLEMENTED 2026-05-17
 
 Searchable corpus of known platform constraints and ordered workaround strategies (pivots). Eliminates re-discovery of constraints that have already been hit and documented.
@@ -439,6 +526,10 @@ Schema (`shared/binary_capabilities/<asar_sha>.json`):
 Touches:
 - `automation/setup/capability.py` (new) — `manifest_path`, `load_manifest`, `write_manifest`, `get_for_vm`, `build_manifest`
 - `tests/test_capability.py` — 5 unit tests (round-trip, missing, sha-mismatch, path, get_for_vm)
+
+## Routines authoring discipline
+
+Authoring guidance lives in `docs/AUTO-AUTHORING.md` § Routines-first authoring workflow. New scenarios should be composed from tested routines rather than written as monolithic step lists.
 
 ---
 

@@ -108,6 +108,8 @@ mOSdat uses Proxmox to orchestrate VMs with actual NVIDIA GPUs passed through vi
 
 ## Common Workflows
 
+> **Recommended authoring workflow:** Author routines first (`shared/routines/`), then compose scenarios that call them. See `docs/AUTO-AUTHORING.md`.
+
 Run a functional VLM smoke test:
 
 ```bash
