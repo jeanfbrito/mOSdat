@@ -112,6 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
     fn_p.add_argument("--verify-model", dest="verify_model", metavar="MODEL",
                       help="Override VLM for yes/no state verification (default: same as --model; "
                            "recommend qwen3-vl-abliterated — localization models hallucinate on yes/no)")
+    fn_p.add_argument("--cursor-instant", action="store_true",
+                      help="Skip human-like cursor motion (instant teleport, fast CI runs)")
     fn_p.add_argument("--save-screenshots", action="store_true",
                       help="Save screenshots on failure to results dir")
     fn_p.add_argument("--screenshots", type=Path, metavar="DIR",
@@ -368,6 +370,10 @@ def build_parser() -> argparse.ArgumentParser:
     trace_p.add_argument(
         "--write-manifest", action="store_true", dest="write_manifest",
         help="Persist probe results to shared/binary_capabilities/<sha>.json",
+    )
+    trace_p.add_argument(
+        "--probe-hover", dest="probe_hover", default=None, metavar="X,Y[;X2,Y2...]",
+        help="Probe hover-required classification at semicolon-separated coord pairs (e.g. '97,380;200,400')",
     )
 
     # mosdat doctor  (I13: VM + host health checks)

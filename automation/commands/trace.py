@@ -54,6 +54,31 @@ class TraceReport:
 
 
 # ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+
+def _parse_probe_hover(spec: str) -> list[tuple[int, int]]:
+    """Parse ``--probe-hover`` value into a list of (x, y) tuples.
+
+    Accepts semicolon-separated ``x,y`` pairs, e.g. ``"97,380;200,400"``.
+    Silently skips malformed pairs.
+    """
+    coords: list[tuple[int, int]] = []
+    for pair in spec.split(";"):
+        pair = pair.strip()
+        if not pair:
+            continue
+        parts = pair.split(",")
+        if len(parts) != 2:
+            continue
+        try:
+            coords.append((int(parts[0].strip()), int(parts[1].strip())))
+        except ValueError:
+            continue
+    return coords
+
+
+# ---------------------------------------------------------------------------
 # Screenshot diff helper
 # ---------------------------------------------------------------------------
 
@@ -312,6 +337,143 @@ def _probe_chrome_focus_repeat(ssh, config, vm, key: str = "ctrl+f") -> ProbeRes
 
 
 # ---------------------------------------------------------------------------
+# Hover-required probe
+# ---------------------------------------------------------------------------
+
+# Fraction of pixels in the target region that must differ to count as "appeared"
+_HOVER_PIXEL_DIFF_THRESHOLD = 0.05  # 5 %
+
+
+def _region_diff_fraction(before: bytes, after: bytes, coord: tuple[int, int], radius: int = 40) -> float:
+    """Return the fraction of pixels that changed in a square region around *coord*.
+
+    Region is a (2*radius) x (2*radius) box, clamped to image bounds.
+    Returns 0.0 on error or empty region.
+    """
+    try:
+        from PIL import Image, ImageChops
+        import io
+        img_a = Image.open(io.BytesIO(before)).convert("L")
+        img_b = Image.open(io.BytesIO(after)).convert("L")
+        if img_a.size != img_b.size:
+            img_b = img_b.resize(img_a.size)
+        x, y = coord
+        w, h = img_a.size
+        box = (
+            max(0, x - radius),
+            max(0, y - radius),
+            min(w, x + radius),
+            min(h, y + radius),
+        )
+        if box[2] <= box[0] or box[3] <= box[1]:
+            return 0.0
+        region_a = img_a.crop(box)
+        region_b = img_b.crop(box)
+        diff = ImageChops.difference(region_a, region_b)
+        pixels = list(diff.getdata())
+        if not pixels:
+            return 0.0
+        changed = sum(1 for p in pixels if p > 10)  # >10/255 grey change counts
+        return changed / len(pixels)
+    except Exception:
+        return 0.0
+
+
+def _move_cursor_vnc(ssh, config, vm, x: int, y: int) -> None:
+    """Move VNC cursor to (x, y) via a single pointer_event (teleport, no motion)."""
+    try:
+        from automation.proxmox.api import ProxmoxAPI
+        from automation.transport.vnc import VncClient
+        api = ProxmoxAPI(
+            host=config.proxmox.host,
+            port=config.proxmox.port,
+            user=config.proxmox.user,
+            password=config.proxmox.password,
+        )
+        with VncClient(api, vmid=vm.vmid) as vnc:
+            vnc.move(x, y)
+    except Exception:
+        pass
+
+
+def _probe_hover_required(
+    ssh,
+    config,
+    vm,
+    candidate_coords: list[tuple[int, int]],
+) -> dict[tuple, str]:
+    """Probe whether each candidate coordinate requires cursor motion to trigger hover.
+
+    For each (x, y):
+      1. Teleport to (0, 0) — baseline.
+      2. Capture baseline screenshot.
+      3. Teleport to candidate — no intermediate motion.
+      4. Capture screenshot. Region-diff vs baseline.
+      5. Wait 800 ms.
+      6. Teleport back to (0, 0).
+      7. Capture screenshot. Region-diff vs step-4 capture.
+
+    Classification:
+      - diff(step2→step4) > 5 % AND diff(step4→step7) > 5 %  → "hover-stable"
+        (element appeared on teleport arrival and disappeared on departure;
+        conservatively also tagged motion-recommended for popup-style elements)
+      - diff(step2→step4) ≤ 5 %  → "motion-required"
+        (hover handler did not fire on teleport)
+
+    Returns dict mapping (x, y) → classification string.
+    """
+    results: dict[tuple, str] = {}
+
+    for coord in candidate_coords:
+        x, y = coord
+        # --- step 1: move to origin ---
+        _move_cursor_vnc(ssh, config, vm, 0, 0)
+        time.sleep(0.1)
+
+        # --- step 2: baseline screenshot ---
+        baseline = _capture_vnc(ssh, config, vm)
+        if baseline is None:
+            results[coord] = "error"
+            continue
+
+        # --- step 3: teleport to candidate ---
+        _move_cursor_vnc(ssh, config, vm, x, y)
+
+        # --- step 4: screenshot after teleport ---
+        after_arrive = _capture_vnc(ssh, config, vm)
+        if after_arrive is None:
+            results[coord] = "error"
+            continue
+
+        frac_arrive = _region_diff_fraction(baseline, after_arrive, coord)
+
+        # --- step 5: wait 800 ms ---
+        time.sleep(0.8)
+
+        # --- step 6: move away ---
+        _move_cursor_vnc(ssh, config, vm, 0, 0)
+
+        # --- step 7: screenshot after departure ---
+        after_depart = _capture_vnc(ssh, config, vm)
+        if after_depart is None:
+            results[coord] = "error"
+            continue
+
+        frac_depart = _region_diff_fraction(after_arrive, after_depart, coord)
+
+        if frac_arrive > _HOVER_PIXEL_DIFF_THRESHOLD:
+            # Element appeared on teleport arrival
+            results[coord] = "hover-stable"
+        else:
+            # No change on teleport — hover handler needs actual motion
+            results[coord] = "motion-required"
+
+        _ = frac_depart  # available for future refinement
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Report formatting
 # ---------------------------------------------------------------------------
 
@@ -424,6 +586,22 @@ def run_trace(args) -> int:
         report = TraceReport(binary_sha=asar_sha, vm=vm_name, results=results)
         _print_report(report)
 
+        # --- Hover-required probe (optional) ---
+        hover_results: list[dict] = []
+        probe_hover_str = getattr(args, "probe_hover", None)
+        if probe_hover_str:
+            candidate_coords = _parse_probe_hover(probe_hover_str)
+            if candidate_coords:
+                print(f"[trace] Probing hover-required for {len(candidate_coords)} coord(s)...")
+                hover_map = _probe_hover_required(ssh, config, vm, candidate_coords)
+                for coord, classification in hover_map.items():
+                    hover_results.append({
+                        "coord": list(coord),
+                        "label": f"{coord[0]},{coord[1]}",
+                        "result": classification,
+                    })
+                    print(f"  ({coord[0]}, {coord[1]})  →  {classification}")
+
         # Write manifest if requested
         if getattr(args, "write_manifest", False):
             try:
@@ -437,6 +615,7 @@ def run_trace(args) -> int:
                         for r in results
                         if r.key == "kebab popup" and r.status != "ERROR"
                     },
+                    hover_required_elements=hover_results or None,
                 )
                 out_path = write_manifest(asar_sha, data)
                 print(f"[trace] Manifest written: {out_path}")

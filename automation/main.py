@@ -203,6 +203,8 @@ def cmd_functional(args) -> int:
     from pathlib import Path as P
 
     config = load_config(args.config)
+    if getattr(args, "cursor_instant", False):
+        config.cursor.profile = "instant"
 
     vm_names = [v.strip() for v in args.vms.split(",")]
     for name in vm_names:

@@ -14,9 +14,29 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, field_validator
+
+
+def _resolve_vlm_api_key(raw: Optional[str]) -> str:
+    """Resolve a VLM api_key from TOML, supporting `file:` and `env:` indirection.
+
+    - `file:/path/to/key`  → reads file, strips whitespace
+    - `env:VAR_NAME`       → reads env var
+    - empty/None           → falls back to VLM_API_KEY then OPENAI_API_KEY env
+    - literal              → used as-is (discouraged — checks for accidental secrets)
+    """
+    if not raw:
+        return os.environ.get("VLM_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
+    raw = raw.strip()
+    if raw.startswith("file:"):
+        path = Path(raw[5:]).expanduser()
+        return path.read_text().strip() if path.exists() else ""
+    if raw.startswith("env:"):
+        return os.environ.get(raw[4:], "")
+    return raw
 
 
 def _require_env(name: str) -> str:
@@ -159,6 +179,27 @@ class ReportConfig:
     known_issues: dict[str, str] = field(default_factory=dict)
 
 
+class CursorConfig(BaseModel):
+    profile: Literal["instant", "linear", "bezier"] = "bezier"
+    duration_ms: int = 150
+    hover_dwell_ms: int = 0
+    seed: str = "auto"
+
+    @field_validator("duration_ms")
+    @classmethod
+    def _validate_duration_ms(cls, value: int) -> int:
+        if value < 0 or value > 5000:
+            raise ValueError("duration_ms must be between 0 and 5000")
+        return value
+
+    @field_validator("hover_dwell_ms")
+    @classmethod
+    def _validate_hover_dwell_ms(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("hover_dwell_ms must be >= 0")
+        return value
+
+
 @dataclass
 class ProjectConfig:
     app: AppConfig
@@ -169,6 +210,7 @@ class ProjectConfig:
     build: Optional[BuildConfig] = None
     vlm: VLMConfig = field(default_factory=VLMConfig)
     functional: FunctionalConfig = field(default_factory=FunctionalConfig)
+    cursor: CursorConfig = Field(default_factory=CursorConfig)
     framework_path: Path = field(default_factory=lambda: Path(__file__).parent.parent)
     results_dir: Path = field(default_factory=Path)
     skip_build: bool = False
@@ -365,6 +407,10 @@ def load_config(config_path: Path) -> ProjectConfig:
         tests_dir=Path(fn_raw["tests_dir"]) if "tests_dir" in fn_raw else default_tests_dir,
     )
 
+    # Cursor motion config
+    cursor_raw = raw.get("cursor", {})
+    cursor = CursorConfig(**cursor_raw)
+
     return ProjectConfig(
         app=app,
         proxmox=proxmox,
@@ -374,4 +420,5 @@ def load_config(config_path: Path) -> ProjectConfig:
         report=report,
         vlm=vlm,
         functional=functional,
+        cursor=cursor,
     )

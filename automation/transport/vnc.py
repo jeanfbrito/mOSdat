@@ -27,6 +27,8 @@ import time
 import urllib.parse
 from typing import TYPE_CHECKING, Optional
 
+from automation.transport import cursor_motion
+
 from Crypto.Cipher import DES
 from PIL import Image
 from websockets.sync.client import connect
@@ -144,6 +146,8 @@ class VncClient:
         self._width = 0
         self._height = 0
         self._button_mask = 0  # current mouse button state
+        self._cursor_x: int = 0
+        self._cursor_y: int = 0
 
     # ---- context-manager lifecycle ----
 
@@ -177,6 +181,48 @@ class VncClient:
         """Move mouse to absolute pixel coordinates (no button change)."""
         self._require_open()
         self._pointer_event(x, y, self._button_mask)
+
+    def human_move(
+        self,
+        target_x: int,
+        target_y: int,
+        *,
+        profile: str = "bezier",
+        duration_ms: Optional[float] = None,
+        jitter_amplitude: float = 2.0,
+        control_offset_ratio: float = 0.4,
+        emit_cap_ms: float = 16.0,
+        seed: "int | str" = "auto",
+    ) -> None:
+        """Move mouse along a human-like path to (target_x, target_y).
+
+        Uses cursor_motion.generate_path() to produce intermediate steps.
+        profile="instant" skips the path entirely and calls move() directly.
+        Updates internal cursor position after the move.
+        """
+        if profile == "instant":
+            self.move(target_x, target_y)
+            self._cursor_x = target_x
+            self._cursor_y = target_y
+            return
+
+        steps = cursor_motion.generate_path(
+            (self._cursor_x, self._cursor_y),
+            (target_x, target_y),
+            profile=profile,  # type: ignore[arg-type]
+            duration_ms=duration_ms,
+            jitter_amplitude=jitter_amplitude,
+            control_offset_ratio=control_offset_ratio,
+            emit_cap_ms=emit_cap_ms,
+            seed=seed,
+        )
+        for x, y, dt_ms in steps:
+            self.move(x, y)
+            if dt_ms > 0:
+                time.sleep(dt_ms / 1000)
+
+        self._cursor_x = target_x
+        self._cursor_y = target_y
 
     def click(self, x: int, y: int, button: int = 1) -> None:
         """Press+release a mouse button at (x, y). button: 1=left, 2=middle, 3=right."""

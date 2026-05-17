@@ -434,3 +434,85 @@ What improved:
 - **Reuse**: the same `launch-rocketchat` routine is invoked twice with different `telephony_enabled` values — the 80-line config-writing shell block runs once per routine and is not duplicated in the scenario.
 - **Isolated test coverage**: `cleanup-rocketchat`, `launch-rocketchat`, and `dispatch-tel-link` are independently testable via `mosdat routines test`. A failure in one routine immediately identifies which sub-procedure broke.
 - **Maintainability**: changing the userData directory layout or the config.json schema only requires updating the routine, not every scenario that uses it.
+
+---
+
+## Cursor motion (Mn series)
+
+mOSdat no longer teleports the VNC cursor. Every click and hover step traverses
+a plausible curved path so hover handlers fire and transient popups stay open
+between sequential clicks. Background: `docs/research/cursor-motion.md`.
+
+### Profile system
+
+Four profiles are available via `automation/transport/cursor_motion.py`:
+
+| Profile | Behaviour |
+|---------|-----------|
+| `instant` | Single step, zero delay — equivalent to old teleport behaviour |
+| `linear` | Straight line at constant speed |
+| `bezier` | Quadratic Bezier + perpendicular jitter + ease-in/out tween **(default)** |
+| `windmouse` | Physics gravity/wind model; more organic, variable step count |
+
+`bezier` is recommended. It emits 8–16 pointer events over 80–300 ms (distance-
+scaled), fires hover handlers well before the final position, and has a
+deterministic frame count that fits the 60 fps VNC budget.
+
+### Global TOML `[cursor]` config
+
+```toml
+[cursor]
+profile        = "bezier"   # instant | linear | bezier | windmouse
+duration_ms    = 150        # target move time (auto-scaled from distance if 0)
+hover_dwell_ms = 0          # ms cursor rests on element before click fires (global default)
+seed           = "auto"     # int or "auto"; set a fixed int for reproducible CI replays
+```
+
+### Per-step overrides
+
+Any `click:` or `hover:` step can override the global profile and add a dwell:
+
+```yaml
+steps:
+  - localize: "the kebab menu button in the sidebar"
+    click: left
+    motion: bezier       # instant | linear | bezier | windmouse
+    dwell_ms: 200        # cursor rests here for 200 ms before the click fires
+```
+
+`dwell_ms` is the critical knob for hover-sensitive UI. It keeps the cursor on
+the element long enough for transient popups and submenus to open before the
+next step begins. See `shared/recipes/cursor-teleport-misses-hover-handlers.yaml`
+for the full diagnostic recipe.
+
+### CLI: `--cursor-instant` for fast CI runs
+
+```bash
+mosdat functional examples/rocketchat.toml --vms ubuntu2404 \
+    --cursor-instant
+```
+
+Forces `profile = "instant"` globally for the run — identical to pre-Mn
+teleport behaviour. Useful in CI where speed matters and no hover-sensitive
+interactions are exercised.
+
+### Worked example: hover step that fires a submenu
+
+```yaml
+# shared/routines/open-settings.yaml (fallback path)
+fallbacks:
+  - when: "capability.accelerators['alt+w'] == 'swallowed'"
+    steps:
+      - localize: "the kebab or three-dot menu button in the sidebar"
+        click: left
+        # Popup auto-dismisses if cursor doesn't dwell — keep it alive.
+        dwell_ms: 250
+      - wait: 2
+      - localize: "the 'Settings' menu item in the popup"
+        click: left
+```
+
+Without `dwell_ms: 250` the kebab popup closes before the second `localize`
+completes because the cursor moves away immediately after the click event.
+With bezier motion + 250 ms dwell the popup stays open until VLM resolves the
+menu item.

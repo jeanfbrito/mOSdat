@@ -22,6 +22,10 @@ fallbacks:
     steps:
       - localize: "the kebab or three-dot menu button at the bottom of the Rocket.Chat sidebar (left column) — a settings/customize gear-or-dots icon"
         click: left
+        # dwell_ms: clicking the kebab opens a transient popup that auto-dismisses if
+        # the cursor teleports away before the next localize fires. 250 ms keeps the
+        # popup alive long enough for the VLM localize on the menu item to complete.
+        dwell_ms: 250
       - wait: 2
       - localize: "the 'Settings' or 'Desktop Settings' menu item in the popup menu that just opened from the sidebar kebab button"
         click: left

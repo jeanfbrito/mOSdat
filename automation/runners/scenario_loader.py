@@ -58,6 +58,8 @@ class FunctionalStep:
     accept_any: Optional[list] = None
     # I10: human-readable step label (from YAML comment or explicit label: field)
     label: Optional[str] = None
+    motion: Optional[str] = None
+    dwell_ms: Optional[int] = None
 
 
 def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep]:
@@ -99,6 +101,8 @@ def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep
             must_pass=step.must_pass,
             accept_any=[_sub(p, vars) for p in step.accept_any] if step.accept_any else None,
             label=step.label,
+            motion=step.motion,
+            dwell_ms=step.dwell_ms,
         ))
     return resolved
 
@@ -605,4 +609,6 @@ def parse_step(raw: dict) -> FunctionalStep:
         canary_char=raw.get("canary_char", "q"),
         accept_any=raw.get("accept_any"),
         label=raw.get("label"),
+        motion=raw.get("motion"),
+        dwell_ms=raw.get("dwell_ms"),
     )

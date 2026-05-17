@@ -94,6 +94,10 @@ class _StepBase(BaseModel):
     accept_any: Optional[list[str]] = None
     # I10: human-readable step label (from YAML comment or explicit field)
     label: Optional[str] = None
+    # M3 prep: optional pointer motion style metadata for click/hover-like steps
+    motion: Optional[Literal["instant", "linear", "bezier"]] = None
+    # M3 prep: optional dwell time before/after pointer action (ms)
+    dwell_ms: Optional[int] = None
 
     @model_validator(mode="after")
     def _check_canary_config(self) -> "_StepBase":
@@ -109,6 +113,8 @@ class _StepBase(BaseModel):
         # I7: accept_any must not be an empty list
         if self.accept_any is not None and len(self.accept_any) == 0:
             raise ValueError("accept_any must be a non-empty list of prompt strings")
+        if self.dwell_ms is not None and self.dwell_ms < 0:
+            raise ValueError("dwell_ms must be >= 0")
         return self
 
 

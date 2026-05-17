@@ -578,3 +578,35 @@ key telephony UI elements, (C) optional `--load-state` / `--export-state` CLI.
 Suitable for filing as a GitHub issue or PR cover letter.
 
 → [`docs/upstream-rc-electron-asks.md`](upstream-rc-electron-asks.md)
+
+---
+
+## Tier 4 — cursor motion (Mn series)
+
+### M1. Cursor motion research — IMPLEMENTED 2026-05-17
+Algorithm survey (WindMouse, Bezier-with-jitter, PyAutoGUI tweens, minimum-jerk). Recommendation: Bezier with jitter.
+Code: `docs/research/cursor-motion.md`.
+
+### M2. `automation/transport/cursor_motion.py` — IMPLEMENTED 2026-05-17
+`generate_path(start, end, *, profile, duration_ms, frame_count, jitter_amplitude, control_offset_ratio, emit_cap_ms, seed) -> list[Step]`. Four profiles: `instant`, `linear`, `bezier` (default), `windmouse`. Distance-scaled frame count (8–16) and duration (80–300 ms). Pins landing point exactly on target.
+Code: `automation/transport/cursor_motion.py`.
+
+### M3. Wire `generate_path` into `InputInjector.move_smooth` — IN PROGRESS
+`automation/vlm/input.py` `InputInjector` to call `generate_path` for every cursor move, tracking current position for the start argument.
+
+### M4. Step schema: `motion:` + `dwell_ms:` fields — IMPLEMENTED 2026-05-17
+Per-step overrides on `click:` and `hover:` steps. `motion: instant|linear|bezier|windmouse`, `dwell_ms: <int>` (ms cursor rests on element before click fires).
+
+### M5. `CursorConfig` TOML `[cursor]` block — IMPLEMENTED 2026-05-17
+Global defaults: `profile`, `duration_ms`, `hover_dwell_ms`, `seed`. Pydantic model with range validators.
+Code: `automation/config.py` `CursorConfig`.
+
+### M6. `--cursor-instant` CLI flag — IMPLEMENTED 2026-05-17
+Forces `profile = "instant"` for the run. For fast CI where hover-sensitive interactions are not exercised.
+
+### M7. F2 recipe `cursor-teleport-misses-hover-handlers` — IMPLEMENTED 2026-05-17
+Symptoms, root cause (no intermediate `pointermove` events), and three ordered pivots.
+Code: `shared/recipes/cursor-teleport-misses-hover-handlers.yaml`.
+
+### M8. F1 `mosdat trace --probe-hover <x,y>` — IMPLEMENTED 2026-05-17
+Detects whether a UI element at given coordinates requires cursor motion to activate (fires a pointer-enter handler). Adds `motion_required: true` to the capability manifest for that coordinate.

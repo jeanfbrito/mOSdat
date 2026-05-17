@@ -14,6 +14,9 @@ import pytest
 # ---------------------------------------------------------------------------
 # Stub heavy deps before importing trace
 # ---------------------------------------------------------------------------
+# Save originals so teardown_module restores them — prevents stub pollution
+# from bleeding into sibling test files (test_human_move, test_cursor_motion_integration).
+_STUBBED_ORIGINALS: dict[str, object] = {}
 for _mod in list(sys.modules):
     if any(_mod.startswith(p) for p in [
         "automation.transport.vnc",
@@ -21,7 +24,9 @@ for _mod in list(sys.modules):
         "automation.vlm",
         "automation.config",
         "automation.transport.ssh",
+        "automation.setup",
     ]):
+        _STUBBED_ORIGINALS.setdefault(_mod, sys.modules.get(_mod))
         sys.modules.pop(_mod, None)
 
 # Stub SSHResult / SSHClient
@@ -128,6 +133,9 @@ from automation.commands.trace import (  # noqa: E402
     TraceReport,
     _screenshot_diff,
     _probe_key,
+    _parse_probe_hover,
+    _probe_hover_required,
+    _region_diff_fraction,
 )
 
 
@@ -241,3 +249,211 @@ class TestProbeKeyWithMock:
                 with patch("automation.commands.trace.time.sleep"):
                     result = _probe_key(ssh, config, vm, "alt+w", use_vnc=True)
         assert result.status == "SWALLOWED"
+
+
+# ---------------------------------------------------------------------------
+# _parse_probe_hover
+# ---------------------------------------------------------------------------
+
+class TestParseProbeHover:
+    def test_single_coord(self):
+        result = _parse_probe_hover("97,380")
+        assert result == [(97, 380)]
+
+    def test_multiple_coords(self):
+        result = _parse_probe_hover("97,380;200,400")
+        assert result == [(97, 380), (200, 400)]
+
+    def test_empty_string(self):
+        assert _parse_probe_hover("") == []
+
+    def test_malformed_pair_skipped(self):
+        result = _parse_probe_hover("97,380;bad;200,400")
+        assert result == [(97, 380), (200, 400)]
+
+    def test_whitespace_trimmed(self):
+        result = _parse_probe_hover(" 10 , 20 ; 30 , 40 ")
+        assert result == [(10, 20), (30, 40)]
+
+
+# ---------------------------------------------------------------------------
+# _region_diff_fraction
+# ---------------------------------------------------------------------------
+
+class TestRegionDiffFraction:
+    def test_identical_returns_zero(self):
+        img = _white_bmp(size=(100, 100))
+        assert _region_diff_fraction(img, img, (50, 50)) < 0.01
+
+    def test_fully_changed_returns_high_fraction(self):
+        white = _white_bmp(size=(100, 100))
+        black = _black_bmp(size=(100, 100))
+        frac = _region_diff_fraction(white, black, (50, 50))
+        assert frac > 0.9
+
+    def test_invalid_bytes_returns_zero(self):
+        assert _region_diff_fraction(b"bad", b"bad", (10, 10)) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _probe_hover_required
+# ---------------------------------------------------------------------------
+
+def _make_bmp_100() -> bytes:
+    from PIL import Image
+    import io
+    img = Image.new("L", (100, 100), color=255)
+    buf = io.BytesIO()
+    img.save(buf, format="BMP")
+    return buf.getvalue()
+
+
+def _make_black_bmp_100() -> bytes:
+    from PIL import Image
+    import io
+    img = Image.new("L", (100, 100), color=0)
+    buf = io.BytesIO()
+    img.save(buf, format="BMP")
+    return buf.getvalue()
+
+
+class TestProbeHoverRequired:
+    """Tests for _probe_hover_required classification logic."""
+
+    def test_motion_required_when_no_change_on_arrive(self):
+        """If screen does not change after teleport → motion-required."""
+        config = _FakeConfig()
+        vm = _FakeVM()
+        ssh = _FakeSSHClient("192.168.1.100", "jean")
+
+        # All captures return the same white image (no change)
+        with patch("automation.commands.trace._capture_vnc", return_value=_make_bmp_100()):
+            with patch("automation.commands.trace._move_cursor_vnc"):
+                with patch("automation.commands.trace.time.sleep"):
+                    result = _probe_hover_required(ssh, config, vm, [(50, 50)])
+
+        assert result[(50, 50)] == "motion-required"
+
+    def test_hover_stable_when_element_appears_on_arrive(self):
+        """If screen changes after teleport → hover-stable."""
+        config = _FakeConfig()
+        vm = _FakeVM()
+        ssh = _FakeSSHClient("192.168.1.100", "jean")
+
+        white = _make_bmp_100()
+        black = _make_black_bmp_100()
+
+        # capture sequence: baseline (white), after-arrive (black), after-depart (white)
+        capture_seq = iter([white, black, white])
+
+        with patch("automation.commands.trace._capture_vnc", side_effect=capture_seq):
+            with patch("automation.commands.trace._move_cursor_vnc"):
+                with patch("automation.commands.trace.time.sleep"):
+                    result = _probe_hover_required(ssh, config, vm, [(50, 50)])
+
+        assert result[(50, 50)] == "hover-stable"
+
+    def test_error_on_vnc_failure(self):
+        """If VNC capture fails → error classification."""
+        config = _FakeConfig()
+        vm = _FakeVM()
+        ssh = _FakeSSHClient("192.168.1.100", "jean")
+
+        with patch("automation.commands.trace._capture_vnc", return_value=None):
+            with patch("automation.commands.trace._move_cursor_vnc"):
+                with patch("automation.commands.trace.time.sleep"):
+                    result = _probe_hover_required(ssh, config, vm, [(50, 50)])
+
+        assert result[(50, 50)] == "error"
+
+    def test_multiple_coords_classified_independently(self):
+        """Two coords get independent classifications."""
+        config = _FakeConfig()
+        vm = _FakeVM()
+        ssh = _FakeSSHClient("192.168.1.100", "jean")
+
+        white = _make_bmp_100()
+        black = _make_black_bmp_100()
+
+        # coord1: no change (motion-required) — 3 white captures
+        # coord2: change on arrive (hover-stable) — white, black, white
+        capture_seq = iter([white, white, white, white, black, white])
+
+        with patch("automation.commands.trace._capture_vnc", side_effect=capture_seq):
+            with patch("automation.commands.trace._move_cursor_vnc"):
+                with patch("automation.commands.trace.time.sleep"):
+                    result = _probe_hover_required(
+                        ssh, config, vm, [(10, 10), (50, 50)]
+                    )
+
+        assert result[(10, 10)] == "motion-required"
+        assert result[(50, 50)] == "hover-stable"
+
+
+# ---------------------------------------------------------------------------
+# capability manifest — hover_required_elements field
+# ---------------------------------------------------------------------------
+
+def _real_build_manifest():
+    """Load the real build_manifest bypassing the sys.modules stub."""
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "_cap_real",
+        pathlib.Path(__file__).parent.parent / "automation" / "setup" / "capability.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.build_manifest
+
+
+class TestCapabilityManifestHoverField:
+    def test_build_manifest_without_hover(self):
+        build_manifest = _real_build_manifest()
+        data = build_manifest(
+            asar_sha="abc123",
+            vm="ubuntu2204",
+            accelerators={"alt+f": "open"},
+        )
+        assert "hover_required_elements" not in data
+
+    def test_build_manifest_with_hover(self):
+        build_manifest = _real_build_manifest()
+        hover = [{"coord": [97, 380], "label": "sidebar kebab", "result": "motion-required"}]
+        data = build_manifest(
+            asar_sha="abc123",
+            vm="ubuntu2204",
+            accelerators={"alt+f": "open"},
+            hover_required_elements=hover,
+        )
+        assert "hover_required_elements" in data
+        assert data["hover_required_elements"][0]["result"] == "motion-required"
+
+    def test_build_manifest_empty_hover_list_included(self):
+        build_manifest = _real_build_manifest()
+        data = build_manifest(
+            asar_sha="abc123",
+            vm="ubuntu2204",
+            accelerators={},
+            hover_required_elements=[],
+        )
+        assert data["hover_required_elements"] == []
+
+
+def teardown_module(module):
+    """Restore originals + clear stub modules so sibling test files see real automation.*."""
+    import importlib
+    for _name in list(sys.modules):
+        if _name.startswith("automation.transport.vnc") or _name.startswith("automation.vlm") or \
+           _name.startswith("automation.proxmox") or _name == "automation.config" or \
+           _name.startswith("automation.transport.ssh") or _name.startswith("automation.setup"):
+            sys.modules.pop(_name, None)
+    # Trigger re-import of real modules to restore parent attributes.
+    import automation.transport as _at
+    import automation.transport.vnc as _vnc
+    _at.vnc = _vnc
+    import automation.vlm as _av
+    try:
+        import automation.vlm.input as _vi
+        _av.input = _vi
+    except Exception:
+        pass

@@ -8,6 +8,22 @@ The format follows Keep a Changelog and uses reverse chronological ordering.
 
 ### Added
 
+### Added (Mn series — 2026-05-17)
+
+- **M1–M8 cursor motion** — VNC cursor no longer teleports. Bezier-with-jitter
+  path generator (`automation/transport/cursor_motion.py`) with profiles:
+  instant, linear, bezier (default), windmouse. Fires hover handlers + keeps
+  transient popups alive between sequential clicks.
+- New TOML `[cursor]` config (profile, duration_ms, hover_dwell_ms, seed).
+- Per-step `motion: instant|linear|bezier` + `dwell_ms: <int>` on click/hover.
+- `--cursor-instant` CLI flag on `mosdat functional` for fast CI runs.
+- F2 recipe `cursor-teleport-misses-hover-handlers` documents the class.
+- F1 trace gains `--probe-hover <coords>` to detect motion-required elements.
+- `open-settings` routine fallback updated to use `dwell_ms: 250` on the kebab
+  popup interaction.
+- References: `docs/research/cursor-motion.md`, `automation/transport/cursor_motion.py`,
+  `shared/recipes/cursor-teleport-misses-hover-handlers.yaml`, `docs/routines.md`.
+
 - R1-R7 routines framework shipped for reusable scenario composition via `- routine: <name>` and `- routine: { name, with }`.
 - Routines library lives in `shared/routines/*.yaml` with parameterized preconditions, steps, postconditions, and fallbacks.
 - `mosdat routines` CLI surfaced with: `list`, `show`, `test`, `trace`, `explain`, `fixtures`, `report`, `version`.

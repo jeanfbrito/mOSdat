@@ -7,7 +7,10 @@ or reorder window stacks.
 """
 
 import base64
+import time
+from typing import Optional
 
+from ..config import CursorConfig
 from ..transport.ssh import SSHClient
 from ..transport.vnc import VncClient
 
@@ -18,10 +21,38 @@ def _ps_encoded(script: str) -> str:
 
 
 class InputInjector:
-    def __init__(self, vnc: VncClient, ssh: SSHClient, is_windows: bool):
+    def __init__(
+        self,
+        vnc: VncClient,
+        ssh: SSHClient,
+        is_windows: bool,
+        cursor_config: Optional[CursorConfig] = None,
+    ):
         self.vnc = vnc
         self.ssh = ssh
         self.is_windows = is_windows
+        self._cursor_config: CursorConfig = cursor_config if cursor_config is not None else CursorConfig()
+
+    def _position_cursor(
+        self,
+        x: int,
+        y: int,
+        motion: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+    ) -> None:
+        """Move cursor to (x, y) using human_move, then optionally dwell."""
+        effective_profile = motion if motion is not None else self._cursor_config.profile
+        cfg = self._cursor_config
+        self.vnc.human_move(
+            x,
+            y,
+            profile=effective_profile,
+            duration_ms=float(cfg.duration_ms) if cfg.duration_ms else None,
+            seed=cfg.seed,
+        )
+        effective_dwell = dwell_ms if dwell_ms is not None else cfg.hover_dwell_ms
+        if effective_dwell:
+            time.sleep(effective_dwell / 1000)
 
     # ---- RFB-backed input ----
 
@@ -29,8 +60,26 @@ class InputInjector:
         """Move mouse to absolute coordinates (no click, wakes DPMS)."""
         self.vnc.move(x, y)
 
-    def click(self, x: int, y: int, button: int = 1) -> None:
+    def click(
+        self,
+        x: int,
+        y: int,
+        button: int = 1,
+        motion: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+    ) -> None:
+        self._position_cursor(x, y, motion=motion, dwell_ms=dwell_ms)
         self.vnc.click(x, y, button=button)
+
+    def hover(
+        self,
+        x: int,
+        y: int,
+        motion: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+    ) -> None:
+        """Position cursor at (x, y) with optional human-like path and dwell; no button press."""
+        self._position_cursor(x, y, motion=motion, dwell_ms=dwell_ms)
 
     def type_text(self, text: str) -> None:
         self.vnc.type_text(text)

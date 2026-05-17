@@ -1,0 +1,29 @@
+slug: cursor-teleport-misses-hover-handlers
+title: VNC cursor teleport skips hover handlers and dismisses transient popups
+symptoms:
+  - "sidebar/menu submenu fails to expand after VLM click"
+  - "transient popup auto-dismisses between click1 and click2"
+  - "tooltip-triggered verify never sees the tooltip"
+  - "hover-to-expand UI nodes ignored"
+constraint: |
+  VNC pointer_event sets cursor position discontinuously. Chromium/Electron
+  webviews fire pointer-enter/leave/move based on actual motion events.
+  Teleport from (a, b) to (x, y) generates NO intermediate motion, so any
+  DOM listener gated on pointermove / mouseenter never fires.
+pivots:
+  - id: enable-bezier-motion-profile
+    summary: Set [cursor] profile = "bezier" in TOML so all clicks/hovers traverse intermediate pixels
+    cost: low
+    recommended: true
+  - id: per-step-motion-override
+    summary: "On the specific click/hover step that needs hover, add `motion: bezier` + `dwell_ms: 200` to the step"
+    cost: low
+  - id: routine-with-dwell
+    summary: Wrap the affected interaction in a routine that includes the dwell_ms hint as part of its declared steps
+    cost: medium
+sources:
+  - docs/IMPROVEMENTS.md M-series cursor motion section
+  - .claude/skills/mosdat-authoring/SKILL.md (routine authoring guidance)
+related_recipes:
+  - webview-focus-stealing
+  - settings-electron-linux

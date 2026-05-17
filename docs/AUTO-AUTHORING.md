@@ -40,6 +40,11 @@ When NOT to write a routine:
 
 See `docs/routines.md` for the schema + a worked example. See `docs/skills/state-first-testing.md` for when to prefer pre-stage over UI routine.
 
+> **Tip — hover-required UI elements:** Routines that touch hover-sensitive elements
+> (kebab menus, dropdown triggers, sidebar submenus) should declare `dwell_ms:` on
+> the affecting step so the popup or submenu stays open until the next localize
+> completes. See `shared/routines/open-settings.yaml` for a concrete example.
+
 ---
 
 ## Step 1: Understand What Changed
@@ -269,6 +274,17 @@ Phase 2 of a persistence test is the critical one. "The app is visible" is not e
 ### ❌ Forgetting cleanup steps
 
 Always start with `pkill` + `rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"`. Stale state from a previous run causes false positives.
+
+### ❌ Forgetting cursor motion for hover-required interactions
+
+Symptoms: transient popups close immediately, submenus don't expand, tooltip-triggered
+`verify` steps never see the tooltip. Root cause: `instant` profile (or old pre-Mn
+behaviour) teleports the cursor, emitting no intermediate `pointermove` events — DOM
+listeners gated on `mouseenter` / `pointermove` never fire.
+
+Fix: use `motion: bezier` (the default) on the affected step and add `dwell_ms: 200`
+to hold the cursor on the element until the popup/submenu stabilises. See
+`shared/recipes/cursor-teleport-misses-hover-handlers.yaml` for the full pivot list.
 
 ### ❌ VLM prompt too brittle
 

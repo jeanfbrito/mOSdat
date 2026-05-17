@@ -198,12 +198,12 @@ class _StepsMixin:
         if step.hover:
             self.log(f"    → hover ({x}, {y})")
             self._emit("hover", step_num=step_num, x=x, y=y)
-            self.injector.move(x, y)
+            self.injector.hover(x, y, motion=step.motion, dwell_ms=step.dwell_ms)
         else:
             click_button = 3 if step.click == "right" else 1
             self.log(f"    → {step.click or 'left'} click ({x}, {y})")
             self._emit("click", step_num=step_num, x=x, y=y, button=step.click or "left")
-            self.injector.click(x, y, button=click_button)
+            self.injector.click(x, y, button=click_button, motion=step.motion, dwell_ms=step.dwell_ms)
         self._save_click_overlay(screenshot, x, y, step_num)
         time.sleep(0.4)
 

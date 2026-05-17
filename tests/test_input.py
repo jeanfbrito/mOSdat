@@ -49,6 +49,22 @@ _stub("websockets")
 _stub("websockets.sync")
 _stub("websockets.sync.client", connect=MagicMock())
 
+# Ensure automation.transport is a real package and load cursor_motion (vnc.py needs it).
+import types as _types_mod
+if "automation.transport" not in sys.modules or not hasattr(sys.modules["automation.transport"], "__path__"):
+    _t_pkg = _types_mod.ModuleType("automation.transport")
+    _t_pkg.__path__ = [str(_PROJ / "automation" / "transport")]
+    sys.modules["automation.transport"] = _t_pkg
+_cm_spec = importlib.util.spec_from_file_location(
+    "automation.transport.cursor_motion",
+    _PROJ / "automation" / "transport" / "cursor_motion.py",
+)
+_cm_mod = importlib.util.module_from_spec(_cm_spec)
+_cm_mod.__package__ = "automation.transport"
+sys.modules["automation.transport.cursor_motion"] = _cm_mod
+_cm_spec.loader.exec_module(_cm_mod)
+sys.modules["automation.transport"].cursor_motion = _cm_mod
+
 # Load vnc.py directly
 _vnc_spec = importlib.util.spec_from_file_location(
     "automation.transport.vnc",
@@ -58,6 +74,7 @@ _vnc_mod = importlib.util.module_from_spec(_vnc_spec)
 _vnc_mod.__package__ = "automation.transport"
 sys.modules["automation.transport.vnc"] = _vnc_mod
 _vnc_spec.loader.exec_module(_vnc_mod)
+sys.modules["automation.transport"].vnc = _vnc_mod
 
 VncClient = _vnc_mod.VncClient
 VncClientError = _vnc_mod.VncClientError

@@ -100,9 +100,10 @@ def build_manifest(
     popups: Optional[dict] = None,
     persisted_state_keys: Optional[list] = None,
     test_ids_present: bool = False,
+    hover_required_elements: Optional[list] = None,
 ) -> dict:
     """Build a manifest dict ready for ``write_manifest``."""
-    return {
+    manifest: dict = {
         "asar_sha": asar_sha,
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "vm": vm,
@@ -111,3 +112,6 @@ def build_manifest(
         "persisted_state_keys": persisted_state_keys or [],
         "test_ids_present": test_ids_present,
     }
+    if hover_required_elements is not None:
+        manifest["hover_required_elements"] = hover_required_elements
+    return manifest

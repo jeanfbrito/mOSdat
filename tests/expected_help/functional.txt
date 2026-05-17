@@ -1,10 +1,11 @@
 usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
-                         [--verify-model MODEL] [--save-screenshots]
-                         [--screenshots DIR] [--popup-sweep] [--from-step N]
-                         [--until-step N] [--skip-health-probe]
-                         [--no-checkpoints] [--skip-warmup]
-                         [--skip-workspace-check] [--skip-model-check]
-                         [--timeout SECONDS] [--record] [--output OUTPUT]
+                         [--verify-model MODEL] [--cursor-instant]
+                         [--save-screenshots] [--screenshots DIR]
+                         [--popup-sweep] [--from-step N] [--until-step N]
+                         [--skip-health-probe] [--no-checkpoints]
+                         [--skip-warmup] [--skip-workspace-check]
+                         [--skip-model-check] [--timeout SECONDS] [--record]
+                         [--output OUTPUT]
                          [--click-verify {auto,off,yesno,diff,diff+yesno}]
                          [--canary {auto,off,on}] [--no-record-session]
                          [--record-fps FPS] [--record-diff-threshold VALUE]
@@ -29,6 +30,8 @@ options:
   --verify-model MODEL  Override VLM for yes/no state verification (default:
                         same as --model; recommend qwen3-vl-abliterated —
                         localization models hallucinate on yes/no)
+  --cursor-instant      Skip human-like cursor motion (instant teleport, fast
+                        CI runs)
   --save-screenshots    Save screenshots on failure to results dir
   --screenshots DIR     Save all step screenshots to this directory
   --popup-sweep         B3: sweep modal popups/dialogs before each localize

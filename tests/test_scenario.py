@@ -198,6 +198,48 @@ class TestValidSteps:
         assert len(model.cleanup) == 1
 
 
+class TestMotionDwellFields:
+    def test_click_motion_bezier_accepted(self):
+        model = _validate({"steps": [{"localize": "the login button", "motion": "bezier"}]})
+        assert len(model.steps) == 1
+        assert model.steps[0].motion == "bezier"
+
+    def test_hover_motion_instant_accepted(self):
+        model = _validate({"steps": [{"localize": "the login button", "hover": True, "motion": "instant"}]})
+        assert len(model.steps) == 1
+        assert model.steps[0].motion == "instant"
+
+    def test_motion_invalid_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"localize": "the login button", "motion": "windmouse"}]})
+
+    def test_dwell_ms_positive_accepted(self):
+        model = _validate({"steps": [{"localize": "the login button", "dwell_ms": 200}]})
+        assert len(model.steps) == 1
+        assert model.steps[0].dwell_ms == 200
+
+    def test_dwell_ms_negative_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"localize": "the login button", "dwell_ms": -5}]})
+
+    def test_motion_dwell_defaults_none(self):
+        model = _validate({"steps": [{"localize": "the login button"}]})
+        assert len(model.steps) == 1
+        assert model.steps[0].motion is None
+        assert model.steps[0].dwell_ms is None
+
+    def test_backwards_compat_without_motion_dwell(self):
+        legacy = {
+            "name": "legacy",
+            "steps": [
+                {"shell": "echo ok"},
+                {"localize": "the login button", "then_type": "hello", "then_key": "enter"},
+            ],
+        }
+        model = _validate(legacy)
+        assert len(model.steps) == 2
+
+
 # ---------------------------------------------------------------------------
 # I3e: canonical smoke-linux.yaml parses clean
 # ---------------------------------------------------------------------------

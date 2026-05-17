@@ -233,3 +233,9 @@ critical_description = "The wayland-fake test validates the Wayland crash fix (G
 [report.known_issues]
 "snap+gpu" = "Snap sandbox blocks GPU access"
 "rpm+gpu-x11" = "RPM sandbox XAUTHORITY issue"
+
+[cursor]
+profile = "bezier"
+duration_ms = 150
+hover_dwell_ms = 0
+seed = "auto"
