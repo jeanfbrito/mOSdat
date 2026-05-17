@@ -82,6 +82,19 @@ See [docs/HARDWARE.md](docs/HARDWARE.md) for full specs.
 
 ---
 
+## Negative Fixture Suite (I15)
+
+`tests/negative_fixtures/` holds deliberately-broken scenarios that **must fail** with specific errors. They guard against the "passes on broken build" lie.
+
+**Run after**: VLM model upgrade, before any release, after runner refactor.
+
+```bash
+MOSDAT_NEG_FIXTURES_VM=ubuntu2204 pytest tests/test_negative_fixtures.py \
+    -v -m negative_fixtures
+```
+
+All tests passing means each fixture failed as designed. Any `UNEXPECTED PASS` means the runner may be swallowing real failures. The suite is excluded from default collection (marker: `negative_fixtures`).
+
 ## Runbooks
 
 For task-specific procedures, see `docs/runbooks/`:
@@ -95,7 +108,7 @@ For task-specific procedures, see `docs/runbooks/`:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mOSdat** (5196 symbols, 8837 relationships, 173 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mOSdat** (6666 symbols, 11644 relationships, 191 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

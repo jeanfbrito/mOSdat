@@ -1,0 +1,343 @@
+# mOSdat Improvements — Roadmap
+
+Captured 2026-05-16 after a 30+ hour PR #3325 test-authoring marathon. Every item maps to a concrete pain point hit ≥3 times during that work. Ordered by repeated-pain ratio.
+
+## Tier 1 — kills entire classes of bug
+
+### I1. `--inject-config` flag (`mosdat functional`) — IMPLEMENTED 2026-05-16
+Code: `automation/setup/inject_config.py` (detect_userdata_dirs, detect_app_version, wipe_userdata, write_servers_json, write_config_json, inject orchestrator), `automation/commands/parser.py` (`--inject-config`, `--inject-servers`, `--inject-app-name`, `--inject-install-path`, `--inject-migrations-version`), `automation/main.py` cmd_functional (orchestration call before `runner.run_test`). Tests: `tests/test_inject_config.py` (27 unit tests + 1 opt-in live-VM smoke gated by `MOSDAT_TEST_VM=ubuntu2204`).
+
+Goal: declarative pre-staging of Electron app userData before launch.
+
+```
+mosdat functional <toml> --vms <vm> --test <name> \
+    --inject-config '{ "isTelephonyEnabled": true, "telephonyPreferredServer": null }' \
+    --inject-servers 'Workspace=https://rocketchat.jeanbrito.com,Mobile RC=https://mobile.rocket.chat'
+```
+
+Behavior:
+1. Wipe `~/.config/<app>` AND `~/.config/<app> (development)` on VM.
+2. Auto-detect app name + dev-suffix dir from binary on the VM.
+3. Write `servers.json` from `--inject-servers`.
+4. Write `config.json` merging `--inject-config` with: `currentView: { url: <first-server-url> }`, `lastSelectedServerUrl`, `__internal__.migrations.version` (looked up from asar / app version).
+5. Validate JSON.
+6. Run scenario.
+
+Removes ~80 boilerplate lines per scenario + the heredoc/printf/missing-migrations-version footguns.
+
+Touches: `automation/commands/dispatchers.py`, new `automation/setup/inject_config.py`.
+
+### I2. `mosdat preflight <scenario> --vms <vms>` — **IMPLEMENTED 2026-05-16**
+Single command runs every "should have caught earlier" check before a scenario run:
+- YAML + ScenarioModel schema validation
+- VM SSH reachable, X11 cookie present
+- VM has `wmctrl xclip xdotool xdg-mime xdg-open` installed
+- Binary exists at `<install-path>` and contains expected feature symbols (configurable in scenario header)
+- userData dir name detected from VM, matches scenario's wipe targets
+- Dry-runs first 3 setup shell blocks (returns stdout, no UI assertions)
+
+Report: PASS / FAIL per check. Catches userData-dir mismatch, missing deps, wrong binary, missing migrations version, missing XAUTHORITY in shell blocks.
+
+Touches: new `automation/commands/preflight.py`.
+Tests: `tests/test_preflight.py` (18 unit tests, mock SSH, no live VM required).
+
+### I3. `mosdat build --pr <N> --deploy <vms>` — IMPLEMENTED (2026-05-16)
+Reproducible PR build+deploy. Eliminates stale-clone class of bug.
+
+Implemented in `automation/commands/build.py` + parser wiring + `tests/test_build_cmd.py`.
+v1 ships `--target deb` only; rpm/AppImage/exe stubs marked TODO in `TARGETS`.
+Exit codes: 0 OK, 1 missing verify-symbol, 2 build failed, 3 deploy failed,
+4 clone/fetch failed, 5 bad args. Use `--dry-run` to preview the plan.
+
+```
+mosdat build --pr 3325 --repo RocketChat/Rocket.Chat.Electron \
+    --target deb --deploy ubuntu2204,ubuntu2404 \
+    --verify-symbol isTelephonyEnabled,telephonyGlobalShortcutConfig
+```
+
+Steps:
+1. `gh repo clone` (or update existing) latest PR head.
+2. `yarn install && yarn release --linux deb` (target-aware).
+3. SCP built artifact to each VM `/tmp/`.
+4. SSH install (`sudo dpkg -i ...` / `rpm -i` / etc).
+5. SSH `strings <asar> | grep <symbols>` — fail if any missing.
+6. Print version + commit SHA installed per VM.
+
+Touches: new `automation/commands/build.py`.
+
+### I4. Implicit X11 env per VM (TOML) — IMPLEMENTED 2026-05-16
+```toml
+[vm.ubuntu2204]
+x11 = "auto"  # mosdat injects DISPLAY + XAUTHORITY + ozone flag
+```
+
+Behavior: any `- shell: |` step gets a prepended preamble (only if `x11=auto` and step contains `xdotool|wmctrl|xclip|xdg-|nohup.*/opt/.*-desktop`):
+```bash
+XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/gdm/Xauthority 2>/dev/null | head -1)
+export DISPLAY=:0 XAUTHORITY="$XAUTH"
+```
+
+Removes XAUTH-forget-and-die failures from `tel:` dispatches and shell GUI steps.
+
+Code: `automation/transport/x11_preamble.py` (`should_inject`, `inject`), `automation/config.py` (`VMConfig.x11` field + `load_config` wiring), `automation/runners/functional_steps.py` (preamble injection at shell dispatch), `automation/runners/functional.py` (`x11_mode` constructor param), `automation/main.py` (`x11_mode=vm.x11` wire). Default `"off"` — backwards-compatible. Tests: `tests/test_x11_preamble.py` (17 tests).
+
+## Tier 2 — order-of-magnitude faster iteration
+
+### I5. `mosdat replay <result-dir> --step N --verify "<prompt>"` — IMPLEMENTED
+Rerun a single verify against the cached screenshot from a previous run. Iterate verify wording in seconds, not minutes.
+
+```
+mosdat replay results/functional/2026-05-16_18.../ubuntu2204 \
+    --step 8 --verify "modal labeled 'Select Server' with two server rows"
+```
+
+Reads screenshot from result dir, re-asks VLM with new prompt, prints yes/no + raw VLM response.
+
+Touches: new `automation/commands/replay.py`.
+
+### I6. VLM verify cache by (screenshot SHA, prompt SHA) — IMPLEMENTED
+Identical (image, prompt) pairs return cached yes/no. Cache key: `sha256(image_bytes) || sha256(prompt_text) || model`. TTL 24h.
+
+Cuts ~50% off re-run time for partially-changed scenarios.
+
+Touches:
+- `automation/transport/vlm_cache.py` (new — SQLite cache, `cache_key`, `get`, `put`, `invalidate`, `clear`, `prune`, `stats`)
+- `automation/vlm/client.py` — `verify()` wired to cache; `set_cache_enabled()` + `_cache_disabled` flag; `MOSDAT_VLM_NOCACHE` env var
+- `automation/commands/parser.py` — `--no-cache` on `functional` + `replay`; `vlm-cache stats|clear|prune` subcommand
+- `automation/commands/dispatchers.py` — `cmd_vlm_cache()` handler
+- `automation/main.py` — `--no-cache` wiring + `vlm-cache` in dispatch table
+- `tests/test_vlm_cache.py` — round-trip, TTL expiry, env var, concurrent puts
+
+### I7. `verify: { accept_any: [...] }` native union — IMPLEMENTED 2026-05-16
+```yaml
+- accept_any:
+    - "Settings panel open with General tab visible"
+    - "Workspace login page unchanged (settings did not open)"
+  verify_timeout: 15
+```
+
+Cleaner than long "either X OR Y" prose; fewer VLM false negatives.
+
+Touches:
+- `automation/scenario.py` — `AcceptAnyStep` model; mutual-exclusion validator with `verify`; added to `AnyStep` union.
+- `automation/runners/scenario_loader.py` — `accept_any` field on `FunctionalStep`; parsed + `resolve_vars`.
+- `automation/runners/functional_verify.py` — `_verify_accept_any()`: shared timeout, per-prompt events.
+- `automation/runners/functional_steps.py` — `run_step` dispatches `accept_any` after `verify` block.
+- `tests/test_accept_any.py` — 9 tests (schema + runtime).
+- `shared/scenarios/functional/example-accept-any.yaml` — schema reference.
+- `shared/scenarios/functional/3325-global-shortcut.yaml` — Phase 2 verify converted to `accept_any`.
+
+### I8. Workspace-agnostic scenarios via jinja vars — IMPLEMENTED 2026-05-16
+
+```yaml
+vars:
+  workspace_title: "Workspace"
+  preferred_server_url: "https://rocketchat.jeanbrito.com/"
+
+steps:
+  - verify: "modal lists '{{ workspace_title }}' and 'Mobile RC' as options"
+```
+
+Vars overridable from CLI: `--var workspace_title=Southlogic`.
+
+```
+mosdat functional config.toml --vms ubuntu2204 --test my-scenario \
+    --var workspace_title=Southlogic --var dial_number=+1234567890
+```
+
+Behaviour:
+1. `vars:` block in YAML defines scenario defaults (flat string→string; numbers/bools cast to str).
+2. `--var KEY=VALUE` CLI flags override or add vars at run time. Duplicate CLI keys are an error.
+3. `{{ key }}` (Jinja2-compatible, optional surrounding whitespace) is substituted in all
+   string step fields: shell, verify, verify_not, verify_input, verify_click, localize,
+   then_type, type, then_key, key, then_key_pre, key_pre, focus, if_visible, launch,
+   launch_window, verify_click_diff_prompt, canary_verify, canary_char, accept_any items,
+   on_failure_agent goal/success_check, nested then: steps.
+4. Rendering happens **before** `ScenarioModel.model_validate` — type checks run on rendered values.
+5. Missing var (referenced but not defined) → fail-fast at load time with key name + step index.
+6. Scenarios without `{{ ... }}` markers and without `vars:` block work unchanged.
+7. Uses real `jinja2` (StrictUndefined) when available; regex fallback otherwise.
+
+Variable types: only flat string→string for v1. Numbers/bools in yaml `vars:` are cast to
+str before rendering (`True` → `"True"`, `3` → `"3"`). Nested dicts/lists are not supported.
+
+Touches:
+- `automation/runners/var_subst.py` (new — jinja2 rendering engine + regex fallback + MissingVarsError)
+- `automation/runners/scenario_loader.py` — `load_test_yaml` accepts `cli_vars` kwarg;
+  renders raw step dicts before ScenarioModel.model_validate.
+- `automation/commands/parser.py` — `--var KEY=VALUE` (action=append) on `mosdat functional`.
+- `automation/main.py` — parse `--var` into dict (error on duplicate keys), pass to `load_test_yaml`.
+- `automation/scenario.py` — `vars` field changed from `Optional[dict[str, str]]` to `Optional[dict[str, Any]]`.
+- `pyproject.toml` — added `jinja2>=3.0` dependency.
+- `tests/test_scenario_vars.py` — 25 tests.
+- `shared/scenarios/functional/example-vars.yaml` — schema reference.
+
+## Tier 3 — UX / DX polish
+
+### I9. Named phases + `--from-phase` / `--until-phase` — IMPLEMENTED 2026-05-16
+
+```yaml
+phases:
+  - id: A
+    name: toggle-off baseline
+    from_step: 1
+  - id: B
+    name: toggle-on dispatches modal
+    from_step: 10
+```
+
+Run subset: `--from-phase B`.
+
+```
+mosdat functional config.toml --vms ubuntu2204 --test 3325-master-toggle --from-phase B
+# prints: [phases] running B (toggle-on dispatches modal) [steps 10..20]
+```
+
+Code:
+- `automation/scenario.py` — `PhaseDef` model; `ScenarioModel.phases` field; `_check_phases` validator (unique ids, strictly increasing from_step, from_step >= 1).
+- `automation/commands/parser.py` — `--from-phase ID` and `--until-phase ID` on `mosdat functional`.
+- `automation/main.py` — `_resolve_phases()` helper (phase → step bounds, warn on override, SystemExit on unknown id); called in `cmd_functional` before B4 step slicing; prints `[phases] running ...` log line.
+- `shared/scenarios/functional/3325-master-toggle.yaml` — added `phases:` block (A from_step=1, B from_step=10).
+- `tests/test_scenario_phases.py` — 24 tests (schema + _resolve_phases + demo scenario).
+
+### I10. Step labels in logs — IMPLEMENTED 2026-05-16
+Use scenario's comment header (`# ── A4: Dispatch tel: → expect modal ───`) as the step label. Log "FAIL: A4 dispatch tel: → expect modal" instead of "FAIL: Step 8".
+
+Parses YAML with ruamel.yaml (round-trip mode) to access comments above each ``- `` step entry.
+Box pattern `# ── <label> ──` takes priority; plain comments fall back; explicit `label:` field wins all.
+Multi-comment blocks joined (space, 80-char cap). Pure-separator lines (`# ════`) are skipped.
+
+Touches:
+- `automation/scenario.py` — `label: Optional[str] = None` on `_StepBase`.
+- `automation/runners/scenario_loader.py` — `_extract_step_labels()`, `_parse_comment_label()`, `_tokens_to_comment_lines()` helpers; `load_test_yaml` calls them pre-parse; `parse_step` maps `label` field; `resolve_vars` passes through label.
+- `automation/runners/functional_steps.py` — `step_display` computed as `"N: label"` or `"N"`; used in log lines; emitted as `step_label` field in `step_start` event.
+- `automation/reporting/report_html.py` — labeled steps show `<sub>#N</sub>` + label as header; unlabeled steps show `Step N` unchanged.
+- `pyproject.toml` — added `ruamel.yaml>=0.17` dependency.
+- `tests/test_step_labels.py` — 28 tests covering all cases.
+
+### I11. Imported step library — IMPLEMENTED 2026-05-16
+
+```yaml
+imports:
+  - cleanup-rocketchat
+  - install-x11-deps
+steps:
+  - import: cleanup-rocketchat   # dict form (plain YAML, no tag needed)
+  - !import install-x11-deps     # tag form (also supported)
+  - shell: ...
+```
+
+Fragment files live in `shared/scenarios/imports/<name>.yaml`. Each is a YAML dict with a `steps:` list. Fragment steps are spliced inline at load time; expansion is NOT written to disk.
+
+Behaviour:
+1. Both shapes accepted: `- import: name` (dict, standard YAML) and `- !import name` (custom tag, requires tag constructor).
+2. Fragment loaded from `shared/scenarios/imports/<name>.yaml`. Walks up from scenario file to find project root.
+3. Labels in imported steps get `[import:name] ` prefix (box-comment-derived or explicit `label:` field).
+4. Vars from parent scenario (`{{ var }}`, I8) substitute into fragment steps — expansion happens before var rendering.
+5. Recursive imports supported with cycle detection (RuntimeError naming the chain + scenario).
+6. Missing fragment → load-time `FileNotFoundError` naming the fragment + scenario.
+7. Manifest mismatch (`!import X` without listing X in top-level `imports:`) → `warnings.warn`, not error.
+
+Canonical fragments shipped in `shared/scenarios/imports/`:
+- `cleanup-rocketchat.yaml` — kill-loop + wmctrl close + apport-pkill + wipe both userData dirs.
+- `install-x11-deps.yaml` — apt-get install wmctrl xclip xterm.
+- `launch-rocketchat.yaml` — XAUTH+DISPLAY+ozone nohup launch + wait + workspace login verify (requires `{{ workspace_url }}`).
+
+Demo: `shared/scenarios/functional/3325-master-toggle.yaml` — step A1 converted from inline 35-line shell block to `- import: cleanup-rocketchat`.
+
+Touches:
+- `automation/scenario.py` — `ImportStep` model (`import` alias field); added to `AnyStep` union; `ScenarioModel.imports: list[str]` field.
+- `automation/runners/scenario_loader.py` — `_imports_dir()`, `_load_fragment_steps()`, `_is_import_step()`, `_expand_imports()`, `_register_import_constructor()`, `_warn_manifest_mismatch()`; `load_test_yaml` calls expansion before var substitution.
+- `shared/scenarios/imports/cleanup-rocketchat.yaml` — new fragment.
+- `shared/scenarios/imports/install-x11-deps.yaml` — new fragment.
+- `shared/scenarios/imports/launch-rocketchat.yaml` — new fragment.
+- `shared/scenarios/functional/3325-master-toggle.yaml` — step A1 uses `- import: cleanup-rocketchat`; `imports:` manifest added.
+- `tests/test_step_imports.py` — 44 tests.
+
+### I12. Author session → scenario diff — IMPLEMENTED 2026-05-16
+After `mosdat author` session, `mosdat author export --base <existing-scenario>` emits a unified diff to insert recorded steps into an existing scenario at a given step index.
+
+```
+mosdat author export --session <id> --base shared/scenarios/functional/foo.yaml
+mosdat author export --session <id> --base foo.yaml --insert-at-step 3
+mosdat author export --session <id> --base foo.yaml --name new-name [--output path]
+mosdat author export --session <id> --base foo.yaml --dry-run
+```
+
+Code: `automation/author_cli.py` (`_export_with_base`, new flags on `export` subparser),
+`automation/commands/parser.py` (new flags wired to `mosdat author export`),
+`automation/commands/dispatchers.py` (`cmd_author` passes `--base`, `--insert-at-step`, `--dry-run`).
+Tests: `tests/test_author_diff.py` (8 tests).
+
+### I13. `mosdat doctor <vms>` — IMPLEMENTED
+Mirror of `ctx doctor`. Checks per VM: SSH, X11 cookie path, GNOME version, installed deps, binary presence, expected userData dir, asar grep, disk free in /tmp, current RC process count.
+
+Touches: new `automation/commands/doctor.py`.
+
+### I14. HTML report enhancements — IMPLEMENTED 2026-05-16
+For each step include:
+- Exact shell command sent (post X11-injection)
+- VM response stdout/stderr (truncated to 2KB)
+- `config.json` snapshot after shell steps (opt-in via `report_config_snapshots: true` in YAML or `--config-snapshots` CLI flag)
+- Verify prompt text + VLM raw response (not just yes/no), cache hit indicator
+
+New events emitted into events.jsonl (additive, backwards-compatible):
+- `shell_step`: `command_sent`, `stdout_tail`, `stderr_tail`, `exit_code`, `duration_ms`
+- `verify_step`: `prompt_text`, `raw_vlm_response`, `verdict`, `cache_hit`, `latency_ms`
+- `accept_any_step`: `prompts`, `per_prompt_verdicts`, `verdict`
+- `config_snapshot`: `content` (head 4KB of config.json), opt-in only
+
+Touches:
+- `automation/vlm/input.py` — `shell_result()` returning SSHResult
+- `automation/vlm/client.py` — `verify_with_meta()` returning (verdict, raw, cache_hit)
+- `automation/runners/functional_steps.py` — emits new events; `_emit_config_snapshot()`
+- `automation/runners/functional_verify.py` — `_wait_for_state_with_meta()`, `_verify_accept_any_with_meta()`
+- `automation/runners/functional.py` — `_config_snapshots: bool` field
+- `automation/scenario.py` — `report_config_snapshots: bool = False`
+- `automation/reporting/report_html.py` — renders new event types; new CSS classes
+- `automation/commands/parser.py` — `--config-snapshots` flag
+- `automation/main.py` — wires flag + yaml field into runner
+- `tests/test_report_enhancements.py` — 16 unit tests
+
+### I15. Negative-test fixture suite — IMPLEMENTED 2026-05-16
+Deliberately-broken scenarios (wrong selector, deleted binary, killed network) that MUST fail with specific error. Guards against the "passes on broken build" lie.
+
+Fixtures (5):
+- `wrong-binary-path.yaml` — launches `/opt/Nonexistent.Chat/rocketchat-desktop` → verify fails (no window)
+- `wrong-selector.yaml` — localize "purple unicorn icon" → VLM localize fails
+- `wrong-verify-prompt.yaml` — verify "giant pink cat on screen" → VLM returns no
+- `killed-process.yaml` — kills RC mid-scenario → subsequent verify fails (no window)
+- `corrupt-config.yaml` — writes broken JSON to config.json → login page verify fails (RC shows Add Server)
+
+Runner: `tests/test_negative_fixtures.py` (marker: `negative_fixtures`, opt-in via `MOSDAT_NEG_FIXTURES_VM` env var).
+Schema: all fixtures validate against `ScenarioModel` (fail at runtime, not parse time).
+Smoke: `pytest tests/test_negative_fixtures.py -v -m "not negative_fixtures"` → 1 skipped.
+
+Touches: new `tests/negative_fixtures/`, `tests/test_negative_fixtures.py`.
+
+---
+
+## Implementation order recommendation
+
+Parallelizable (Wave 1, no file overlap):
+- I1 inject-config
+- I2 preflight
+- I3 build
+- I5 replay
+- I6 VLM cache
+- I13 doctor
+
+Serial after Wave 1 (shared scenario.py touch):
+- I4 implicit X11
+- I7 accept_any
+- I8 jinja vars
+- I9 named phases
+
+Polish (Wave 2):
+- I10 step labels
+- I11 imports
+- I12 author diff
+- I14 HTML report
+- I15 negative fixtures
+
+Each Tier-1 item: ~1-2 days. Total tier-1 ≈ 2 weeks single-dev or 3-4 days fanned out.
