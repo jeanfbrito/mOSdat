@@ -26,6 +26,28 @@ The defining test: is this NEW feature coverage being authored from zero? If yes
 
 ---
 
+## 0. Discovery — what's already in the library
+
+Before writing anything, learn the library.
+
+```bash
+mosdat routines list                # full inventory + tags
+mosdat routines show <name>         # inspect any routine's schema, inputs, fallbacks
+mosdat routines explain <name>      # dry-run preview — shows which fallback fires
+mosdat routines report --format md  # coverage map — which scenarios use which routines
+mosdat routines fixtures            # available VM-state fixtures
+```
+
+Then for every atomic interaction your feature needs, run:
+
+```bash
+mosdat routines list | grep -i <keyword>
+```
+
+Try keywords: feature area (telephony, settings, login, modal), UI surface (dialog, dropdown, sidebar), side-effect category (dispatch, toggle, select).
+
+---
+
 ## 2. Pre-Flight Checks
 
 Run these before touching any file. They prevent authoring against a stale binary or a broken VM.
@@ -76,9 +98,33 @@ mosdat routines show <name>
 
 For each atomic interaction, check whether an existing routine covers it. If the match is close but not exact, prefer reusing with an input parameter over writing a new routine.
 
+For EACH atomic interaction, exhaustively check the existing library before authoring. Procedure:
+
+1. `mosdat routines list` — scan all 9+ routines by name + tags.
+2. If a name kinda matches → `mosdat routines show <candidate>` and READ THE FULL spec (description, inputs, postcondition). Decide: reuse / extend with new input / fork into new routine.
+3. If extending: prefer ADD-input over fork (preserves reuse). Document the new input in the routine's `inputs:` block with default that preserves existing callers' behavior.
+4. Only fork into a NEW routine if the postcondition guarantee differs.
+
 ### Step 3 — Author new routines (if needed)
 
 Create `shared/routines/<slug>.yaml`. Schema reference: `docs/routines.md`.
+
+### Step 4 (pre-YAML) — Pick a sibling as template
+
+Before writing any YAML, pick a sibling routine in the same family (same tag) as a template. Open it:
+
+```bash
+mosdat routines show <sibling-name>
+```
+
+Copy its structure (description shape, input declarations, pre/postcondition wording). Customize for the new interaction. Examples by family:
+
+- Telephony UI mutation: template = `enable-telephony-toggle`
+- Modal interaction: template = `select-telephony-server-from-modal`
+- Settings nav: template = `open-settings` (with capability fallback)
+- Lifecycle: template = `cleanup-rocketchat` / `launch-rocketchat`
+- Health check: template = `verify-app-alive`
+- Dispatch: template = `dispatch-tel-link`
 
 Minimal structure:
 
@@ -113,7 +159,7 @@ fallbacks:
       - shell: <alternate input method>
 ```
 
-### Step 4 — Test each routine in isolation
+### Step 5 — Test each routine in isolation
 
 ```bash
 mosdat routines test <name> --vms <vm> --fixture <fixture> --config <toml>
@@ -133,7 +179,7 @@ Override a specific input for a test run:
 mosdat routines test <name> --vms <vm> --fixture <fixture> --with <key>=<value>
 ```
 
-### Step 5 — Compose the scenario
+### Step 6 — Compose the scenario
 
 Stitch `- routine: <name>` calls together and add feature-specific `verify:` steps.
 
@@ -187,7 +233,7 @@ steps:
   - routine: cleanup-rocketchat
 ```
 
-### Step 6 — Validate scenario schema
+### Step 7 — Validate scenario schema
 
 ```bash
 python3 -c "
@@ -199,7 +245,7 @@ load_test_yaml(Path('shared/scenarios/functional/<scenario-name>.yaml'))
 
 Fix any `ValidationError` before running.
 
-### Step 7 — Run the scenario
+### Step 8 — Run the scenario
 
 ```bash
 mosdat functional <toml> --vms <vm> --test <scenario-name> --save-screenshots
@@ -212,7 +258,7 @@ mosdat functional <toml> --vms <vm> --test <scenario-name> --from-step <N>
 mosdat functional <toml> --vms <vm> --test <scenario-name> --from-phase <phase-id>
 ```
 
-### Step 8 — On failure
+### Step 9 — On failure
 
 1. Check screenshots in `results/functional/<run-timestamp>/<vm>/`.
 2. Use `mosdat replay <result-dir>` (I5) to iterate on verify prompts without re-running the full scenario.
@@ -235,6 +281,8 @@ Before saving a new routine, verify:
 - [ ] The description implicitly declares: what state it guarantees on exit AND what it does NOT cover
 - [ ] `tags` include: feature area, UI surface, side-effect category
 - [ ] `schema_version: v1` present (or omitted — defaults to v1)
+- [ ] **Reuses an existing pattern**: name follows existing convention (kebab-case verb-noun), structure mirrors a sibling routine in the same tag family, description shape matches.
+- [ ] **Has at least 1 plausible second caller**: if you can't name a future scenario that would use it, reconsider whether it should be a routine vs inline.
 
 ---
 
@@ -269,6 +317,10 @@ Decision heuristic: if you would have to copy-paste this block into the next sce
 
 **VLM prompts naming exact values** — `verify: "version number v6.8.0 visible"` will break on the next release. Describe the state type: `verify: "version information shown in the status area"`.
 
+**Forgetting to grep the library** — every new feature inherits ALL existing routines. Skipping `mosdat routines list` means you'll re-implement someone else's debugged work. Always run the discovery commands in section 0 first.
+
+**One-off "this is special" mindset** — if you tell yourself "this interaction is unique, no point making it reusable," you're almost always wrong. Future features rhyme; routines compound.
+
 ---
 
 ## 7. Definition of Done
@@ -282,6 +334,26 @@ Before declaring authoring complete, all of the following must be true:
 - [ ] Help-drift snapshot still passes (no unintended CLI surface changes)
 - [ ] New routines appear in `mosdat routines report --format md` output
 - [ ] No `# TODO:` markers remain in the scenario YAML
+
+---
+
+## 9. Reusability gate — stop and routine-ize
+
+When writing your scenario, if you find yourself adding:
+
+- More than 2 inline shell steps that name a UI element
+- A localize+click+verify trio that could plausibly be used elsewhere
+- A pre-condition / post-condition that any reasonable feature could need
+
+STOP. Routine-ize it. Procedure:
+
+1. Pause scenario authoring.
+2. Author the new routine in `shared/routines/<slug>.yaml` using a sibling as template (step 4 above).
+3. `mosdat routines test <slug>` against a fixture until green.
+4. Return to scenario; replace the inline steps with `- routine: <slug>`.
+5. Update `docs/routines.md` if the routine introduces a new family.
+
+Rule of thumb: if you can describe the interaction in one English sentence ("open settings", "dismiss modal", "type credentials into login form"), it's probably a routine. If it takes a paragraph, it's scenario logic.
 
 ---
 
