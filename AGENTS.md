@@ -27,7 +27,7 @@ background_task(agent="explore", prompt="Monitor VM 103 until IP appears...")
 
 ## Project Overview
 
-Test framework for Rocket.Chat Electron Linux builds, specifically the Wayland/X11 crash fix (PR #3171).
+General-purpose multi-OS Electron/desktop UI testing with VLM verification, scenario authoring, build/deploy automation, preflight/doctor validation, replay, and session recording — targeting Linux and Windows VMs via Proxmox.
 
 ## CRITICAL: Proxmox is a Separate Machine
 
@@ -60,13 +60,21 @@ See [docs/HARDWARE.md](docs/HARDWARE.md) for full specs.
 
 | File | Purpose |
 |------|---------|
-| `shared/config.sh` | Config with env var defaults |
-| `shared/proxmox-api.sh` | REST API helpers |
-| `os/*/config.sh` | OS-specific (VMID, package format) |
-| `os/*/build.sh` | Build RPM/DEB/AppImage |
+| `automation/main.py` | Python runner — canonical orchestrator |
+| `automation/commands/build.py` | `mosdat build` — clone PR, build .deb, deploy, verify symbols |
+| `automation/commands/preflight.py` | `mosdat preflight` — schema + VM deps + symbol grep + dry-run |
+| `automation/commands/replay.py` | `mosdat replay` — re-run VLM against cached screenshots |
+| `automation/commands/doctor.py` | `mosdat doctor` — per-VM connectivity/dependency checklist |
+| `automation/setup/inject_config.py` | SSH pre-stage for `--inject-config` / `--inject-servers` flags |
+| `automation/transport/vlm_cache.py` | VLM response cache (stats/clear/prune) |
+| `automation/transport/x11_preamble.py` | Auto-inject DISPLAY/XAUTHORITY/ozone for `x11 = "auto"` VMs |
+| `automation/runners/var_subst.py` | Jinja `{{ key }}` substitution for scenario `vars:` blocks |
+| `shared/config.sh` | (legacy) Shell config with env var defaults |
+| `shared/proxmox-api.sh` | (legacy) Shell REST API helpers |
+| `os/*/config.sh` | (legacy) OS-specific shell config |
+| `os/*/build.sh` | (legacy) Build RPM/DEB/AppImage shell scripts |
 | `os/*/deploy.sh` | Transfer + install on VM |
 | `os/*/gpu-control.sh` | Attach/detach GPU |
-| `automation/main.py` | Python runner — canonical orchestrator |
 
 ## Code Style
 
@@ -108,7 +116,7 @@ For task-specific procedures, see `docs/runbooks/`:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mOSdat** (6667 symbols, 11644 relationships, 191 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mOSdat** (6666 symbols, 11644 relationships, 191 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

@@ -92,6 +92,11 @@ mosdat draft --change-type persistence \
 
 This produces a scaffold with TODOs marking where you need to insert specific details.
 
+> **Schema examples for advanced scenario features:**
+> - `vars:` + `{{ key }}` substitution — see `shared/scenarios/functional/example-vars.yaml`
+> - `accept_any:` union step (succeeds on first VLM yes) — see `shared/scenarios/functional/example-accept-any.yaml`
+> - `imports:` + reusable step fragments — see `shared/scenarios/imports/` (ships `cleanup-rocketchat`, `install-x11-deps`, `launch-rocketchat`)
+
 ---
 
 ## Step 4: Customize the Generated YAML
@@ -158,6 +163,10 @@ mosdat functional examples/rocketchat.toml --vms ubuntu2404 \
 # If step N fails, re-run from that step (avoids re-doing setup)
 mosdat functional examples/rocketchat.toml --vms ubuntu2404 \
   --test 3410-telephony-deeplink --from-step 5
+
+# Or jump to a named phase (see top-level `phases:` in your scenario YAML)
+mosdat functional examples/rocketchat.toml --vms ubuntu2404 \
+  --test 3410-telephony-deeplink --from-phase setup
 ```
 
 **Debugging failures:**
@@ -233,7 +242,7 @@ Phase 2 of a persistence test is the critical one. "The app is visible" is not e
 
 ### ❌ Forgetting cleanup steps
 
-Always start with `pkill` + `rm -rf "/home/jean/.config/Rocket.Chat (development)"`. Stale state from a previous run causes false positives.
+Always start with `pkill` + `rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"`. Stale state from a previous run causes false positives.
 
 ### ❌ VLM prompt too brittle
 

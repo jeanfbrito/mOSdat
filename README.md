@@ -120,10 +120,11 @@ Run a recorded functional session replay (change-filtered frames, smaller artifa
 mosdat functional examples/rocketchat.toml \
   --vms windows11 \
   --test rocketchat-smoke \
-  --record-session \
   --record-fps 10 \
   --record-gif
 ```
+
+> Recording is on by default. Use `--no-record-session` to opt out.
 
 Serve the live dashboard and authoring workbench:
 

@@ -52,7 +52,7 @@ pkill -9 -f Rocket.Chat       || true
 pkill -f update-manager  || true
 pkill -f update-notifier || true
 sleep 2
-rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat Electron"
+rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"
 ```
 
 ## Functional runner changes that made this work

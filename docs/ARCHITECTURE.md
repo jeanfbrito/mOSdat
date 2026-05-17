@@ -61,6 +61,11 @@ The main command surface is:
 | `mosdat run` | Build/deploy/test matrix |
 | `mosdat test` | Test pre-built package(s) |
 | `mosdat functional` | Run VLM functional UI scenarios |
+| `mosdat preflight` | Validate TOML schema, VM deps, binary symbols, and setup-shell dry-run |
+| `mosdat build` | Clone PR head, build .deb, deploy to VM, and verify asar symbols |
+| `mosdat replay` | Re-ask VLM against cached screenshots from a prior result dir |
+| `mosdat vlm-cache` | Inspect, prune, or clear the VLM response cache |
+| `mosdat doctor` | Per-VM connectivity and dependency checklist |
 | `mosdat live` | Serve live triage dashboard and Author Workbench |
 | `mosdat author` | Agent CLI for authoring API |
 | `mosdat dashboard` | Generate static historical dashboard |
@@ -118,6 +123,11 @@ YAML scenario -> FunctionalRunner
 VNC input is display-server agnostic and is the preferred path for clicks,
 hover, typing, and key presses. This avoids X11/Wayland focus and xauth
 problems.
+
+`--inject-config` / `--inject-servers` / `--inject-app-name` flags run an SSH
+pre-stage phase before the VNC loop to write Electron userData declaratively.
+Setting `x11 = "auto"` on a VM config injects `DISPLAY`, `XAUTHORITY`, and the
+ozone preamble into shell steps automatically (default off).
 
 ### Build Phase
 
