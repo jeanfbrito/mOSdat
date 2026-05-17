@@ -2,6 +2,12 @@
 
 Captured 2026-05-16 after a 30+ hour PR #3325 test-authoring marathon. Every item maps to a concrete pain point hit ≥3 times during that work. Ordered by repeated-pain ratio.
 
+## Retrospective
+
+Full process retrospective covering the PR #3325 saga: timeline, pivots, traps, lessons, and a cross-reference of all improvements.
+
+→ [`docs/retrospectives/pr3325-saga.md`](retrospectives/pr3325-saga.md)
+
 ## Tier 1 — kills entire classes of bug
 
 ### I1. `--inject-config` flag (`mosdat functional`) — IMPLEMENTED 2026-05-16
@@ -317,6 +323,125 @@ Touches: new `tests/negative_fixtures/`, `tests/test_negative_fixtures.py`.
 
 ---
 
+## Tier 4 — pivot-faster tooling
+
+### F2. `mosdat recipes` — platform-constraint corpus + pivot browser — IMPLEMENTED 2026-05-17
+
+Searchable corpus of known platform constraints and ordered workaround strategies (pivots). Eliminates re-discovery of constraints that have already been hit and documented.
+
+```
+mosdat recipes list                      # slug + title for every recipe
+mosdat recipes show settings-electron-linux
+mosdat recipes search "alt+key swallowed"
+```
+
+Seed corpus (6 recipes in `shared/recipes/`):
+- `settings-electron-linux` — RC Electron has no accelerator for Settings on Linux; 3 pivots
+- `webview-focus-stealing` — Chromium webview swallows alt+key when input focused; 4 pivots
+- `vnc-keysyms-syntax` — VNC key syntax: single char or _KEYSYMS name, not word aliases; 3 pivots
+- `vnc-framebuffer-virtio` — Proxmox vga=virtio breaks compositor/Electron framebuffer; 3 pivots
+- `redux-persist-migrations-version` — missing migrations.version resets all config on launch; 3 pivots
+- `second-instance-ipc-xauthority` — deep-link dispatch silently drops without XAUTHORITY; 3 pivots
+
+Schema: `automation/recipes/schema.py` — Pydantic `Recipe` + `Pivot` models. Required fields: slug (kebab-case), title, symptoms, constraint, pivots, sources. Pivot.cost: low|medium|high|external.
+
+`mosdat recipes list` skips and warns on invalid files (does not abort).
+
+Touches:
+- `shared/recipes/*.yaml` — 6 seed recipe files
+- `automation/recipes/__init__.py` + `automation/recipes/schema.py` — Pydantic schema
+- `automation/commands/recipes.py` — list / show / search implementation
+- `automation/commands/parser.py` — recipes subparser wired
+- `automation/main.py` — `run_recipes` added to dispatch dict
+- `tests/test_recipes.py` — 10 unit tests (schema x 6, list, show, search x 3, load_all invalid-skip)
+
+---
+
+## Tier 4 — pivot-faster tooling (post-PR3325 retrospective)
+
+### F1a. `mosdat lint <scenario>` — static YAML analyzer — IMPLEMENTED 2026-05-17
+
+Static anti-pattern scanner for functional scenario YAML files. Runs offline (no VM, no VLM).
+Exits 0 if no WARN, 1 if any WARN.
+
+```
+mosdat lint shared/scenarios/functional/3325-master-toggle.yaml
+```
+
+Seven WARN rules:
+1. **key-combo** — split on `+`, check main key is in `_KEYSYMS`, `_MODIFIERS`, or single char (catches `ctrl+plus`, `alt+comma` spelled as word).
+2. **coord-drift** — `xdotool mousemove \d+ \d+` → "coord drift risk; use VNC native or VLM localize".
+3. **transient-localize** — `localize:` referring to kebab / dropdown / menu / popup → "VLM hallucinates transient popups".
+4. **settings-toggle-no-verify** — Settings nav → toggle → no UI verify before kill+relaunch → "prefer --inject-config pre-stage".
+5. **heredoc-in-yaml** — `cat > ... <<'EOF'` inside YAML literal → "heredoc breaks YAML; use printf".
+6. **tel-dispatch-xauth** — `nohup ... "tel:` not preceded by `XAUTHORITY=` within 5 lines.
+7. **config-json-no-migrations** — config.json write without `__internal__.migrations.version` in ±20-line window.
+
+Optional: if scenario has `requires_capabilities:` block with `asar_sha`, lint consults capability manifest (F1c) for mismatch warnings.
+
+Touches:
+- `automation/commands/lint.py` (new) — 7 check functions + `run_lint(args) -> int`
+- `automation/commands/parser.py` — `lint` subparser
+- `automation/main.py` — `run_lint` added to dispatch dict
+- `tests/test_lint.py` — 12 unit tests (7 WARN rules × pass+fail + 2 integration)
+
+### F1b. `mosdat trace <toml> --vms <vm>` — input capability probe — IMPLEMENTED 2026-05-17
+
+Launches the app binary on a VM, exercises common input methods via VNC + screenshot diff, and reports which work.
+
+```
+mosdat trace examples/rocketchat.toml --vms ubuntu2204 [--write-manifest]
+```
+
+Probes:
+- Menu accelerators: `alt+f`, `alt+e`, `alt+v`, `alt+w`, `alt+h`, `F10`
+- Common shortcuts: `ctrl+,`, `ctrl+f`, `ctrl+r`
+- Webview focus stealing: `alt+f` in form-focused vs title-bar-focused context
+- Sidebar kebab via VLM localize (reports confidence + transient dismiss timing)
+- xdotool windowactivate + ctrl+f repeat
+
+Output per probe: `OPEN` | `SWALLOWED (webview focus)` | `NO-ACCEL` with diff score and workaround hint.
+Exit 0 (probe complete), 1 (unexpected SWALLOWED results), 2 (setup error).
+
+Use `--write-manifest` to persist results to `shared/binary_capabilities/<sha>.json`.
+
+Touches:
+- `automation/commands/trace.py` (new) — `run_trace(args) -> int`
+- `automation/commands/parser.py` — `trace` subparser
+- `automation/main.py` — `run_trace` added to dispatch dict
+- `tests/test_trace.py` — 6 unit tests (screenshot diff, manifest model, probe-with-mock-VNC)
+
+### F1c. Capability manifest — IMPLEMENTED 2026-05-17
+
+Helper module for storing and querying binary input probe results.
+
+```python
+from automation.setup.capability import manifest_path, load_manifest, write_manifest, get_for_vm
+```
+
+Schema (`shared/binary_capabilities/<asar_sha>.json`):
+```json
+{
+  "asar_sha": "abc123...",
+  "captured_at": "ISO date",
+  "vm": "ubuntu2204",
+  "accelerators": {"alt+w": "swallowed_in_webview", "ctrl+,": "no_accel", "F10": "open"},
+  "popups": {"sidebar_kebab": "transient_800ms"},
+  "persisted_state_keys": ["isTelephonyEnabled"],
+  "test_ids_present": false
+}
+```
+
+`get_for_vm(ssh)` computes SHA-256 of `app.asar` on the VM (first 16 hex chars used as key).
+`mosdat trace --write-manifest` calls `write_manifest(sha, data)` automatically.
+`mosdat lint` consults `load_manifest(sha)` when scenario has `requires_capabilities: {asar_sha: ...}`.
+
+Touches:
+- `automation/setup/capability.py` (new) — `manifest_path`, `load_manifest`, `write_manifest`, `get_for_vm`, `build_manifest`
+- `tests/test_capability.py` — 5 unit tests (round-trip, missing, sha-mismatch, path, get_for_vm)
+
+---
+
 ## Implementation order recommendation
 
 Parallelizable (Wave 1, no file overlap):
@@ -341,3 +466,24 @@ Polish (Wave 2):
 - I15 negative fixtures
 
 Each Tier-1 item: ~1-2 days. Total tier-1 ≈ 2 weeks single-dev or 3-4 days fanned out.
+
+---
+
+## Tier 4 — pivot-faster tooling
+
+### Scenario authoring skill: state-first testing
+
+Guidance for scenario authors on when to pre-stage Redux state via `--inject-config`
+vs when UI navigation is genuinely required. Includes decision checklist, anti-patterns,
+correct patterns, and the PR3325 before/after worked example.
+
+→ [`docs/skills/state-first-testing.md`](skills/state-first-testing.md)
+
+### Upstream asks: RocketChat/Rocket.Chat.Electron
+
+Formal proposal to RC Electron maintainers covering three asks ranked by ROI:
+(A) `CmdOrCtrl+,` accelerator on Settings (1-line fix), (B) `data-testid` attrs on
+key telephony UI elements, (C) optional `--load-state` / `--export-state` CLI.
+Suitable for filing as a GitHub issue or PR cover letter.
+
+→ [`docs/upstream-rc-electron-asks.md`](upstream-rc-electron-asks.md)
