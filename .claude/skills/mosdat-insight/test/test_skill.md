@@ -52,7 +52,7 @@ Manually test the script:
 for i in 1 2 3; do
   echo '{"output": "step 2 failed: verify check timed out"}' | \
     CLAUDE_SESSION_ID=hooktest \
-    ~/.claude/skills/insight/check_repeated_failures.sh 2>&1
+    ~/.claude/skills/mosdat-insight/check_repeated_failures.sh 2>&1
 done
 ```
 

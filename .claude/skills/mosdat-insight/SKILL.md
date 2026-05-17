@@ -1,5 +1,5 @@
 ---
-name: insight
+name: mosdat-insight
 description: "Use when the user invokes /insight, says 'capture insight', or after repeated failures to surface relevant project and personal lessons. Captures structured insight entries and surfaces existing knowledge to prevent repeated mistakes."
 ---
 

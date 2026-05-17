@@ -1,29 +1,31 @@
-# Installing the Insight Autouse Hook
+# Installing mosdat-insight
 
-## What this adds
+The skill ships as a project-tracked directory at
+`.claude/skills/mosdat-insight/` inside this repository. Claude Code
+auto-discovers it when launched inside the project — no install needed
+for local use.
 
-A `PostToolUse` hook that fires after every `Agent` tool call. When the same step fails 3 times in a session, it searches your knowledge directories and emits a context injection with relevant lesson slugs.
+## To use this skill across all your projects
 
-## Install location
-
-The skill ships in two equivalent locations:
-
-- **Project-scoped** (tracked in this repo): `<project>/.claude/skills/insight/` — auto-discovered by Claude Code when working inside this project.
-- **Global** (user-level): `~/.claude/skills/insight/` — copy the contents from the project location if you want the skill available across all projects.
-
-The instructions below use `~/.claude/skills/insight/` paths; substitute `<project>/.claude/skills/insight/` if installing project-locally.
-
-## Step 1 — Verify the script
+Symlink the project copy into your global ~/.claude/skills/ dir:
 
 ```bash
-ls -la ~/.claude/skills/insight/check_repeated_failures.sh
-# Should be executable. If not:
-chmod +x ~/.claude/skills/insight/check_repeated_failures.sh
+ln -s "$(pwd)/.claude/skills/mosdat-insight" ~/.claude/skills/mosdat-insight
 ```
 
-## Step 2 — Add to ~/.claude/settings.json
+Verify:
+```bash
+ls -la ~/.claude/skills/mosdat-insight/SKILL.md
+```
 
-Open `~/.claude/settings.json` and add the following inside the existing `"PostToolUse"` array (alongside the existing Read|Edit|Write and Bash matchers):
+The symlink keeps the global install in lockstep with the tracked
+project source — every commit lands in both places.
+
+## Enabling the autouse PostToolUse hook
+
+The hook fires after every Agent tool call. Add the following to your
+`~/.claude/settings.json` PostToolUse array (alongside any existing
+matchers):
 
 ```jsonc
 {
@@ -34,7 +36,7 @@ Open `~/.claude/settings.json` and add the following inside the existing `"PostT
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/skills/insight/check_repeated_failures.sh"
+            "command": "~/.claude/skills/mosdat-insight/check_repeated_failures.sh"
           }
         ]
       }
@@ -45,7 +47,7 @@ Open `~/.claude/settings.json` and add the following inside the existing `"PostT
 
 ### Full PostToolUse block after merge
 
-Your current `PostToolUse` has two entries. After adding insight, it should look like:
+Your current `PostToolUse` has two entries. After adding mosdat-insight, it should look like:
 
 ```jsonc
 "PostToolUse": [
@@ -74,27 +76,27 @@ Your current `PostToolUse` has two entries. After adding insight, it should look
     "hooks": [
       {
         "type": "command",
-        "command": "~/.claude/skills/insight/check_repeated_failures.sh"
+        "command": "~/.claude/skills/mosdat-insight/check_repeated_failures.sh"
       }
     ]
   }
 ]
 ```
 
-## Step 3 — Test the hook
+## Dry-run test
 
 ```bash
 # Dry-run: pipe a fake failed agent result
 echo '{"output": "step 2 failed: verify check timed out"}' | \
   INSIGHT_DISABLED=0 CLAUDE_SESSION_ID=test \
-  ~/.claude/skills/insight/check_repeated_failures.sh
+  ~/.claude/skills/mosdat-insight/check_repeated_failures.sh
 # Expect: no output (only 1 failure, threshold is 3)
 
 # Simulate hitting threshold
 for i in 1 2 3; do
   echo '{"output": "step 2 failed: verify check timed out"}' | \
     CLAUDE_SESSION_ID=test \
-    ~/.claude/skills/insight/check_repeated_failures.sh 2>&1
+    ~/.claude/skills/mosdat-insight/check_repeated_failures.sh 2>&1
 done
 # Third run should emit: "[insight] related lessons found..."
 # Then clean up:
