@@ -1,0 +1,10 @@
+name: verify-app-alive
+description: Assert Rocket.Chat window is visible and responsive — no crash dialog, no apport handler, no frozen window
+schema_version: v1
+tags: [health, verify, rocketchat]
+
+steps: []
+
+postconditions:
+  - verify: "Rocket.Chat application window is visible and responsive — no crash dialog, no apport handler, no frozen window"
+    verify_timeout: 15

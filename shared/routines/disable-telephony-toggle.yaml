@@ -1,0 +1,28 @@
+name: disable-telephony-toggle
+description: Navigate to the General tab in RC Settings and disable the Telephony master toggle (inverse of enable-telephony-toggle)
+schema_version: v1
+tags: [settings, telephony, toggle, rocketchat]
+
+preconditions:
+  - verify: "Rocket.Chat Settings panel is open with the General tab visible (or accessible)"
+    verify_timeout: 10
+
+steps:
+  - localize: "the 'General' tab or section heading inside the Settings panel"
+    click: left
+  - wait: 2
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      xdotool mousemove 680 500
+      for i in 1 2 3 4 5 6; do xdotool click 5; sleep 0.1; done
+      echo SCROLLED_TO_TELEPHONY
+  - wait: 1
+  - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently ON or enabled"
+    click: left
+  - wait: 3
+
+postconditions:
+  - verify: "Rocket.Chat Settings panel General tab shows the Telephony master toggle in a disabled / OFF state — deactivated, unchecked, or dimmed."
+    retries: 3
+    verify_timeout: 20

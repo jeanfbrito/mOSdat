@@ -1,0 +1,33 @@
+name: open-settings
+description: Focus RC window and open the Settings panel via Window menu (alt+w nav); falls back to sidebar kebab when alt+w is swallowed
+schema_version: v1
+tags: [settings, ui, rocketchat]
+
+preconditions:
+  - verify: "Rocket.Chat application window is visible and responsive"
+    verify_timeout: 15
+
+steps:
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      wmctrl -a 'Rocket.Chat'; sleep 1
+      xdotool key --clearmodifiers alt+w; sleep 1
+      xdotool key Down Return; sleep 2
+      echo SETTINGS_OPENED_VIA_WINDOW_MENU
+  - wait: 4
+
+fallbacks:
+  - when: "capability.accelerators['alt+w'] == 'swallowed'"
+    steps:
+      - localize: "the kebab or three-dot menu button at the bottom of the Rocket.Chat sidebar (left column) — a settings/customize gear-or-dots icon"
+        click: left
+      - wait: 2
+      - localize: "the 'Settings' or 'Desktop Settings' menu item in the popup menu that just opened from the sidebar kebab button"
+        click: left
+      - wait: 4
+
+postconditions:
+  - verify: "Rocket.Chat Settings or Preferences panel is visible inside the main application window — General/About/etc. tabs visible. Not a crash dialog, not a blank screen."
+    verify_timeout: 15
+    retries: 3

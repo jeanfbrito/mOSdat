@@ -1,0 +1,26 @@
+name: rc-killed-userdata-wiped
+description: RC process killed and userData dirs wiped — baseline clean state
+vm_state:
+  rc_killed: true
+  userdata_wiped: true
+  launched: false
+setup_steps:
+  - shell: |
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      sleep 1
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      echo FIXTURE_RC_KILLED_USERDATA_WIPED
+teardown_steps: []

@@ -1,0 +1,37 @@
+name: dispatch-tel-link
+description: "Dispatch a tel: or callto: deep link to a running RC instance via nohup binary invocation"
+schema_version: v1
+tags: [dispatch, deeplink, telephony, rocketchat]
+
+inputs:
+  number:
+    name: number
+    type: string
+    required: true
+  scheme:
+    name: scheme
+    type: string
+    required: false
+    default: "tel"
+  settle_seconds:
+    name: settle_seconds
+    type: int
+    required: false
+    default: 8
+
+preconditions:
+  - verify: "Rocket.Chat application window is visible"
+    verify_timeout: 15
+
+steps:
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "{{ scheme }}:{{ number }}" >/dev/null 2>&1 &
+      echo DISPATCH_TEL_DONE
+
+  - wait: 8
+
+postconditions:
+  - verify: "Rocket.Chat application window is visible and responsive after the {{ scheme }}: dispatch"
+    verify_timeout: 15

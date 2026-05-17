@@ -589,6 +589,7 @@ def main() -> int:
     from automation.commands.build import run_build
     from automation.commands.doctor import run_doctor
     from automation.commands.recipes import run_recipes
+    from automation.commands.routines import run_routines
     from automation.commands.lint import run_lint
     from automation.commands.trace import run_trace
 
@@ -627,6 +628,7 @@ def main() -> int:
         "doctor": run_doctor,
         "vlm-cache": cmd_vlm_cache,
         "recipes": run_recipes,
+        "routines": run_routines,
         "lint": run_lint,
         "trace": run_trace,
     }

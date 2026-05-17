@@ -1,11 +1,11 @@
 usage: mosdat [-h]
-              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,doctor,visual,recipes}
+              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,doctor,visual,recipes,routines}
               ...
 
 mOSdat - Multi-OS Desktop App Testing with GPU passthrough
 
 positional arguments:
-  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,doctor,visual,recipes}
+  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,doctor,visual,recipes,routines}
     run                 Full test matrix run
     test                Quick test with pre-built package
     functional          Run VLM functional UI tests
@@ -37,6 +37,7 @@ positional arguments:
     visual              Visual regression: capture or check step screenshots
                         via SSIM
     recipes             F2: Browse known platform constraints and workarounds
+    routines            R1: Browse and inspect reusable routine library
 
 options:
   -h, --help            show this help message and exit

@@ -1,0 +1,34 @@
+name: explain-example
+description: Synthetic routine for R4 capability-fallback tests
+tags: [test, capability]
+
+inputs:
+  accel_key:
+    name: accel_key
+    type: string
+    required: false
+    default: ctrl+,
+
+steps:
+  - shell: 'echo main path'
+
+fallbacks:
+  - when: "capability.accelerators['alt+w'] == 'swallowed'"
+    steps:
+      - shell: echo fallback-altw-swallowed
+
+  - when: "capability.accelerators['ctrl+,'] == 'no_accel'"
+    steps:
+      - shell: echo fallback-ctrl-comma
+
+  - when: "inputs.accel_key == 'override'"
+    steps:
+      - shell: echo fallback-input-override
+
+  - when: "vars.env == 'ci'"
+    steps:
+      - shell: echo fallback-ci-env
+
+  - when: default
+    steps:
+      - shell: echo fallback-default

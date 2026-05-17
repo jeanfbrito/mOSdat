@@ -1,0 +1,24 @@
+name: select-telephony-server-from-modal
+description: Click a server row in the RC telephony Select Server modal; to also check 'Remember this choice' add an explicit localize step after this routine in the calling scenario
+schema_version: v1
+tags: [telephony, modal, server-select, rocketchat]
+
+inputs:
+  server_title:
+    name: server_title
+    type: string
+    required: true
+
+preconditions:
+  - verify: "Rocket.Chat telephony Select Server modal is visible with two or more server rows and a 'Remember this choice' checkbox"
+    verify_timeout: 15
+
+steps:
+  - localize: "the '{{ server_title }}' server option inside the telephony Select Server modal — clickable row with server icon and URL"
+    click: left
+  - wait: 6
+
+postconditions:
+  - verify: "Rocket.Chat application window is visible and responsive — the telephony Select Server modal is no longer visible. App alive, no crash dialog."
+    retries: 3
+    verify_timeout: 20

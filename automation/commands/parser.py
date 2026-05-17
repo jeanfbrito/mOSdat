@@ -397,4 +397,54 @@ def build_parser() -> argparse.ArgumentParser:
     search_p = recipes_sub.add_parser("search", help="Search recipes by title, symptoms, or constraint")
     search_p.add_argument("query", help="Search query (case-insensitive substring)")
 
+    # mosdat routines  (R1/R3/R4: parameterized reusable procedure library + test harness)
+    routines_p = sub.add_parser("routines", help="R1: Browse and inspect reusable routine library")
+    routines_sub = routines_p.add_subparsers(dest="routines_command", required=True)
+    routines_sub.add_parser("list", help="List all routines (name + description + tags)")
+    show_r = routines_sub.add_parser("show", help="Show full routine definition as YAML")
+    show_r.add_argument("name", help="Routine name (e.g. launch-rocketchat)")
+    test_r = routines_sub.add_parser("test", help="R3: Run a routine against a VM with optional fixture")
+    test_r.add_argument("name", help="Routine name to test")
+    test_r.add_argument("--vms", required=True, metavar="VM",
+                        help="VM name to run against (e.g. ubuntu2204)")
+    test_r.add_argument("--fixture", default=None, metavar="NAME",
+                        help="Fixture slug to apply before running the routine (e.g. rc-killed-userdata-wiped)")
+    test_r.add_argument("--with", dest="with_inputs", action="append", default=[],
+                        metavar="KEY=VAL",
+                        help="Override a routine input (repeatable, e.g. --with url=https://...)")
+    test_r.add_argument("--model", default=None, metavar="MODEL",
+                        help="Override VLM model for localization")
+    test_r.add_argument("--verify-model", dest="verify_model", default=None, metavar="MODEL",
+                        help="Override VLM model for verification")
+    test_r.add_argument("--save-screenshots", action="store_true", dest="save_screenshots",
+                        help="Save step screenshots to results dir")
+    test_r.add_argument("--config", default=None, metavar="PATH",
+                        help="mosdat config TOML for VM/VLM settings")
+    routines_sub.add_parser("fixtures", help="R3: List available fixtures (slug + description + vm_state)")
+    explain_r = routines_sub.add_parser(
+        "explain",
+        help="R4: Show which fallback fires given a capability manifest and inputs (dry run)",
+    )
+    explain_r.add_argument("name", help="Routine name (e.g. open-settings)")
+    explain_r.add_argument(
+        "--manifest", metavar="PATH",
+        help="Path to capability manifest JSON (default: auto-load latest from shared/binary_capabilities/)",
+    )
+    explain_r.add_argument(
+        "--with", dest="with_inputs", action="append", default=[], metavar="KEY=VAL",
+        help="Override or set a routine input (repeatable). Format: KEY=VAL.",
+    )
+    report_r = routines_sub.add_parser(
+        "report",
+        help="R6: Coverage report — scenarios, test history, unused/untested routines",
+    )
+    report_r.add_argument(
+        "--format", choices=["md", "json", "tty"], default="md",
+        help="Output format: md (default), json, or tty (colorized)",
+    )
+    routines_sub.add_parser(
+        "version",
+        help="R7: Print current schema version and supported versions list",
+    )
+
     return parser

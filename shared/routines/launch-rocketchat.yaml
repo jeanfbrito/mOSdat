@@ -1,0 +1,118 @@
+name: launch-rocketchat
+description: Write servers.json + config.json to both userData dirs, then launch RC on X11 and wait for first paint
+schema_version: v1
+tags: [setup, launch, rocketchat]
+
+inputs:
+  servers:
+    name: servers
+    type: list
+    required: true
+  telephony_enabled:
+    name: telephony_enabled
+    type: bool
+    required: false
+    default: false
+  preferred_server_url:
+    name: preferred_server_url
+    type: string
+    required: false
+    default: null
+  shortcut_accelerator:
+    name: shortcut_accelerator
+    type: string
+    required: false
+    default: null
+  migrations_version:
+    name: migrations_version
+    type: string
+    required: false
+    default: "4.14.1"
+
+steps:
+  - shell: |
+      set -u
+      SERVERS_JSON='{{ servers | tojson }}'
+      FIRST_URL=$(python3 -c "import json,sys; s=json.loads(sys.argv[1]); print(s[0]['url'] if s else '')" "$SERVERS_JSON")
+      SERVERS_KV=$(python3 -c "
+      import json,sys
+      s=json.loads(sys.argv[1])
+      print(json.dumps({entry['title']: entry['url'] for entry in s}, indent=2))
+      " "$SERVERS_JSON")
+      SERVERS_ARR=$(python3 -c "
+      import json,sys
+      s=json.loads(sys.argv[1])
+      out=[]
+      for e in s:
+          url=e['url']
+          if not url.endswith('/'):
+              url+='/'
+          out.append({'url':url,'title':e['title']})
+      print(json.dumps(out, indent=4))
+      " "$SERVERS_JSON")
+      LAST_URL=$(python3 -c "import json,sys; s=json.loads(sys.argv[1]); print(s[0]['url'] if s else '')" "$SERVERS_JSON")
+      if [[ "$LAST_URL" != */ ]]; then LAST_URL="${LAST_URL}/"; fi
+      FIRST_NORM=$(python3 -c "
+      import json,sys
+      s=json.loads(sys.argv[1])
+      url=s[0]['url'] if s else ''
+      print(url if url.endswith('/') else url+'/')
+      " "$SERVERS_JSON")
+
+      TEL_ENABLED='{{ telephony_enabled | tojson }}'
+      PREF_SERVER='{{ preferred_server_url | tojson }}'
+      ACCEL='{{ shortcut_accelerator | tojson }}'
+      MIG_VER='{{ migrations_version }}'
+
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+
+        printf '%s\n' "$SERVERS_KV" > "$d/servers.json"
+
+        python3 -c "
+      import json, sys
+      servers_arr = json.loads(sys.argv[1])
+      first_url = sys.argv[2]
+      tel_enabled = sys.argv[3] == 'true'
+      pref_server = None if sys.argv[4] == 'null' else sys.argv[4].strip('\"')
+      accel_raw = sys.argv[5]
+      accel = None if accel_raw == 'null' else accel_raw.strip('\"')
+      mig_ver = sys.argv[6]
+
+      config = {
+          'servers': servers_arr,
+          'currentView': {'url': first_url},
+          'isTelephonyEnabled': tel_enabled,
+          'telephonyPreferredServer': pref_server,
+          'telephonyGlobalShortcutConfig': {'enabled': accel is not None, 'accelerator': accel},
+          'isMenuBarEnabled': True,
+          'isSideBarEnabled': True,
+          'isTrayIconEnabled': False,
+          'isMinimizeOnCloseEnabled': False,
+          'doCheckForUpdatesOnStartup': False,
+          'isUpdatingEnabled': False,
+          'rootWindowState': {
+              'focused': True, 'visible': True, 'maximized': False,
+              'minimized': False, 'fullscreen': False, 'normal': True,
+              'bounds': {'x': 40, 'y': 40, 'width': 1280, 'height': 820}
+          },
+          'lastSelectedServerUrl': first_url,
+          '__internal__': {'migrations': {'version': mig_ver}}
+      }
+      print(json.dumps(config, indent=2))
+      " "$SERVERS_ARR" "$FIRST_NORM" "$TEL_ENABLED" "$PREF_SERVER" "$ACCEL" "$MIG_VER" > "$d/config.json"
+      done
+      echo LAUNCH_RC_CONFIG_WRITTEN
+
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo LAUNCH_RC_DONE
+
+  - wait: 15
+
+postconditions:
+  - verify: "Rocket.Chat application window is visible — login page or workspace content, not 'Add a server' screen"
+    verify_timeout: 30
+    retries: 3

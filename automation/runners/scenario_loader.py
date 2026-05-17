@@ -9,6 +9,9 @@ from typing import Optional
 # I11: sentinel key used to mark import steps in raw dicts
 _IMPORT_KEY = "import"
 
+# R1: sentinel key for routine call steps
+_ROUTINE_KEY = "routine"
+
 # I11: directory where fragment files live (relative to project root)
 _IMPORTS_DIR_NAME = "shared/scenarios/imports"
 
@@ -402,6 +405,68 @@ def _warn_manifest_mismatch(steps: list, declared_imports: list, scenario_path: 
             )
 
 
+# ---------------------------------------------------------------------------
+# R1: Routine call expansion
+# ---------------------------------------------------------------------------
+
+def _is_routine_call(step_dict) -> Optional[str]:
+    """Return routine name if step_dict is a routine: call, else None.
+
+    Accepts both shapes:
+    - ``{"routine": "name"}`` (short string form)
+    - ``{"routine": {"name": "name", "with": {...}}}`` (long form)
+    """
+    if not isinstance(step_dict, dict):
+        return None
+    value = step_dict.get(_ROUTINE_KEY)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, dict):
+        name = value.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return None
+
+
+def _expand_routines(
+    steps: list,
+    parent_vars: dict,
+    scenario_path: Path,
+    _resolving: frozenset = frozenset(),
+) -> list[dict]:
+    """Walk step list, expand routine: calls into their constituent steps.
+
+    Handles nested routine calls recursively. Cycle detection via _resolving.
+    Import steps pass through untouched (I11 handles them separately).
+    """
+    result = []
+    for step in steps:
+        routine_name = _is_routine_call(step)
+        if routine_name is not None:
+            from automation.routines.runner import expand_call
+            try:
+                expanded = expand_call(
+                    step,
+                    parent_vars,
+                    capability_manifest=None,
+                    _resolving=_resolving,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"[routines] {exc} (in scenario {scenario_path})"
+                ) from exc
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"[routines] {exc} (referenced from {scenario_path})"
+                ) from exc
+            # Recursively expand any routines inside the expanded steps
+            # (nested imports are handled by _expand_imports later)
+            result.extend(expanded)
+        else:
+            result.append(step)
+    return result
+
+
 def load_test_yaml(path, _unused=None, cli_vars: dict | None = None) -> tuple[str, list[FunctionalStep], dict, dict]:
     """Load a YAML functional test file.
 
@@ -447,6 +512,18 @@ def load_test_yaml(path, _unused=None, cli_vars: dict | None = None) -> tuple[st
         # I11: expand !import references (splice fragment steps into parent list)
         imports_dir = _imports_dir(path)
         expanded_steps = _expand_imports(raw_steps_pre_expand, imports_dir, path)
+
+        # R1: expand routine: calls AFTER import expansion, BEFORE var subst
+        # Pass yaml_vars (pre-CLI-merge) so routine inputs can reference scenario vars
+        yaml_vars_early: dict = data.get("vars", {}) or {}
+        expanded_steps = _expand_routines(expanded_steps, yaml_vars_early, path)
+        # Strip internal routine metadata keys before schema validation
+        expanded_steps = [
+            {k: v for k, v in s.items() if not k.startswith("_")}
+            if isinstance(s, dict) else s
+            for s in expanded_steps
+        ]
+
         data = dict(data)
         data["steps"] = expanded_steps
 

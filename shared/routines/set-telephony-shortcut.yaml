@@ -1,0 +1,31 @@
+name: set-telephony-shortcut
+description: Click the Telephony global shortcut input in RC Settings and register the given accelerator combo
+schema_version: v1
+tags: [settings, telephony, shortcut, rocketchat]
+
+inputs:
+  accelerator:
+    name: accelerator
+    type: string
+    required: true
+
+preconditions:
+  - verify: "Rocket.Chat Settings panel General tab Telephony section visible with shortcut input field"
+    verify_timeout: 10
+
+steps:
+  - localize: "the Telephony global shortcut input field in the Settings General tab — labeled 'Global shortcut' or 'Telephony Shortcut'"
+    click: left
+  - wait: 1
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      xdotool key --clearmodifiers {{ accelerator }}; sleep 1
+      xdotool key Tab
+      echo SHORTCUT_SET
+  - wait: 2
+
+postconditions:
+  - verify: "Rocket.Chat Settings panel Telephony shortcut field shows '{{ accelerator }}' as the bound key combination"
+    retries: 3
+    verify_timeout: 15
