@@ -176,6 +176,9 @@ def _group_steps(events: list[dict], screenshots: dict[str, list[dict]]) -> list
             step["status"] = _step_status(event.get("status"))
             step["duration_ms"] = event.get("duration_ms")
             step["attempts"] = event.get("attempts")
+        if event.get("event") == "app_crashed":
+            step["status"] = "fail"
+            step["crash_source"] = event.get("source", "")
     for key, shots in screenshots.items():
         step = by_step.setdefault(key, {
             "step_num": int(key) if key.isdigit() else key,
@@ -196,11 +199,34 @@ def _group_steps(events: list[dict], screenshots: dict[str, list[dict]]) -> list
 def _extract_failures(run: str, vm: str, events: list[dict], screenshots: dict[str, list[dict]]) -> list[dict]:
     failures = []
     last_vlm_by_step: dict[str, dict] = {}
+    crashed_steps: set[str] = set()
     for event in events:
         step_key = str(event.get("step_num")) if event.get("step_num") is not None else None
         if step_key and event.get("event") in {"vlm_verify", "launch_verify", "vlm_localize"}:
             last_vlm_by_step[step_key] = event
-        if event.get("event") == "step_end" and event.get("status") in {"fail", "failed"} and step_key:
+        if event.get("event") == "app_crashed" and step_key:
+            crashed_steps.add(step_key)
+            source = event.get("source", "")
+            cleanup = event.get("cleanup_clicked")
+            if cleanup is True:
+                cause = f"app crashed ({source}, Cancel clicked)"
+            else:
+                cause = f"app crashed ({source})"
+            shot = screenshots.get(step_key, [])[-1:] or []
+            failures.append({
+                "run": run,
+                "vm": vm,
+                "step_num": event.get("step_num"),
+                "ts": event.get("ts", ""),
+                "status": "failed",
+                "duration_ms": None,
+                "attempts": None,
+                "cause": cause,
+                "question": "",
+                "answer": "",
+                "screenshot": shot[0] if shot else None,
+            })
+        if event.get("event") == "step_end" and event.get("status") in {"fail", "failed"} and step_key and step_key not in crashed_steps:
             shot = screenshots.get(step_key, [])[-1:] or []
             vlm = last_vlm_by_step.get(step_key, {})
             failures.append({
@@ -218,7 +244,7 @@ def _extract_failures(run: str, vm: str, events: list[dict], screenshots: dict[s
             })
     failed_steps = {str(failure["step_num"]) for failure in failures}
     for step_key, shots in screenshots.items():
-        if step_key in failed_steps or not any(shot.get("kind") == "fail" for shot in shots):
+        if step_key in failed_steps or step_key in crashed_steps or not any(shot.get("kind") == "fail" for shot in shots):
             continue
         failures.append({
             "run": run,

@@ -128,6 +128,41 @@ class TestDashboardState:
         assert vm["steps"][0]["status"] == "skipped"
         assert state["failures"] == []
 
+    def test_app_crashed_marks_step_fail(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "ubuntu2204"
+        run_dir.mkdir(parents=True)
+        _write_events(run_dir / "events.jsonl", [
+            {"ts": "2026-05-17T19:22:00", "event": "step_start", "step_num": 7, "kind": "verify"},
+            {"ts": "2026-05-17T19:22:11", "event": "process_probe", "step_num": 7,
+             "process": "rocketchat-desktop", "running": False, "latency_ms": 363},
+            {"ts": "2026-05-17T19:22:11", "event": "app_crashed", "step_num": 7,
+             "source": "process_not_running", "process": "rocketchat-desktop"},
+        ])
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 17, 19, 22, 30))
+
+        vm = state["runs"][0]["vms"][0]
+        step7 = next(s for s in vm["steps"] if s["step_num"] == 7)
+        assert step7["status"] == "fail"
+        assert step7["crash_source"] == "process_not_running"
+
+    def test_app_crashed_surfaced_in_failures(self, tmp_path):
+        run_dir = tmp_path / "functional" / "run1" / "ubuntu2204"
+        run_dir.mkdir(parents=True)
+        _write_events(run_dir / "events.jsonl", [
+            {"ts": "2026-05-17T19:22:00", "event": "step_start", "step_num": 7, "kind": "verify"},
+            {"ts": "2026-05-17T19:22:11", "event": "app_crashed", "step_num": 7,
+             "source": "apport_dialog_detected", "cleanup_clicked": True},
+        ])
+
+        state = build_dashboard_state(tmp_path, now=datetime(2026, 5, 17, 19, 22, 30))
+
+        failures = state["failures"]
+        assert len(failures) == 1
+        assert "app crashed" in failures[0]["cause"]
+        assert "apport_dialog_detected" in failures[0]["cause"]
+        assert "Cancel clicked" in failures[0]["cause"]
+
     def test_screenshot_only_failure_is_not_running(self, tmp_path):
         run_dir = tmp_path / "functional" / "old-run" / "windows11"
         run_dir.mkdir(parents=True)
