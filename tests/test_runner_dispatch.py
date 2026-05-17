@@ -56,6 +56,13 @@ class FakeImage:
 def _make_runner(vlm_verify=True, vlm_coords=(200, 300), screenshot_dir=None):
     vlm = MagicMock()
     vlm.verify.return_value = vlm_verify
+    # I14: verify_with_meta returns (verdict, raw_response, cache_hit).
+    # Sync via side_effect so tests that mutate `vlm.verify.return_value`
+    # mid-flight still take effect.
+    def _verify_meta(*args, **kwargs):
+        result = vlm.verify(*args, **kwargs)
+        return (result, "yes" if result else "no", False)
+    vlm.verify_with_meta.side_effect = _verify_meta
     vlm.localize.return_value = vlm_coords
     vlm.localize_verified.return_value = vlm_coords
     vlm.localize_consistent.return_value = vlm_coords
@@ -124,7 +131,8 @@ class TestShellStep:
     def test_shell_dispatched(self):
         runner, _, _, inj = _make_runner()
         runner.run_step(FunctionalStep(shell="echo hi"), 1)
-        inj.shell.assert_called_with("echo hi")
+        # I14: shell dispatch goes through shell_result() (richer return)
+        inj.shell_result.assert_called_with("echo hi")
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,35 @@
+# negative-fixture: this scenario MUST fail.
+# expected_fail: 1
+# expected_reason: "no application window visible"
+
+name: "Negative fixture — wrong binary path"
+
+steps:
+  # Cleanup: ensure no RC processes running before we try to launch a bogus binary
+  - shell: |
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      echo CLEANUP_DONE
+
+  # Launch a nonexistent binary — the process will not start
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Nonexistent.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo BOGUS_BINARY_LAUNCHED
+
+  - wait: 8
+
+  # This verify must fail: no application window visible because binary does not exist
+  - verify: |
+      The Rocket.Chat application window is open and visible on screen. Look for
+      the RC sidebar, login page, or any RC-branded UI element. The window must
+      be present and not a crash dialog.
+      There must be no application window visible from a successful RC launch.
+    verify_timeout: 15
+    retries: 0
+
+  # Cleanup: nothing was launched but be explicit
+  - shell: |
+      pkill -KILL -f 'Nonexistent.Chat' 2>/dev/null || true
+      echo FIXTURE_CLEANUP_DONE

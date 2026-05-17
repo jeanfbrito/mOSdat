@@ -85,6 +85,9 @@ class TestNegativePreflightWorkspaceExitCode(unittest.TestCase):
         _vlm_client_stub_local = types.ModuleType("automation.vlm.client")
         _vlm_client_stub_local.VLMClient = _vlm_client_mock
         _vlm_client_stub_local.VLMError = _VLMError
+        # I6: cmd_functional imports set_cache_enabled when args.no_cache is truthy
+        # (MagicMock attrs are always truthy by default).
+        _vlm_client_stub_local.set_cache_enabled = lambda enabled: None
 
         extra_stubs = {
             "automation.proxmox": _proxmox_stub,

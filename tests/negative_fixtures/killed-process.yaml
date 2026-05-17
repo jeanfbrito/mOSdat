@@ -1,0 +1,88 @@
+# negative-fixture: this scenario MUST fail.
+# expected_fail: 1
+# expected_reason: "no application window visible"
+
+name: "Negative fixture — process killed mid-scenario then verify fails"
+
+steps:
+  # Cleanup: kill any existing RC and wipe userData
+  - shell: |
+      set -u
+      for attempt in 1 2 3 4 5; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"; mkdir -p "$d"
+      done
+      echo CLEANUP_DONE
+
+  # Pre-stage minimal config so RC can start
+  - shell: |
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        printf '%s\n' \
+          '{ "Workspace": "https://rocketchat.jeanbrito.com" }' > "$d/servers.json"
+        printf '%s\n' \
+          '{' \
+          '  "servers": [{ "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" }],' \
+          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": false,' \
+          '  "isMenuBarEnabled": true,' \
+          '  "isSideBarEnabled": true,' \
+          '  "isTrayIconEnabled": false,' \
+          '  "doCheckForUpdatesOnStartup": false,' \
+          '  "isUpdatingEnabled": false,' \
+          '  "rootWindowState": {' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
+          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
+          '}' > "$d/config.json"
+      done
+      echo CONFIG_WRITTEN
+
+  # Launch RC normally
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  - wait: 15
+
+  # Sanity check: RC is running
+  - verify: |
+      The Rocket.Chat application window shows a login page or connected server view.
+    verify_timeout: 25
+    retries: 3
+
+  # Kill the app mid-scenario — intentionally breaking the running process
+  - shell: |
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      sleep 2
+      echo APP_KILLED
+
+  # THIS VERIFY MUST FAIL: app was killed, no window visible
+  - verify: |
+      The Rocket.Chat application window is still open and visible. The login page
+      or server view is present and the window has not closed or crashed. There
+      must be no application window visible after the process was killed.
+    verify_timeout: 10
+    retries: 0
+
+  # Cleanup (may not be reached as expected)
+  - shell: |
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+      done
+      echo FIXTURE_CLEANUP_DONE

@@ -21,15 +21,29 @@ from unittest.mock import MagicMock, patch  # noqa: E402
 # ---------------------------------------------------------------------------
 # Stub heavy dependencies so we can import automation modules without
 # installing the full GPU/VLM stack.
+#
+# Save originals so teardown_module can restore them — prevents stub
+# pollution from bleeding into sibling test files (test_preflight, etc.).
 # ---------------------------------------------------------------------------
 
-# PIL
-for _mod in ("PIL", "PIL.Image", "PIL.ImageDraw"):
-    if _mod not in sys.modules:
-        sys.modules[_mod] = types.ModuleType(_mod)
-sys.modules["PIL.Image"].Image = object
-sys.modules["PIL"].Image = sys.modules["PIL.Image"]
-sys.modules["PIL"].ImageDraw = sys.modules["PIL.ImageDraw"]
+_STUBBED_ORIGINALS: dict[str, object] = {}
+
+def _save_original(name: str) -> None:
+    if name not in _STUBBED_ORIGINALS:
+        _STUBBED_ORIGINALS[name] = sys.modules.get(name)
+
+# PIL — only stub when not already imported by an earlier test module.
+# Mutating the real PIL.Image with `.Image = object` would corrupt sibling
+# tests (test_runner_features uses real PIL.Image.new / .crop / .composite).
+_PIL_WAS_REAL = "PIL.Image" in sys.modules
+if not _PIL_WAS_REAL:
+    for _mod in ("PIL", "PIL.Image", "PIL.ImageDraw"):
+        if _mod not in sys.modules:
+            _save_original(_mod)
+            sys.modules[_mod] = types.ModuleType(_mod)
+    sys.modules["PIL.Image"].Image = object
+    sys.modules["PIL"].Image = sys.modules["PIL.Image"]
+    sys.modules["PIL"].ImageDraw = sys.modules["PIL.ImageDraw"]
 
 # openai (used by VLMClient)
 if "openai" not in sys.modules:
@@ -39,6 +53,7 @@ if "openai" not in sys.modules:
     _openai.APITimeoutError = Exception
     _openai.RateLimitError = Exception
     _openai.APIStatusError = Exception
+    _save_original("openai")
     sys.modules["openai"] = _openai
 
 # httpx (used by _is_failover_error)
@@ -47,6 +62,7 @@ if "httpx" not in sys.modules:
     _httpx.ConnectError = Exception
     _httpx.TimeoutException = Exception
     _httpx.RemoteProtocolError = Exception
+    _save_original("httpx")
     sys.modules["httpx"] = _httpx
 
 # yaml
@@ -55,6 +71,7 @@ try:
 except ImportError:
     _yaml = types.ModuleType("yaml")
     _yaml.safe_load = lambda s: {}
+    _save_original("yaml")
     sys.modules["yaml"] = _yaml
 
 # Stub local transport / vlm modules for import isolation.
@@ -66,14 +83,19 @@ class _VLMError(Exception):
 _vlm_client_stub = types.ModuleType("automation.vlm.client")
 _vlm_client_stub.VLMClient = object
 _vlm_client_stub.VLMError = _VLMError
+# I6: automation.main imports set_cache_enabled at module level.
+_vlm_client_stub.set_cache_enabled = lambda enabled: None
+_save_original("automation.vlm.client")
 sys.modules["automation.vlm.client"] = _vlm_client_stub
 
 _vlm_input_stub = types.ModuleType("automation.vlm.input")
 _vlm_input_stub.InputInjector = object
+_save_original("automation.vlm.input")
 sys.modules["automation.vlm.input"] = _vlm_input_stub
 
 _vlm_screenshot_stub = types.ModuleType("automation.vlm.screenshot")
 _vlm_screenshot_stub.Screenshotter = object
+_save_original("automation.vlm.screenshot")
 sys.modules["automation.vlm.screenshot"] = _vlm_screenshot_stub
 
 for _stub_name in (
@@ -86,6 +108,7 @@ for _stub_name in (
 ):
     if _stub_name not in sys.modules:
         _m = types.ModuleType(_stub_name)
+        _save_original(_stub_name)
         sys.modules[_stub_name] = _m
 
 # Ensure package root on path
@@ -182,6 +205,9 @@ def _make_runner(vlm_side_effect=None, ssh_side_effect=None, tmp_path=None):
     injector = MagicMock()
     if ssh_side_effect:
         injector.shell.side_effect = ssh_side_effect
+        # I14: shell dispatch now goes through shell_result() — apply to
+        # both methods so legacy SSH-error tests still trigger.
+        injector.shell_result.side_effect = ssh_side_effect
 
     screenshot_dir = tmp_path or Path("/tmp/mosdat_neg_test")
 
@@ -460,3 +486,12 @@ def test_negative_parametrized_smoke(test_class, method, expected_behavior):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def teardown_module(module):
+    """Restore stubbed sys.modules so sibling test files can import the real ones."""
+    for _name, _orig in _STUBBED_ORIGINALS.items():
+        if _orig is None:
+            sys.modules.pop(_name, None)
+        else:
+            sys.modules[_name] = _orig

@@ -22,8 +22,31 @@ _PROJ = Path(__file__).parent.parent
 
 # Force-replace any stale installed modules with fresh stubs.
 # sys.modules may already point to stale egg copies — we overwrite them.
+# Save originals of any stubbed modules so we can restore them at module
+# teardown — prevents stub pollution from bleeding into sibling test files.
+_STUBBED_ORIGINALS: dict[str, object] = {}
+
 def _force_stub(name, **attrs):
+    import importlib.util
+    real = sys.modules.get(name)
+    if name not in _STUBBED_ORIGINALS:
+        _STUBBED_ORIGINALS[name] = real  # may be None
     m = types.ModuleType(name)
+    # Preserve __path__ for packages so child imports (e.g.
+    # automation.transport.vlm_cache) still resolve when this stub overlays
+    # a real package. We can't import the real package (heavy deps) so we
+    # ask the import system to locate it on disk without executing its
+    # __init__.py.
+    path = getattr(real, "__path__", None) if real is not None else None
+    if path is None:
+        try:
+            spec = importlib.util.find_spec(name)
+            if spec is not None and spec.submodule_search_locations:
+                path = list(spec.submodule_search_locations)
+        except Exception:
+            path = None
+    if path is not None:
+        m.__path__ = path
     for k, v in attrs.items():
         setattr(m, k, v)
     sys.modules[name] = m  # always overwrite
@@ -195,3 +218,12 @@ class TestResetVm:
         ops, api = _make_vm_ops()
         ops.reset_vm(log_fn=lambda m: None)
         api.post.assert_called_once_with("/nodes/pve/qemu/105/status/reset")
+
+
+def teardown_module(module):
+    """Restore stubbed modules so sibling test files can import the real ones."""
+    for _name, _orig in _STUBBED_ORIGINALS.items():
+        if _orig is None:
+            sys.modules.pop(_name, None)
+        else:
+            sys.modules[_name] = _orig

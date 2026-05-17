@@ -9,6 +9,11 @@ usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
                          [--canary {auto,off,on}] [--record-session]
                          [--record-fps FPS] [--record-diff-threshold VALUE]
                          [--record-gif] [--record-keep-raw]
+                         [--inject-config JSON] [--inject-servers LIST]
+                         [--inject-app-name NAME] [--inject-install-path PATH]
+                         [--inject-migrations-version VER] [--no-cache]
+                         [--config-snapshots] [--var KEY=VALUE]
+                         [--from-phase ID] [--until-phase ID]
                          config
 
 positional arguments:
@@ -61,3 +66,31 @@ options:
   --record-gif          Also export recording/session.gif (MP4 is always
                         attempted)
   --record-keep-raw     Keep recording/raw frames after export
+  --inject-config JSON  I1: JSON object (inline or @path.json) merged into
+                        config.json before launch. Pins
+                        __internal__.migrations.version and defaults
+                        currentView from --inject-servers.
+  --inject-servers LIST
+                        I1: TITLE=URL,TITLE=URL (or @path.json with
+                        {title:url} dict). Written as servers.json to both
+                        userData dirs before launch.
+  --inject-app-name NAME
+                        I1: Electron productName for userData path detection
+                        (default: auto-detect via strings(app.asar)).
+  --inject-install-path PATH
+                        I1: Override install path (binary or dir) for
+                        asar/version detection. Default: derived from VM
+                        package app_path.
+  --inject-migrations-version VER
+                        I1: pin __internal__.migrations.version explicitly
+                        (default: auto-detect via <binary> --version).
+  --no-cache            I6: disable VLM verify result cache for this run
+  --config-snapshots    I14: capture config.json after each shell step
+                        (overrides yaml; default off)
+  --var KEY=VALUE       I8: override or set a scenario var (repeatable).
+                        Format: KEY=VALUE. CLI overrides scenario yaml vars:
+                        block. Error on duplicate keys within CLI --var flags.
+  --from-phase ID       I9: start at the first step of named phase ID
+                        (overrides --from-step; warns if both given)
+  --until-phase ID      I9: stop after the last step of named phase ID
+                        (overrides --until-step; warns if both given)

@@ -24,8 +24,33 @@ _PROJ = Path(__file__).parent.parent
 # Stub heavy dependencies (same pattern as test_proxmox_vm.py)
 # ---------------------------------------------------------------------------
 
+# Save originals of any modules we stub so we can restore them at module
+# teardown — prevents stub pollution from bleeding into sibling test files
+# (e.g. test_preflight needs the real automation.transport.ssh).
+_STUBBED_ORIGINALS: dict[str, object] = {}
+
 def _force_stub(name, **attrs):
+    import importlib.util
+    real = sys.modules.get(name)
+    # Save the original module (or sentinel for "not present") on first stub.
+    if name not in _STUBBED_ORIGINALS:
+        _STUBBED_ORIGINALS[name] = real  # may be None
     m = types.ModuleType(name)
+    # Preserve __path__ for packages so child imports (e.g.
+    # automation.transport.vlm_cache) still resolve when this stub overlays
+    # a real package. We can't import the real package (heavy deps) so we
+    # ask the import system to locate it on disk without executing its
+    # __init__.py.
+    path = getattr(real, "__path__", None) if real is not None else None
+    if path is None:
+        try:
+            spec = importlib.util.find_spec(name)
+            if spec is not None and spec.submodule_search_locations:
+                path = list(spec.submodule_search_locations)
+        except Exception:
+            path = None
+    if path is not None:
+        m.__path__ = path
     for k, v in attrs.items():
         setattr(m, k, v)
     sys.modules[name] = m
@@ -333,3 +358,17 @@ class TestGpuHostLockConcurrency:
             gm.attach_to_vm(101, log_fn=lambda m: None)
 
         assert lock_acquired == ["pve"], "attach_to_vm did not acquire host GPU lock"
+
+
+# ---------------------------------------------------------------------------
+# Restore stubbed modules at module teardown so sibling test files
+# (test_preflight, test_doctor, ...) can import the real automation.transport
+# submodules.
+# ---------------------------------------------------------------------------
+
+def teardown_module(module):
+    for _name, _orig in _STUBBED_ORIGINALS.items():
+        if _orig is None:
+            sys.modules.pop(_name, None)
+        else:
+            sys.modules[_name] = _orig

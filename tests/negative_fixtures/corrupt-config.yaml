@@ -1,0 +1,67 @@
+# negative-fixture: this scenario MUST fail.
+# expected_fail: 1
+# expected_reason: "workspace login page visible"
+
+name: "Negative fixture — corrupt config.json causes RC to reject stored state"
+
+steps:
+  # Cleanup: kill any existing RC and wipe userData
+  - shell: |
+      set -u
+      for attempt in 1 2 3 4 5; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"; mkdir -p "$d"
+      done
+      echo CLEANUP_DONE
+
+  # Write syntactically broken JSON to config.json — RC will fall back to defaults
+  # (empty state / no servers), so the "workspace login page" verify below should fail
+  - shell: |
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        printf '%s\n' \
+          '{{{ THIS IS NOT VALID JSON :::' \
+          '"servers": [broken' \
+          '  "url": "https://rocketchat.jeanbrito.com/"' \
+          > "$d/config.json"
+        printf '%s\n' \
+          '{ "Workspace": "https://rocketchat.jeanbrito.com" }' > "$d/servers.json"
+      done
+      echo CORRUPT_CONFIG_WRITTEN
+
+  # Launch RC — it will start but with no usable server config
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo APP_LAUNCHED
+
+  - wait: 15
+
+  # THIS VERIFY MUST FAIL: corrupt config means RC shows "Add a server" screen,
+  # not a workspace login page with email/password fields for a known server.
+  # The verify prompt asserts the login page for a specific server is visible —
+  # which cannot be true when config.json was invalid.
+  - verify: |
+      The Rocket.Chat application window shows the Workspace server login page
+      (https://rocketchat.jeanbrito.com) with an email input field and a password
+      input field and a Sign In button. The server title "Workspace" is visible in
+      the RC sidebar. It must NOT be the blank "Add a server" screen.
+    verify_timeout: 15
+    retries: 0
+
+  # Cleanup regardless of outcome (shell steps run even after verify fails if runner
+  # is configured to continue; but this is the last substantive step)
+  - shell: |
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+      done
+      echo FIXTURE_CLEANUP_DONE

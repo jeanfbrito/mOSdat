@@ -90,6 +90,13 @@ def _fake_image():
 def _make_runner(vlm_verify=True, process_running=True, screenshot_dir=None):
     vlm = MagicMock()
     vlm.verify.return_value = vlm_verify
+    # I14: verify_with_meta returns (verdict, raw_response, cache_hit).
+    # Sync via side_effect so tests that mutate `vlm.verify.return_value`
+    # mid-flight still take effect.
+    def _verify_meta(*args, **kwargs):
+        result = vlm.verify(*args, **kwargs)
+        return (result, "yes" if result else "no", False)
+    vlm.verify_with_meta.side_effect = _verify_meta
     vlm.localize.return_value = (480, 270)
     vlm.verify_consistent.return_value = (vlm_verify, ["yes"] * 3)
 
@@ -197,7 +204,10 @@ class TestAgentFallback:
         fake_result.turns_used = 3
         agent_cls = MagicMock()
         agent_cls.return_value.run.return_value = fake_result
-        # AgentLoop is imported lazily inside run_step; patch the stub module directly
+        # AgentLoop is imported lazily inside run_step; patch the stub module directly.
+        # Re-create stub if a sibling test's teardown popped it.
+        if "automation.vlm.agent" not in sys.modules:
+            sys.modules["automation.vlm.agent"] = types.ModuleType("automation.vlm.agent")
         sys.modules["automation.vlm.agent"].AgentLoop = agent_cls
 
         with patch("time.sleep"):
@@ -216,6 +226,8 @@ class TestAgentFallback:
         fake_result.reason = "gave up"
         agent_cls = MagicMock()
         agent_cls.return_value.run.return_value = fake_result
+        if "automation.vlm.agent" not in sys.modules:
+            sys.modules["automation.vlm.agent"] = types.ModuleType("automation.vlm.agent")
         sys.modules["automation.vlm.agent"].AgentLoop = agent_cls
 
         with patch("time.sleep"):
