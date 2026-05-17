@@ -160,6 +160,8 @@ class VLMConfig:
     model: str = field(default_factory=lambda: os.environ.get("VLM_MODEL", "holo2-4b"))
     verify_model: str = field(default_factory=lambda: os.environ.get("VLM_VERIFY_MODEL", ""))  # general VLM for yes/no state checks; empty → reuse `model`
     expected_model: Optional[str] = None  # H2.3: if set, probe_model() result must match; mismatch → exit 3
+    api_key: str = field(default_factory=lambda: os.environ.get("VLM_API_KEY", os.environ.get("OPENAI_API_KEY", "")))  # Bearer key for hosted VLM endpoints (e.g. crof.ai)
+    max_tokens_floor: int = field(default_factory=lambda: int(os.environ.get("VLM_MAX_TOKENS_FLOOR", "0")))  # min max_tokens for reasoning models that burn budget on hidden CoT
 
 
 @dataclass
@@ -384,6 +386,8 @@ def load_config(config_path: Path) -> ProjectConfig:
         model=vlm_raw.get("model", os.environ.get("VLM_MODEL", "holo2-4b")),
         verify_model=vlm_raw.get("verify_model", os.environ.get("VLM_VERIFY_MODEL", "")),
         expected_model=vlm_raw.get("expected_model") or None,  # H2.3: None → log-only mode
+        api_key=_resolve_vlm_api_key(vlm_raw.get("api_key")),
+        max_tokens_floor=int(vlm_raw.get("max_tokens_floor", os.environ.get("VLM_MAX_TOKENS_FLOOR", "0"))),
     )
 
     # Functional test config

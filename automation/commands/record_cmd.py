@@ -30,6 +30,8 @@ def cmd_record(args) -> int:
         base_url=config.vlm.base_url,
         model=args.model or config.vlm.model,
         verify_model=args.verify_model or config.vlm.verify_model or None,
+        api_key=config.vlm.api_key,
+        max_tokens_floor=config.vlm.max_tokens_floor,
     )
     proxmox = ProxmoxAPI(config.proxmox)
 

@@ -148,6 +148,8 @@ def _build_runner_for_vm(vm, config, screenshot_dir: Path, log_fn=None):
         base_url=config.vlm.base_url,
         model=config.vlm.model,
         verify_model=config.vlm.verify_model or None,
+        api_key=config.vlm.api_key,
+        max_tokens_floor=config.vlm.max_tokens_floor,
     )
 
     proxmox = ProxmoxAPI(config.proxmox)

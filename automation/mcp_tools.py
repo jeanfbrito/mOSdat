@@ -360,6 +360,8 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
         base_url=cfg.vlm.base_url,
         model=args.get("model") or cfg.vlm.model,
         verify_model=args.get("verify_model") or cfg.vlm.verify_model or None,
+        api_key=cfg.vlm.api_key,
+        max_tokens_floor=cfg.vlm.max_tokens_floor,
     )
     proxmox = ProxmoxAPI(cfg.proxmox)
     ssh = SSHClient(vm.ip, vm.user)

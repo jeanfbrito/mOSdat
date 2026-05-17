@@ -209,9 +209,19 @@ file_glob = "rocketchat-*-win-x64.exe"
 # --- VLM ---
 
 [vlm]
-base_url = "http://192.168.13.62:5001/v1"
-model = "qwen3.6-35b-a3b-apex-vl"
-expected_model = "qwen3.6-35b-a3b-apex-vl"
+# Crof.ai hosted VLM (model: greg). Bearer key read from file to avoid committing secrets.
+base_url = "https://crof.ai/v1"
+model = "greg"
+verify_model = "greg"
+expected_model = "greg"
+api_key = "file:~/.shared/keys/crofai_api_key"
+# greg is a reasoning model — burns 60-90 hidden CoT tokens before visible output.
+# Floor every chat.completions.create at 1024 tokens so verify (default 64) doesn't truncate.
+max_tokens_floor = 1024
+# Local fallback (keep for offline runs — swap base_url/model back to use):
+# base_url = "http://192.168.13.62:5001/v1"
+# model = "qwen3.6-35b-a3b-apex-vl"
+# max_tokens_floor = 0
 
 # --- Functional Tests ---
 

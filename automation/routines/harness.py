@@ -289,6 +289,8 @@ def run_routine_test(
             model=model or cfg.vlm.model,
             verify_model=verify_model or cfg.vlm.verify_model,
             base_url=cfg.vlm.base_url,
+            api_key=cfg.vlm.api_key,
+            max_tokens_floor=cfg.vlm.max_tokens_floor,
         )
 
         t_start = time.time()

@@ -67,9 +67,9 @@ def _find_screenshots(result_dir: Path, step_num: int, all_attempts: bool) -> li
 
 # ── VLM call ──────────────────────────────────────────────────────────────────
 
-def _build_vlm(model: str, base_url: str) -> "VLMClient":  # type: ignore[name-defined]
+def _build_vlm(model: str, base_url: str, api_key: str = "", max_tokens_floor: int = 0) -> "VLMClient":  # type: ignore[name-defined]
     from automation.vlm.client import VLMClient
-    return VLMClient(base_url=base_url, model=model, verify_model=model)
+    return VLMClient(base_url=base_url, model=model, verify_model=model, api_key=api_key, max_tokens_floor=max_tokens_floor)
 
 
 def _call_verify(vlm, screenshot_path: Path, prompt: str) -> tuple[bool, str]:
@@ -171,7 +171,8 @@ def run_replay(args) -> int:
         return 2
 
     try:
-        vlm = _build_vlm(model, base_url)
+        api_key = os.environ.get("VLM_API_KEY", "")
+        vlm = _build_vlm(model, base_url, api_key)
     except Exception as e:
         print(f"[replay] ERROR building VLM client: {e}", file=sys.stderr)
         return 2

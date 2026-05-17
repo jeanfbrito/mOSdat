@@ -44,7 +44,7 @@ __all__ = [
 
 
 class VLMClient:
-    def __init__(self, base_url: str, model: str = "holo2-4b", verify_model: str | None = None):
+    def __init__(self, base_url: str, model: str = "holo2-4b", verify_model: str | None = None, api_key: str = "", max_tokens_floor: int = 0):
         """Args:
             base_url: Single URL or comma-separated list of URLs for failover.
                 E.g. "http://primary:5001/v1" or
@@ -53,11 +53,19 @@ class VLMClient:
             verify_model: VLM for yes/no state verification. Defaults to `model`.
                 Use a general-purpose VLM here (e.g. qwen3-vl-abliterated) —
                 localization-specialized models hallucinate on yes/no prompts.
+            api_key: Bearer key for hosted endpoints (crof.ai etc). Empty string →
+                "unused" (local llama.cpp / vllm servers ignore the header).
+            max_tokens_floor: Minimum max_tokens to send on chat.completions.create
+                calls. Reasoning models (greg, deepseek-v4, kimi-k2) consume tokens
+                in hidden reasoning before emitting visible output. Default 64 is
+                too small for verify; set 1024+ when targeting reasoning models.
         """
         # C4: parse comma-separated URLs into a list of OpenAI clients
         raw_urls = [u.strip() for u in base_url.split(",") if u.strip()]
         self._urls: list[str] = raw_urls
-        self._clients: list[OpenAI] = [OpenAI(base_url=u, api_key="unused") for u in raw_urls]
+        effective_key = api_key.strip() if api_key and api_key.strip() else "unused"
+        self._clients: list[OpenAI] = [OpenAI(base_url=u, api_key=effective_key) for u in raw_urls]
+        self._max_tokens_floor: int = max(0, int(max_tokens_floor))
         self._primary_idx: int = 0
         # Backward-compat: expose self.client pointing at the current primary
         self.client = self._clients[0]
@@ -89,6 +97,9 @@ class VLMClient:
         immediately.  Cycles through the full URL list up to 3 full passes.
         Sleeps 0.5s between attempts to avoid hammering.
         """
+        # Apply max_tokens_floor for reasoning models that burn tokens on hidden reasoning.
+        if self._max_tokens_floor > 0 and "max_tokens" in kwargs:
+            kwargs["max_tokens"] = max(int(kwargs["max_tokens"]), self._max_tokens_floor)
         n = len(self._clients)
         max_attempts = 3 * n
         for attempt in range(max_attempts):

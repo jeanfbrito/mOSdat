@@ -307,6 +307,8 @@ class AuthorManager:
             base_url=config.vlm.base_url,
             model=model or config.vlm.model,
             verify_model=verify_model or config.vlm.verify_model or None,
+            api_key=config.vlm.api_key,
+            max_tokens_floor=config.vlm.max_tokens_floor,
         )
         return AuthorSession(
             id=uuid.uuid4().hex,

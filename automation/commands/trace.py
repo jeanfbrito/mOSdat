@@ -273,6 +273,8 @@ def _probe_kebab_via_vlm(ssh, config, vm) -> ProbeResult:
         vlm = VLMClient(
             base_url=config.vlm.base_url,
             model=config.vlm.model,
+            api_key=config.vlm.api_key,
+            max_tokens_floor=config.vlm.max_tokens_floor,
         )
         # Take a screenshot via VNC
         raw = _capture_vnc(ssh, config, vm)
