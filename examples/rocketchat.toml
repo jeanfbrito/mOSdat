@@ -70,6 +70,8 @@ name = "ubuntu2204"
 vmid = 101
 ip = "192.168.13.81"
 desktop = "GNOME X11"
+# I4: auto-inject DISPLAY+XAUTHORITY preamble on shell steps that call xdotool/wmctrl/etc.
+x11 = "auto"
 
 [[vm.package]]
 format = "deb"

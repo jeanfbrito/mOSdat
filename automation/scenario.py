@@ -19,7 +19,25 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+# ---------------------------------------------------------------------------
+# I9: Named phase definition
+# ---------------------------------------------------------------------------
+
+class PhaseDef(BaseModel):
+    """A named phase grouping consecutive steps.
+
+    ``from_step`` is 1-indexed and inclusive.  A step belongs to phase P if
+    ``P.from_step <= step_index < next_phase.from_step`` (or end of steps for
+    the last phase).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    id: str    # short identifier, e.g. "A"
+    name: str  # human-readable description
+    from_step: int  # 1-indexed, inclusive first step of this phase
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +90,10 @@ class _StepBase(BaseModel):
     canary_char: str = "q"
     # Bug-confirmation mode: if False, step failures are non-fatal (default True → existing behaviour)
     must_pass: bool = True
+    # I7: union verify — succeed on first prompt that returns yes
+    accept_any: Optional[list[str]] = None
+    # I10: human-readable step label (from YAML comment or explicit field)
+    label: Optional[str] = None
 
     @model_validator(mode="after")
     def _check_canary_config(self) -> "_StepBase":
@@ -79,6 +101,14 @@ class _StepBase(BaseModel):
             raise ValueError(
                 "canary: true requires canary_verify to be set (config error)"
             )
+        # I7: verify and accept_any are mutually exclusive
+        if self.verify is not None and self.accept_any is not None:
+            raise ValueError(
+                "accept_any and verify are mutually exclusive — use one or the other"
+            )
+        # I7: accept_any must not be an empty list
+        if self.accept_any is not None and len(self.accept_any) == 0:
+            raise ValueError("accept_any must be a non-empty list of prompt strings")
         return self
 
 
@@ -149,6 +179,22 @@ class VerifyStep(_StepBase):
     verify: str  # override Optional — required on VerifyStep
 
 
+class AcceptAnyStep(_StepBase):
+    """I7: union verify — iterate prompts, succeed on first VLM 'yes'."""
+    accept_any: list[str]  # override Optional — required here, non-empty enforced below
+    verify: Optional[str] = None  # must NOT be set alongside accept_any
+
+    @model_validator(mode="after")
+    def _check_accept_any(self) -> "AcceptAnyStep":
+        if not self.accept_any:
+            raise ValueError("accept_any must be a non-empty list of prompt strings")
+        if self.verify is not None:
+            raise ValueError(
+                "accept_any and verify are mutually exclusive — use one or the other"
+            )
+        return self
+
+
 class ShellStep(_StepBase):
     shell: str
 
@@ -178,6 +224,12 @@ class CheckpointStep(BaseModel):
     checkpoint: str
 
 
+class ImportStep(BaseModel):
+    """I11: inline step import reference — dict form ``- import: <name>``."""
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    import_: str = Field(alias="import")
+
+
 # ---------------------------------------------------------------------------
 # Step union — order matters: pydantic tries each in sequence
 # Discriminator by presence of key fields handled via model_validator below.
@@ -185,11 +237,13 @@ class CheckpointStep(BaseModel):
 
 AnyStep = Union[
     CheckpointStep,
+    ImportStep,      # I11: must precede ShellStep (import key not in _StepBase)
     ShellStep,
     LaunchStep,
     IfVisibleStep,
     PopupSweepStep,
-    ClickStep,     # covers LocalizeStep (has localize field)
+    ClickStep,       # covers LocalizeStep (has localize field)
+    AcceptAnyStep,   # I7: before VerifyStep — requires accept_any key
     VerifyStep,
     WaitStep,
     KeyStep,
@@ -215,8 +269,14 @@ class ScenarioModel(BaseModel):
     precondition_check: Optional[str] = None      # yes/no VLM prompt; YES = scenario reached the path
     expected_env: Optional[ExpectedEnv] = None
     app: Optional[str] = None
-    vars: Optional[dict[str, str]] = None
+    vars: Optional[dict[str, Any]] = None  # I8: accepts Any; rendered to str at load time
     checkpoints: Optional[dict[str, Any]] = None
+    # I11: imported fragment manifest (lint/documentation; actual loading via !import steps)
+    imports: list[str] = Field(default_factory=list)
+    # I14: opt-in config.json snapshots — default off (perf-sensitive)
+    report_config_snapshots: bool = False
+    # I9: named phases — optional; scenarios without phases: work unchanged
+    phases: Optional[list[PhaseDef]] = None
     cleanup: Optional[list[AnyStep]] = None
     steps: list[AnyStep]
 
@@ -226,6 +286,32 @@ class ScenarioModel(BaseModel):
         if isinstance(data, dict) and "steps" not in data:
             raise ValueError("scenario must contain a 'steps' list")
         return data
+
+    @model_validator(mode="after")
+    def _check_phases(self) -> "ScenarioModel":
+        """I9: validate phases list — unique ids, strictly increasing from_step."""
+        if not self.phases:
+            return self
+        seen_ids: set[str] = set()
+        prev_from_step: Optional[int] = None
+        for phase in self.phases:
+            if phase.id in seen_ids:
+                raise ValueError(
+                    f"phases: duplicate id {phase.id!r} — each phase id must be unique"
+                )
+            seen_ids.add(phase.id)
+            if prev_from_step is not None and phase.from_step <= prev_from_step:
+                raise ValueError(
+                    f"phases: from_step must be strictly increasing "
+                    f"(phase {phase.id!r} has from_step={phase.from_step} "
+                    f"but previous phase has from_step={prev_from_step})"
+                )
+            if phase.from_step < 1:
+                raise ValueError(
+                    f"phases: from_step must be >= 1 (phase {phase.id!r} has from_step={phase.from_step})"
+                )
+            prev_from_step = phase.from_step
+        return self
 
     @model_validator(mode="after")
     def _check_bug_confirmation(self) -> "ScenarioModel":

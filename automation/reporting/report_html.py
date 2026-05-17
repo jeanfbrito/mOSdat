@@ -110,6 +110,70 @@ def _render_step_events(step_events: list, screenshots: set) -> str:
   </div>
 </div>""")
 
+        elif etype == "verify_step":
+            # I14: rich verify event with full prompt, raw VLM response, cache indicator
+            prompt = _esc(ev.get("prompt_text", ""))
+            raw = _esc(ev.get("raw_vlm_response", ""))
+            verdict = ev.get("verdict", "no")
+            cache_hit = ev.get("cache_hit", False)
+            latency = ev.get("latency_ms", "?")
+            attempt = ev.get("attempt", 1)
+            verdict_class = "answer-yes" if verdict == "yes" else "answer-no"
+            cache_badge = ' <span class="cache-badge">cache hit</span>' if cache_hit else ""
+            parts.append(f"""
+<div class="event-row">
+  <div class="event-detail">
+    <div class="event-type verify-tag">verify (I14){cache_badge}</div>
+    <div class="event-field">verdict: <span class="mono {verdict_class}">{_esc(verdict)}</span> &nbsp; latency: {_esc(str(latency))}ms &nbsp; attempt: {_esc(str(attempt))}</div>
+    <details class="io-details">
+      <summary class="mono">prompt_text</summary>
+      <pre class="io-pre">{prompt}</pre>
+    </details>
+    {"" if not raw else f'<details class="io-details"><summary class="mono">raw_vlm_response</summary><pre class="io-pre">{raw}</pre></details>'}
+  </div>
+</div>""")
+
+        elif etype == "accept_any_step":
+            # I14: rich accept_any event with per-prompt verdicts and raw responses
+            verdict = ev.get("verdict", "no")
+            verdict_class = "answer-yes" if verdict == "yes" else "answer-no"
+            latency = ev.get("latency_ms", "?")
+            attempt = ev.get("attempt", 1)
+            per_prompt = ev.get("per_prompt_verdicts", [])
+            prompt_rows = ""
+            for pi, pv in enumerate(per_prompt):
+                p_text = _esc(pv.get("prompt", ""))
+                p_verdict = pv.get("verdict", "no")
+                p_raw = _esc(pv.get("raw_vlm_response", ""))
+                p_class = "answer-yes" if p_verdict == "yes" else "answer-no"
+                prompt_rows += f"""<div class="accept-any-row">
+  <span class="mono {p_class}">[{pi}] {_esc(p_verdict)}</span>: <span class="mono">{p_text}</span>
+  {"" if not p_raw else f'<details class="io-details"><summary class="mono">raw</summary><pre class="io-pre">{p_raw}</pre></details>'}
+</div>"""
+            parts.append(f"""
+<div class="event-row">
+  <div class="event-detail">
+    <div class="event-type verify-tag">accept_any (I14)</div>
+    <div class="event-field">verdict: <span class="mono {verdict_class}">{_esc(verdict)}</span> &nbsp; latency: {_esc(str(latency))}ms &nbsp; attempt: {_esc(str(attempt))}</div>
+    <div class="accept-any-prompts">{prompt_rows}</div>
+  </div>
+</div>""")
+
+        elif etype == "config_snapshot":
+            # I14: config.json snapshot captured after a shell step
+            content = _esc(ev.get("content", ""))
+            sn = ev.get("step_num", "")
+            parts.append(f"""
+<div class="event-row">
+  <div class="event-detail">
+    <div class="event-type config-tag">config_snapshot (I14)</div>
+    <details class="io-details">
+      <summary class="mono">config.json (step {_esc(str(sn))})</summary>
+      <pre class="io-pre">{content}</pre>
+    </details>
+  </div>
+</div>""")
+
         elif etype == "verify_split":
             question = _esc(ev.get("question", ""))
             responses = ev.get("responses", [])
@@ -143,6 +207,29 @@ def _render_step_events(step_events: list, screenshots: set) -> str:
   <div class="event-detail">
     <div class="event-type key-tag">key</div>
     <div class="event-field"><span class="mono">{key}</span></div>
+  </div>
+</div>""")
+
+        elif etype == "shell_step":
+            # I14: rich shell event with full command, stdout/stderr, exit code, duration
+            cmd_sent = _esc(ev.get("command_sent", ""))
+            stdout = _esc(ev.get("stdout_tail", ""))
+            stderr = _esc(ev.get("stderr_tail", ""))
+            exit_code = ev.get("exit_code", "?")
+            duration = ev.get("duration_ms", "?")
+            exit_class = "answer-yes" if exit_code == 0 else "answer-no"
+            blk_id = f"shell-{ev.get('step_num', '')}-{id(ev)}"
+            parts.append(f"""
+<div class="event-row">
+  <div class="event-detail">
+    <div class="event-type shell-tag">shell (I14)</div>
+    <div class="event-field">exit: <span class="mono {exit_class}">{_esc(str(exit_code))}</span> &nbsp; duration: {_esc(str(duration))}ms</div>
+    <details class="io-details">
+      <summary class="mono">command_sent</summary>
+      <pre class="io-pre">{cmd_sent}</pre>
+    </details>
+    {"" if not stdout else f'<details class="io-details"><summary class="mono">stdout</summary><pre class="io-pre">{stdout}</pre></details>'}
+    {"" if not stderr else f'<details class="io-details"><summary class="mono">stderr</summary><pre class="io-pre">{stderr}</pre></details>'}
   </div>
 </div>""")
 
@@ -209,6 +296,9 @@ def _render_step_block(step_key: str, step_events: list, screenshots: set) -> st
     end_ev: dict = next((e for e in step_events if e.get("event") == "step_end"), {})
 
     label = _esc(start_ev.get("label", step_key))
+    # I10: step_label is "N: human label" when label available, else bare step_key
+    step_label_raw = start_ev.get("step_label")
+    step_header_label = _esc(step_label_raw) if step_label_raw else ""
     kind = _esc(start_ev.get("kind", ""))
     status = end_ev.get("status", "unknown")
     attempts = end_ev.get("attempts", 1)
@@ -251,13 +341,21 @@ def _render_step_block(step_key: str, step_events: list, screenshots: set) -> st
 
     block_id = f"step-{step_key.replace('.', '-')}"
 
+    # I10: if we have a human label, show it prominently; subscript the step number
+    if step_header_label:
+        step_num_display = f'<span class="step-num"><sub>#{_esc(step_key)}</sub></span>'
+        step_label_display = f'<span class="step-label">{step_header_label}</span>'
+    else:
+        step_num_display = f'<span class="step-num">Step {_esc(step_key)}</span>'
+        step_label_display = f'<span class="step-label">{label}</span>'
+
     return f"""
 <div class="step-block {border_class}" id="{block_id}">
   <div class="step-header" onclick="toggleStep('{block_id}')">
     <span class="{icon_class}">{icon}</span>
-    <span class="step-num">Step {_esc(step_key)}</span>
+    {step_num_display}
     <span class="step-kind">{kind}</span>
-    <span class="step-label">{label}</span>
+    {step_label_display}
     <span class="step-meta">
       {_esc(status_label)}{" " + duration_str if duration_str else ""}{retry_badge}
     </span>
@@ -335,6 +433,14 @@ a:hover { text-decoration: underline; }
 .retry-tag   { background: #3d2100; color: #fbbf24; }
 .split-tag   { background: #3d1a1a; color: #f87171; }
 .fail-tag    { background: #3d0000; color: #f87171; }
+.config-tag  { background: #1a2a1a; color: #86efac; }
+.cache-badge { background: #1e3a5f; color: #93c5fd; font-size: 0.78em; padding: 1px 7px; border-radius: 3px; margin-left: 6px; }
+.io-details  { margin-top: 4px; }
+.io-details summary { cursor: pointer; color: #aaa; font-size: 0.85em; padding: 2px 0; }
+.io-details summary:hover { color: #ddd; }
+.io-pre      { background: #111; border: 1px solid #2a2a2a; border-radius: 4px; padding: 8px 10px; margin-top: 4px; font-family: "JetBrains Mono", "Fira Code", Consolas, monospace; font-size: 0.82em; color: #c8d3f0; overflow-x: auto; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; }
+.accept-any-prompts { margin-top: 6px; }
+.accept-any-row { font-size: 0.85em; color: #bbb; margin-top: 3px; }
 .kind-badge { background: rgba(255,255,255,0.1); font-size: 0.85em; padding: 0 5px; border-radius: 2px; font-weight: 400; margin-left: 4px; }
 .event-field { font-size: 0.88em; color: #bbb; margin-top: 3px; }
 .answer-yes { color: #4ade80; }

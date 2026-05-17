@@ -1,0 +1,27 @@
+name: "Example — accept_any union verify (I7)"
+# Illustrates the accept_any syntax for I7.
+# Not intended to run against a real VM — schema validation only.
+#
+# Use accept_any when multiple UI states are equally valid outcomes
+# (e.g. the app may show state A or state B depending on timing).
+# The step passes as soon as any one prompt returns yes from the VLM.
+#
+# Constraints:
+#   - accept_any and verify are mutually exclusive
+#   - accept_any must be a non-empty list of strings
+#   - verify_timeout is shared across all prompt attempts
+#   - verify_not is not applicable to accept_any steps
+
+steps:
+  - shell: echo "trigger some action"
+
+  - accept_any:
+      - "Settings panel is open and the General tab is selected"
+      - "Workspace login page is visible and unchanged (Settings did not open)"
+    verify_timeout: 15
+    retries: 3
+
+  - accept_any:
+      - "Dial pad panel is visible with an empty number input field"
+      - "Main RC workspace content is visible with no dial pad overlay"
+    verify_timeout: 10

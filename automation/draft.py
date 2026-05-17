@@ -177,7 +177,18 @@ steps:
   - verify: "The Rocket.Chat application window is visible"
     verify_timeout: 20
   # TODO: set correct key combo
-  - key: ctrl+comma
+  # Open Settings via Window menu (reliable alt+w → Down → Return):
+  - shell: |
+      set -u
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      wmctrl -a 'Rocket.Chat' 2>/dev/null || true
+      sleep 1
+      xdotool key --clearmodifiers alt+w
+      sleep 1
+      xdotool key Down Return
+      sleep 2
+      echo SETTINGS_OPENED_VIA_WINDOW_MENU
   - wait: 5
   - verify: "A settings, preferences, or configuration dialog is visible"
 """
@@ -201,7 +212,18 @@ steps:
   - wait: 15
   - verify: "The Rocket.Chat application shows a login page or server selection"
     verify_timeout: 20
-  - key: ctrl+comma
+  # Open Settings via Window menu (reliable alt+w → Down → Return):
+  - shell: |
+      set -u
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      wmctrl -a 'Rocket.Chat' 2>/dev/null || true
+      sleep 1
+      xdotool key --clearmodifiers alt+w
+      sleep 1
+      xdotool key Down Return
+      sleep 2
+      echo SETTINGS_OPENED_VIA_WINDOW_MENU
   - wait: 5
   - verify: "A settings window or preferences dialog is visible"
   # TODO: navigate to specific setting, toggle/change it
@@ -215,7 +237,18 @@ steps:
   - wait: 15
   - verify: "The Rocket.Chat application shows a login page"
     verify_timeout: 20
-  - key: ctrl+comma
+  # Open Settings via Window menu (same pattern as Phase 1)
+  - shell: |
+      set -u
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      wmctrl -a 'Rocket.Chat' 2>/dev/null || true
+      sleep 1
+      xdotool key --clearmodifiers alt+w
+      sleep 1
+      xdotool key Down Return
+      sleep 2
+      echo SETTINGS_OPENED_VIA_WINDOW_MENU
   - wait: 5
   - verify: "The same setting value from Phase 1 is still active"
 """

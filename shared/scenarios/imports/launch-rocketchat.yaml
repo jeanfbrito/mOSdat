@@ -1,0 +1,21 @@
+# I11 fragment: launch-rocketchat
+# Launch RC on Linux X11 (SSH + nohup) then wait and verify the login page.
+# Requires var: workspace_url (e.g. https://rocketchat.jeanbrito.com)
+steps:
+  # ── Launch RC (X11, disable-gpu, nohup) ───────────────────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo LAUNCH_RC_DONE
+
+  - wait: 15
+
+  # ── Verify Workspace login page ────────────────────────────────────
+  - verify: |
+      The Rocket.Chat application window shows the {{ workspace_url }} server login or
+      authentication page. Look for an email/username input field, password
+      field, a login/sign-in button, or connected Workspace page content.
+      It must NOT be the empty 'Add a server' screen and must NOT be a crash dialog.
+    verify_timeout: 30
+    retries: 3

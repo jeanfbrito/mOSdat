@@ -295,6 +295,23 @@ class _StepsMixin:
                    turns=result.turns_used, reason=result.reason)
         return False
 
+    def _emit_config_snapshot(self, step_num) -> None:
+        """I14: SSH-fetch config.json head and emit a config_snapshot event."""
+        try:
+            res = self.injector.shell_result(
+                "cat \"$HOME/.config/Rocket.Chat (development)/config.json\" 2>/dev/null"
+                " | head -c 4096",
+                timeout=10,
+            )
+            if res.stdout:
+                self._emit(
+                    "config_snapshot",
+                    step_num=step_num,
+                    content=res.stdout[:4096],
+                )
+        except Exception as _e:
+            self.log(f"    → config snapshot error ({_e}), skipping")
+
     def run_step(self, step: "FunctionalStep", step_num) -> None:
         """Execute a single test step with retries.
 
@@ -313,14 +330,68 @@ class _StepsMixin:
                 "shell" if step.shell else
                 "if_visible" if step.if_visible is not None else
                 "key")
+        # I10: prefer step.label (from YAML comment or explicit field) over bare step number
+        step_display = f"{step_num}: {step.label}" if getattr(step, "label", None) else str(step_num)
         step_start_ts = time.perf_counter()
-        self._emit("step_start", step_num=step_num, label=label, kind=kind)
+        self._emit("step_start", step_num=step_num, label=label,
+                   step_label=step_display, kind=kind)
 
         # Shell is a one-shot action
         if step.shell:
-            self.log(f"  Step {step_num}: shell '{step.shell[:80]}'")
-            self._emit("shell", step_num=step_num, cmd_truncated=step.shell[:80])
-            self.injector.shell(step.shell)
+            # I4: prepend X11 preamble when vm is configured with x11 = "auto"
+            shell_body = step.shell
+            if getattr(self, "_x11_mode", "off") == "auto":
+                from automation.transport.x11_preamble import inject as _x11_inject
+                shell_body = _x11_inject(shell_body)
+            self.log(f"  Step {step_display}: shell '{shell_body[:80]}'")
+            self._emit("shell", step_num=step_num, cmd_truncated=shell_body[:80])
+            # I14: capture stdout/stderr/exit_code for HTML report
+            t0_shell = time.perf_counter()
+            try:
+                shell_res = self.injector.shell_result(shell_body)
+                shell_duration_ms = round((time.perf_counter() - t0_shell) * 1000)
+                _TAIL = 2048
+                # I14: coerce fields to JSON-safe types so Mock SSHResult
+                # in tests doesn't poison events.jsonl serialization.
+                _stdout = getattr(shell_res, "stdout", "") or ""
+                _stderr = getattr(shell_res, "stderr", "") or ""
+                _rc = getattr(shell_res, "returncode", 0)
+                if not isinstance(_stdout, str):
+                    _stdout = str(_stdout)
+                if not isinstance(_stderr, str):
+                    _stderr = str(_stderr)
+                if not isinstance(_rc, int):
+                    try:
+                        _rc = int(_rc)
+                    except Exception:
+                        _rc = 0
+                self._emit(
+                    "shell_step",
+                    step_num=step_num,
+                    command_sent=shell_body,
+                    stdout_tail=_stdout[-_TAIL:] if _stdout else "",
+                    stderr_tail=_stderr[-_TAIL:] if _stderr else "",
+                    exit_code=_rc,
+                    duration_ms=shell_duration_ms,
+                )
+            except Exception as _shell_exc:
+                shell_duration_ms = round((time.perf_counter() - t0_shell) * 1000)
+                self._emit(
+                    "shell_step",
+                    step_num=step_num,
+                    command_sent=shell_body,
+                    stdout_tail="",
+                    stderr_tail=str(_shell_exc)[:2048],
+                    exit_code=-1,
+                    duration_ms=shell_duration_ms,
+                )
+                # I14: emit-then-reraise — must NOT swallow shell errors.
+                # Pre-existing contract: SSH/shell failures propagate so the
+                # step is recorded as failed by the surrounding try/except.
+                raise
+            # I14: optional config.json snapshot after shell steps
+            if getattr(self, "_config_snapshots", False):
+                self._emit_config_snapshot(step_num)
 
         # Launch is a one-shot action
         if step.launch:
@@ -360,11 +431,24 @@ class _StepsMixin:
 
                 if step.verify:
                     if not step.localize:
-                        self.log(f"  Step {step_num}: verify '{step.verify[:60]}'{retry_label}")
+                        self.log(f"  Step {step_display}: verify '{step.verify[:60]}'{retry_label}")
                     t0_verify = time.perf_counter()
-                    verified = self._wait_for_state(step.verify, step.verify_timeout, step_num,
-                                                    must_be_false=step.verify_not, step=step)
+                    verified, raw_vlm, cache_hit = self._wait_for_state_with_meta(
+                        step.verify, step.verify_timeout, step_num,
+                        must_be_false=step.verify_not, step=step,
+                    )
                     latency_ms_verify = round((time.perf_counter() - t0_verify) * 1000)
+                    # I14: emit richer verify_step event
+                    self._emit(
+                        "verify_step",
+                        step_num=step_num,
+                        attempt=attempt,
+                        prompt_text=step.verify,
+                        raw_vlm_response=raw_vlm[:1024] if raw_vlm else "",
+                        verdict="yes" if verified else "no",
+                        cache_hit=cache_hit,
+                        latency_ms=latency_ms_verify,
+                    )
                     if verified:
                         self.log(f"    ✓ verified: {step.verify[:60]}")
                         self._emit("vlm_verify", step_num=step_num, attempt=attempt,
@@ -394,6 +478,56 @@ class _StepsMixin:
                         f"Step {step_num}: '{step.verify}' was never true "
                         f"after {step.retries} attempts"
                     )
+
+                # I7: accept_any — succeed on first prompt returning yes
+                if step.accept_any:
+                    if not step.localize:
+                        self.log(
+                            f"  Step {step_display}: accept_any ({len(step.accept_any)} prompts)"
+                            f"{retry_label}"
+                        )
+                    t0_any = time.perf_counter()
+                    accepted, any_verdicts = self._verify_accept_any_with_meta(
+                        step.accept_any, step.verify_timeout, step_num
+                    )
+                    latency_ms_any = round((time.perf_counter() - t0_any) * 1000)
+                    # I14: emit richer accept_any_step event
+                    self._emit(
+                        "accept_any_step",
+                        step_num=step_num,
+                        attempt=attempt,
+                        prompts=step.accept_any,
+                        per_prompt_verdicts=any_verdicts,
+                        verdict="yes" if accepted else "no",
+                        latency_ms=latency_ms_any,
+                    )
+                    if accepted:
+                        self.log("    ✓ accept_any: one prompt matched")
+                        screenshot_v, _ = self.screenshotter.capture()
+                        self._save_screenshot(screenshot_v, f"step{step_num}_verified")
+                        duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                        self._emit("step_end", step_num=step_num, status="ok",
+                                   attempts=attempt, duration_ms=duration_ms)
+                        return
+                    screenshot, _ = self.screenshotter.capture()
+                    self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
+                    if attempt < step.retries:
+                        self.log("    ✗ accept_any: no prompt matched, retrying...")
+                        self._emit("retry", step_num=step_num, attempt=attempt,
+                                   reason="accept_any_failed")
+                        continue
+                    duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                    self._emit("step_end", step_num=step_num, status="failed",
+                               attempts=attempt, duration_ms=duration_ms)
+                    if self._invoke_agent_fallback(step, step_num):
+                        return
+                    raise StepFailed(
+                        f"Step {step_num}: accept_any — no prompt matched after "
+                        f"{step.retries} attempts (prompts: "
+                        + "; ".join(p[:40] for p in step.accept_any)
+                        + ")"
+                    )
+
                 duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
                 self._emit("step_end", step_num=step_num, status="ok",
                            attempts=attempt, duration_ms=duration_ms)

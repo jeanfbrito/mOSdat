@@ -108,6 +108,9 @@ class VMConfig:
     password: str = ""
     os_type: str = "linux"
     temp_dir: Optional[str] = None
+    # I4: implicit X11 env injection per VM. "auto" = inject preamble on GUI steps;
+    # "off" (default) = no injection, preserving backwards-compatible behaviour.
+    x11: str = "off"
 
     @property
     def is_windows(self) -> bool:
@@ -302,6 +305,7 @@ def load_config(config_path: Path) -> ProjectConfig:
             user=vm_raw.get("user", default_user),
             password=vm_raw.get("password", default_password),
             os_type=vm_raw.get("os_type", "linux"),
+            x11=vm_raw.get("x11", "off"),
         ))
 
     # Test scenarios (optional — auto-discover if absent)

@@ -1,0 +1,16 @@
+# I11 fragment: install-x11-deps
+# Ensure wmctrl, xclip, xterm are installed (Ubuntu/Debian via apt-get).
+# No-op if already installed. Safe to run as a preflight step.
+steps:
+  # ── Install X11 tooling deps (wmctrl xclip xterm) ──────────────────
+  - shell: |
+      if ! command -v wmctrl >/dev/null 2>&1 \
+        || ! command -v xclip >/dev/null 2>&1 \
+        || ! command -v xterm >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip xterm
+        fi
+      fi
+      command -v wmctrl xclip xterm
+      echo INSTALL_X11_DEPS_DONE

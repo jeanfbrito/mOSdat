@@ -50,6 +50,17 @@ class InputInjector:
         else:
             self.ssh.run(cmd, timeout=timeout)
 
+    def shell_result(self, cmd: str, timeout: int = 60):
+        """Run a shell command and return the SSHResult (exit code, stdout, stderr).
+
+        I14: Used by the functional runner to capture shell output for HTML reports.
+        Callers that don't need the result can continue using shell().
+        """
+        from ..transport.ssh import SSHResult  # noqa: F401 — for type reference
+        if self.is_windows:
+            return self.ssh.run(_ps_encoded(cmd), timeout=timeout)
+        return self.ssh.run(cmd, timeout=timeout)
+
     def focus_app(self, window_title: str) -> None:
         """Bring a named window to the foreground in the interactive desktop session.
 

@@ -2,6 +2,7 @@
 
 import logging
 import math
+import os
 import re
 import time
 
@@ -21,6 +22,15 @@ from .transport import _is_failover_error
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# I6: module-level opt-out flag — set by caller or env MOSDAT_VLM_NOCACHE=1
+_cache_disabled: bool = os.environ.get("MOSDAT_VLM_NOCACHE", "0").strip() == "1"
+
+
+def set_cache_enabled(enabled: bool) -> None:
+    """I6: Enable or disable the VLM verify cache globally (e.g. from --no-cache CLI flag)."""
+    global _cache_disabled
+    _cache_disabled = not enabled
 
 # Re-export so existing ``from automation.vlm.client import ...`` keeps working.
 __all__ = [
@@ -195,8 +205,26 @@ class VLMClient:
         raise last_err
 
     def verify(self, screenshot: Image.Image, question: str, temperature: float = 0.0) -> bool:
-        """Ask a yes/no visual question about the current screen state."""
+        """Ask a yes/no visual question about the current screen state.
+
+        I6: Results are cached by (image SHA256, prompt SHA256, model) with a
+        24-hour TTL.  Set MOSDAT_VLM_NOCACHE=1 or call set_cache_enabled(False)
+        to bypass.
+        """
         b64 = _encode_image(screenshot)
+
+        # I6: cache lookup (skip when disabled or non-zero temperature for consistency)
+        if not _cache_disabled and temperature == 0.0:
+            from automation.transport.vlm_cache import get_default_cache
+            _vlm_cache = get_default_cache()
+            key = _vlm_cache.cache_key(b64.encode(), question, self.verify_model)
+            hit = _vlm_cache.get(key)
+            if hit is not None:
+                return hit[0]
+        else:
+            _vlm_cache = None
+            key = None
+
         resp = self._call_with_failover(
             "chat.completions.create",
             model=self.verify_model,
@@ -215,8 +243,63 @@ class VLMClient:
         last_yes = low.rfind("yes")
         last_no = low.rfind("no")
         if last_yes == -1 and last_no == -1:
-            return False
-        return last_yes > last_no
+            verdict = False
+        else:
+            verdict = last_yes > last_no
+
+        # I6: store result on cache miss
+        if not _cache_disabled and temperature == 0.0 and _vlm_cache is not None and key is not None:
+            _vlm_cache.put(key, verdict, raw, self.verify_model)
+
+        return verdict
+
+    def verify_with_meta(
+        self, screenshot: Image.Image, question: str, temperature: float = 0.0
+    ) -> tuple:
+        """I14: Like verify() but also returns (verdict, raw_response, cache_hit).
+
+        Returns (bool, str, bool) — verdict, raw VLM text, whether result came from cache.
+        Used by the functional runner to emit richer events for HTML reports.
+        """
+        b64 = _encode_image(screenshot)
+
+        if not _cache_disabled and temperature == 0.0:
+            from automation.transport.vlm_cache import get_default_cache
+            _vlm_cache = get_default_cache()
+            key = _vlm_cache.cache_key(b64.encode(), question, self.verify_model)
+            hit = _vlm_cache.get(key)
+            if hit is not None:
+                return hit[0], hit[1] if len(hit) > 1 else "", True
+        else:
+            _vlm_cache = None
+            key = None
+
+        resp = self._call_with_failover(
+            "chat.completions.create",
+            model=self.verify_model,
+            messages=[{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {"type": "text", "text": f"{_VERIFY_PROMPT}{question}"},
+            ]}],
+            max_tokens=1024,
+            temperature=temperature,
+            timeout=180,
+        )
+        raw = _extract_content(resp)
+        if "</think>" in raw:
+            raw = raw[raw.rfind("</think>") + len("</think>"):]
+        low = raw.lower().strip()
+        last_yes = low.rfind("yes")
+        last_no = low.rfind("no")
+        if last_yes == -1 and last_no == -1:
+            verdict = False
+        else:
+            verdict = last_yes > last_no
+
+        if not _cache_disabled and temperature == 0.0 and _vlm_cache is not None and key is not None:
+            _vlm_cache.put(key, verdict, raw, self.verify_model)
+
+        return verdict, raw, False
 
     def verify_consistent(
         self,

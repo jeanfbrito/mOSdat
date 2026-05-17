@@ -1,0 +1,27 @@
+name: example-vars
+description: |
+  I8 reference scenario demonstrating {{ var }} substitution.
+  Override from CLI: mosdat functional <config> --vms <vm> --test example-vars
+                       --var workspace_title=Southlogic --var dial_number=+1234567890
+
+vars:
+  workspace_title: "Workspace"
+  dial_number: "+49123456789"
+  expected_server: "https://rocketchat.jeanbrito.com/"
+
+steps:
+  - shell: |
+      echo "Dialing {{ dial_number }} on {{ workspace_title }}"
+      xdg-open "tel:{{ dial_number }}"
+    verify: "RC window shows dial pad with number {{ dial_number }} pre-filled"
+    verify_timeout: 15
+    retries: 3
+
+  - localize: "server row labeled '{{ workspace_title }}'"
+    click: left
+    verify: "modal dismissed and dial pad for {{ workspace_title }} is shown"
+
+  - accept_any:
+      - "dial pad visible with {{ dial_number }}"
+      - "RC main UI visible without dial pad"
+    verify_timeout: 10

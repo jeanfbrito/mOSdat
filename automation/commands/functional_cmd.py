@@ -85,6 +85,11 @@ def cmd_functional(args) -> int:
 
     from pathlib import Path as P
 
+    # I6: honour --no-cache flag before any VLM calls are made
+    if getattr(args, "no_cache", False):
+        from automation.vlm.client import set_cache_enabled
+        set_cache_enabled(False)
+
     from automation.config import load_config
     config = load_config(args.config)
 

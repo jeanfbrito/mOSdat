@@ -1,0 +1,42 @@
+# I11 fragment: cleanup-rocketchat
+# Kill all RC processes, close crash windows, wipe both userData dirs.
+# Safe to run before any RC scenario to ensure a clean slate.
+steps:
+  # ── Kill all RC processes + wipe both userData dirs ──────────────────
+  - shell: |
+      set -u
+      if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip
+        fi
+      fi
+      export DISPLAY=:0
+      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
+
+      for attempt in 1 2 3 4 5 6 7 8; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
+          break
+        fi
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+
+      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
+        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
+      done
+      pkill -KILL -x apport-gtk 2>/dev/null || true
+      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
+
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+      done
+
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
+      echo CLEANUP_RC_DONE

@@ -228,6 +228,150 @@ class _VerifyMixin:
         except Exception:
             return False
 
+    def _wait_for_state_with_meta(
+        self,
+        question: str,
+        timeout: int,
+        step_num,
+        must_be_false: Optional[str] = None,
+        step: Optional["FunctionalStep"] = None,
+    ) -> tuple:
+        """I14: Like _wait_for_state but also returns (verdict, raw_vlm_response, cache_hit).
+
+        On success returns the raw response from the winning poll call.
+        On failure returns (False, last_raw, last_cache_hit).
+        """
+        deadline = time.time() + timeout
+        interval = min(2, timeout // 3) or 1
+        first_poll = True
+        last_raw = ""
+        last_cache_hit = False
+        while time.time() < deadline:
+            time.sleep(interval)
+            if not first_poll:
+                self.screenshotter.wait_for_stable(max_seconds=2.0)
+            first_poll = False
+            try:
+                screenshot, _ = self.screenshotter.capture()
+                self._save_screenshot(screenshot, f"step{step_num}_verify_poll")
+                if step and step.verify_consistent:
+                    # verify_consistent doesn't expose raw/cache — degrade gracefully
+                    result, responses = self.vlm.verify_consistent(screenshot, question)
+                    last_raw = responses[0] if responses else ""
+                    last_cache_hit = False
+                else:
+                    result, last_raw, last_cache_hit = self.vlm.verify_with_meta(screenshot, question)
+                    # I14: coerce raw_vlm/cache_hit to JSON-safe primitives so
+                    # downstream event emit doesn't choke on Mock objects.
+                    if not isinstance(last_raw, str):
+                        last_raw = str(last_raw) if last_raw is not None else ""
+                    last_cache_hit = bool(last_cache_hit)
+                if not result:
+                    continue
+                if must_be_false and self.vlm.verify(screenshot, must_be_false):
+                    continue
+                return True, last_raw, last_cache_hit
+            except Exception:
+                pass
+        return False, last_raw, last_cache_hit
+
+    def _verify_accept_any_with_meta(
+        self,
+        prompts: list[str],
+        timeout: int,
+        step_num,
+    ) -> tuple:
+        """I14: Like _verify_accept_any but returns (accepted, per_prompt_verdicts).
+
+        per_prompt_verdicts is a list of dicts:
+          {prompt: str, verdict: "yes"|"no", raw_vlm_response: str}
+        containing results from the final pass over all prompts.
+        """
+        import time as _time
+        deadline = _time.time() + timeout
+        pass_num = 0
+        final_verdicts: list = []
+        while _time.time() < deadline:
+            pass_num += 1
+            screenshot, _ = self.screenshotter.capture()
+            self._save_screenshot(screenshot, f"step{step_num}_accept_any_pass{pass_num}")
+            final_verdicts = []
+            for i, prompt in enumerate(prompts):
+                if _time.time() >= deadline:
+                    break
+                t0 = _time.perf_counter()
+                try:
+                    verdict, raw, cache_hit = self.vlm.verify_with_meta(screenshot, prompt)
+                except Exception:
+                    verdict, raw, cache_hit = False, "", False
+                latency_ms = round((_time.time() - t0) * 1000)
+                answer = "yes" if verdict else "no"
+                self.log(f"    → accept_any[{i}] ({answer}): {prompt[:60]}")
+                self._emit(
+                    "vlm_verify",
+                    step_num=step_num,
+                    attempt=pass_num,
+                    question=prompt[:80],
+                    answer=answer,
+                    latency_ms=latency_ms,
+                    kind="accept_any",
+                    prompt_index=i,
+                )
+                final_verdicts.append({
+                    "prompt": prompt,
+                    "verdict": answer,
+                    "raw_vlm_response": raw[:1024] if raw else "",
+                })
+                if verdict:
+                    return True, final_verdicts
+            _time.sleep(2)
+        return False, final_verdicts
+
+    def _verify_accept_any(
+        self,
+        prompts: list[str],
+        timeout: int,
+        step_num,
+    ) -> bool:
+        """I7: Iterate prompts against current screenshot; succeed on first yes.
+
+        Total time budget = timeout (shared across all prompt attempts).
+        Takes one screenshot per pass over the prompt list, then repeats
+        until any prompt returns yes or the budget expires.
+        Logs each prompt's verdict so the events.jsonl captures per-prompt results.
+        """
+        import time as _time
+        deadline = _time.time() + timeout
+        pass_num = 0
+        while _time.time() < deadline:
+            pass_num += 1
+            screenshot, _ = self.screenshotter.capture()
+            self._save_screenshot(screenshot, f"step{step_num}_accept_any_pass{pass_num}")
+            for i, prompt in enumerate(prompts):
+                if _time.time() >= deadline:
+                    break
+                t0 = _time.perf_counter()
+                verdict = self.vlm.verify(screenshot, prompt)
+                latency_ms = round((_time.time() - t0) * 1000)
+                answer = "yes" if verdict else "no"
+                self.log(
+                    f"    → accept_any[{i}] ({answer}): {prompt[:60]}"
+                )
+                self._emit(
+                    "vlm_verify",
+                    step_num=step_num,
+                    attempt=pass_num,
+                    question=prompt[:80],
+                    answer=answer,
+                    latency_ms=latency_ms,
+                    kind="accept_any",
+                    prompt_index=i,
+                )
+                if verdict:
+                    return True
+            _time.sleep(2)
+        return False
+
     def _wait_for_state(
         self,
         question: str,

@@ -72,6 +72,7 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         vmid: Optional[int] = None,
         click_verify_override: str = "auto",
         canary_override: str = "auto",
+        x11_mode: str = "off",
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
@@ -79,6 +80,10 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         self.screenshot_dir = screenshot_dir
         self.log = log_fn
         self.popup_sweep = popup_sweep
+        # I4: implicit X11 preamble injection when x11_mode == "auto"
+        self._x11_mode = x11_mode
+        # I14: opt-in config.json snapshots after shell steps
+        self._config_snapshots: bool = False
         # B2: events.jsonl always-on when screenshot_dir is set
         self._events_path: Optional[Path] = (screenshot_dir / "events.jsonl") if screenshot_dir else None
         # F3: truncate events.jsonl at init so same-date re-runs don't append

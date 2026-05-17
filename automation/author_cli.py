@@ -98,6 +98,118 @@ def _prompt_action_result(base_url: str, session_id: str, prompt: str, action: s
         return {"ok": False, "error": "localize response did not include x/y", "localize": target}
     return _request_action(base_url, session_id, action, x=int(target["x"]), y=int(target["y"]), prompt=prompt, **fields)
 
+def _export_with_base(
+    base_url: str,
+    session_id: str,
+    session_name: str,
+    base_path: Path,
+    insert_at_step: int | None,
+    new_name: str | None,
+    dry_run: bool,
+    output: str | None,
+) -> int:
+    """I12: export recorded steps as a unified diff against an existing base scenario.
+
+    Parameters
+    ----------
+    base_url:        live dashboard URL.
+    session_id:      author session id.
+    session_name:    scenario name for the session export YAML.
+    base_path:       path to the existing base scenario YAML on disk.
+    insert_at_step:  1-indexed step before which to insert; None = append at end.
+    new_name:        if given, write a complete new scenario file instead of diff.
+    dry_run:         validate but don't write / emit.
+    output:          write diff/file to this path instead of stdout.
+    """
+    import copy
+    import difflib
+    import sys
+
+    import yaml
+
+    # --- 1. Fetch recorded steps from the live session ----------------------
+    session_data = _request_text(base_url, "/api/author/export", query={"session": session_id, "name": session_name})
+    if session_data.get("error"):
+        return _print(session_data)
+    session_yaml_text: str = str(session_data.get("yaml", ""))
+    if not session_yaml_text.strip():
+        return _print({"ok": False, "error": "author session returned empty YAML"})
+    session_doc: dict = yaml.safe_load(session_yaml_text)
+    recorded_steps: list[dict] = list(session_doc.get("steps", []))
+    if not recorded_steps:
+        return _print({"ok": False, "error": "author session has no recorded steps"})
+
+    # --- 2. Load base scenario from disk ------------------------------------
+    if not base_path.exists():
+        return _print({"ok": False, "error": f"base scenario not found: {base_path}"})
+    with open(base_path, encoding="utf-8") as fh:
+        base_text = fh.read()
+    base_doc: dict = yaml.safe_load(base_text)
+    base_steps: list[dict] = list(base_doc.get("steps", []))
+
+    # --- 3. Build modified scenario in memory (deep-copy base + insertions) -
+    modified: dict = copy.deepcopy(base_doc)
+    if insert_at_step is None:
+        # append at end
+        modified["steps"] = base_steps + recorded_steps
+    else:
+        # insert_at_step is 1-indexed: insert BEFORE that step
+        idx = insert_at_step - 1
+        if idx < 0 or idx > len(base_steps):
+            return _print({
+                "ok": False,
+                "error": (
+                    f"--insert-at-step {insert_at_step} out of range "
+                    f"(base has {len(base_steps)} step(s); valid range 1-{len(base_steps) + 1})"
+                ),
+            })
+        modified["steps"] = base_steps[:idx] + recorded_steps + base_steps[idx:]
+
+    if new_name:
+        modified["name"] = new_name
+
+    # --- 4. Validate via ScenarioModel before emitting ----------------------
+    try:
+        from automation.scenario import ScenarioModel
+        ScenarioModel.model_validate(modified)
+    except Exception as exc:  # noqa: BLE001
+        return _print({"ok": False, "error": f"modified scenario failed validation: {exc}"})
+
+    # --- 5. dry-run: stop here ---------------------------------------------
+    if dry_run:
+        step_count = len(modified.get("steps", []))
+        return _print({"ok": True, "dry_run": True, "step_count": step_count, "base": str(base_path)})
+
+    # --- 6a. --name mode: write complete new scenario file -----------------
+    if new_name:
+        dest = Path("shared/scenarios/functional") / f"{new_name}.yaml"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        yaml_out = yaml.safe_dump(modified, sort_keys=False, allow_unicode=True)
+        if output:
+            dest = Path(output)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(yaml_out, encoding="utf-8")
+        return _print({"ok": True, "output": str(dest), "step_count": len(modified["steps"])})
+
+    # --- 6b. diff mode: emit unified diff to stdout or file ----------------
+    modified_text = yaml.safe_dump(modified, sort_keys=False, allow_unicode=True)
+    base_lines = base_text.splitlines(keepends=True)
+    modified_lines = modified_text.splitlines(keepends=True)
+    # Use "a/<base>" / "b/<base>" as conventional patch -p1 headers
+    base_label = f"a/{base_path}"
+    modified_label = f"b/{base_path}"
+    diff_lines = list(difflib.unified_diff(base_lines, modified_lines, fromfile=base_label, tofile=modified_label))
+    diff_text = "".join(diff_lines)
+    if not diff_text:
+        sys.stderr.write("[author export] No differences between base and modified scenario.\n")
+        return 0
+    if output:
+        Path(output).write_text(diff_text, encoding="utf-8")
+        return _print({"ok": True, "output": output, "hunks": diff_text.count("\n@@")})
+    sys.stdout.write(diff_text)
+    return 0
+
+
 def _write_yaml_output(data: dict, output: str | None) -> int:
     if data.get("error"):
         return _print(data)
@@ -243,7 +355,21 @@ def cli(argv: list[str] | None = None) -> int:
     export = sub.add_parser("export", help="Export current draft scenario YAML")
     export.add_argument("--session", required=True)
     export.add_argument("--name", default="authored-scenario")
-    export.add_argument("--output", help="Write YAML to path instead of embedding it in JSON; use - for stdout JSON")
+    export.add_argument("--output", help="Write YAML/diff to path instead of stdout")
+    # I12: diff-against-base flags
+    export.add_argument("--base", metavar="SCENARIO_YAML", help="I12: base scenario to diff against")
+    export.add_argument(
+        "--insert-at-step",
+        type=int,
+        default=None,
+        metavar="N",
+        help="I12: insert recorded steps BEFORE step N (1-indexed); default: append at end",
+    )
+    export.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="I12: validate the modified scenario but don't write or emit",
+    )
 
     step = sub.add_parser("step", help="Append or replace draft scenario steps")
     step.add_argument("--session", required=True)
@@ -304,6 +430,17 @@ def cli(argv: list[str] | None = None) -> int:
     if args.command == "validate":
         return _print(_request_json(base_url, "POST", "/api/author/validate", {"session_id": args.session, "name": args.name}))
     if args.command == "export":
+        if args.base:
+            return _export_with_base(
+                base_url=base_url,
+                session_id=args.session,
+                session_name=args.name,
+                base_path=Path(args.base),
+                insert_at_step=args.insert_at_step,
+                new_name=args.name if args.name != "authored-scenario" else None,
+                dry_run=args.dry_run,
+                output=args.output,
+            )
         return _write_yaml_output(_request_text(base_url, "/api/author/export", query={"session": args.session, "name": args.name}), args.output)
     if args.command == "step":
         payload = {"session_id": args.session}

@@ -128,10 +128,77 @@ def _watchdog_handler(signum, frame):
     raise RuntimeWatchdogTimeout()
 
 
+def _resolve_phases(phases, total_steps, from_phase_id, until_phase_id, from_step_arg, until_step_arg):
+    """I9: Resolve --from-phase / --until-phase to integer step bounds.
+
+    Returns (from_step, until_step, phase_log_line) where phase_log_line is
+    None when no phase flags are used.
+
+    Raises SystemExit(1) on unknown phase id.
+    """
+    if from_phase_id is None and until_phase_id is None:
+        return from_step_arg, until_step_arg, None
+
+    if not phases:
+        print(f"[mOSdat] ERROR: --from-phase/--until-phase used but scenario has no phases: block")
+        raise SystemExit(1)
+
+    phase_by_id = {p.id: p for p in phases}
+
+    if from_phase_id and from_phase_id not in phase_by_id:
+        ids = ", ".join(p.id for p in phases)
+        print(f"[mOSdat] ERROR: --from-phase {from_phase_id!r} not declared in scenario phases ({ids})")
+        raise SystemExit(1)
+
+    if until_phase_id and until_phase_id not in phase_by_id:
+        ids = ", ".join(p.id for p in phases)
+        print(f"[mOSdat] ERROR: --until-phase {until_phase_id!r} not declared in scenario phases ({ids})")
+        raise SystemExit(1)
+
+    # Compute last step for each phase
+    phase_list = list(phases)
+    phase_last_step = {}
+    for idx, phase in enumerate(phase_list):
+        if idx + 1 < len(phase_list):
+            phase_last_step[phase.id] = phase_list[idx + 1].from_step - 1
+        else:
+            phase_last_step[phase.id] = total_steps
+
+    new_from = from_step_arg
+    new_until = until_step_arg
+
+    if from_phase_id:
+        if from_step_arg != 1:
+            print(f"[mOSdat] WARNING: --from-phase {from_phase_id!r} overrides --from-step {from_step_arg}")
+        new_from = phase_by_id[from_phase_id].from_step
+
+    if until_phase_id:
+        if until_step_arg is not None:
+            print(f"[mOSdat] WARNING: --until-phase {until_phase_id!r} overrides --until-step {until_step_arg}")
+        new_until = phase_last_step[until_phase_id]
+
+    # Build log line: list all phases that overlap [new_from, new_until]
+    effective_until = new_until if new_until is not None else total_steps
+    parts = []
+    for phase in phase_list:
+        p_first = phase.from_step
+        p_last = phase_last_step[phase.id]
+        if p_first <= effective_until and p_last >= new_from:
+            parts.append(f"{phase.id} ({phase.name}) [steps {p_first}..{p_last}]")
+    log_line = "[phases] running " + ", ".join(parts) if parts else None
+
+    return new_from, new_until, log_line
+
+
 def cmd_functional(args) -> int:
     if getattr(args, "record", False):
         from automation.commands.record_cmd import cmd_record
         return cmd_record(args)
+
+    # I6: honour --no-cache flag before any VLM calls are made
+    if getattr(args, "no_cache", False):
+        from automation.vlm.client import set_cache_enabled
+        set_cache_enabled(False)
 
     from pathlib import Path as P
 
@@ -199,17 +266,56 @@ def cmd_functional(args) -> int:
             print(f"[mOSdat] WARNING: VLM model probe failed: {probe_err}")
             print("[mOSdat]   Proceeding — pass --skip-model-check to suppress this warning.")
 
-    name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file)
+    # I8: parse --var KEY=VALUE flags into a dict; error on duplicate keys
+    cli_var_list = getattr(args, "vars", []) or []
+    cli_vars: dict[str, str] = {}
+    for kv in cli_var_list:
+        if "=" not in kv:
+            print(f"[mOSdat] ERROR: --var value must be KEY=VALUE (got: {kv!r})")
+            return 1
+        k, v = kv.split("=", 1)
+        if k in cli_vars:
+            print(f"[mOSdat] ERROR: duplicate --var key: {k!r}")
+            return 1
+        cli_vars[k] = v
+
+    name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file, cli_vars=cli_vars)
 
     # C2: resolve checkpoint config (YAML wins unless --no-checkpoints overrides)
     checkpoint_config = dict(yaml_checkpoints)
     if getattr(args, "no_checkpoints", False):
         checkpoint_config["enabled"] = False
 
-    # B4: step slicing
+    # I9: load phases from YAML (re-parse for PhaseDef objects)
+    _yaml_phases = None
+    _yaml_config_snapshots = False
+    try:
+        import yaml as _yaml
+        _raw_data = _yaml.safe_load(test_file.read_text())
+        _raw_phases = _raw_data.get("phases")
+        if _raw_phases:
+            from automation.scenario import PhaseDef
+            _yaml_phases = [PhaseDef.model_validate(p) for p in _raw_phases]
+        # I14: opt-in config.json snapshots
+        _yaml_config_snapshots = bool(_raw_data.get("report_config_snapshots", False))
+    except Exception:
+        pass  # phases optional; any parse error falls through to phase-flag error below
+
+    # I9: resolve phase flags → integer step bounds
     total_steps = len(steps)
-    from_step = args.from_step
-    until_step = args.until_step if args.until_step is not None else total_steps
+    _from_phase = getattr(args, "from_phase", None)
+    _until_phase = getattr(args, "until_phase", None)
+    from_step, until_step, _phase_log = _resolve_phases(
+        _yaml_phases, total_steps,
+        _from_phase, _until_phase,
+        args.from_step, args.until_step,
+    )
+    if _phase_log:
+        print(f"[mOSdat] {_phase_log}")
+
+    # B4: step slicing
+    if until_step is None:
+        until_step = total_steps
     if from_step < 1 or from_step > total_steps:
         print(f"[mOSdat] ERROR: --from-step {from_step} out of range (scenario has {total_steps} steps)")
         return 1
@@ -309,7 +415,53 @@ def cmd_functional(args) -> int:
                         vmid=vm.vmid if checkpoint_config.get("enabled") else None,
                         click_verify_override=getattr(args, "click_verify", "auto"),
                         canary_override=getattr(args, "canary_override", "auto"),
+                        x11_mode=getattr(vm, "x11", "off"),
                     )
+                    # I14: enable config snapshots if scenario opts in OR --config-snapshots flag set
+                    runner._config_snapshots = (
+                        _yaml_config_snapshots
+                        or bool(getattr(args, "config_snapshots", False))
+                    )
+
+                    # I1: declarative userData pre-staging (BEFORE first scenario step)
+                    _inject_cfg = getattr(args, "inject_config", None)
+                    _inject_srv = getattr(args, "inject_servers", None)
+                    if _inject_cfg is not None or _inject_srv is not None:
+                        from automation.setup.inject_config import (
+                            inject as _inject,
+                            parse_inject_config,
+                            parse_inject_servers,
+                        )
+                        try:
+                            cfg_dict = parse_inject_config(_inject_cfg) if _inject_cfg else {}
+                            srv_dict = parse_inject_servers(_inject_srv) if _inject_srv else {}
+                        except Exception as parse_err:
+                            print(f"[mOSdat] ERROR: --inject-* parse failed: {parse_err}")
+                            return 4
+                        install_path = (
+                            getattr(args, "inject_install_path", None)
+                            or vm_vars.get("app_path")
+                        )
+                        if not install_path:
+                            print(
+                                "[mOSdat] ERROR: --inject-config/--inject-servers requires "
+                                "an install path (no app_path on VM packages; "
+                                "pass --inject-install-path)"
+                            )
+                            return 4
+                        try:
+                            _inject(
+                                ssh,
+                                install_path=install_path,
+                                config=cfg_dict,
+                                servers=srv_dict,
+                                app_name=getattr(args, "inject_app_name", None),
+                                migrations_version=getattr(args, "inject_migrations_version", None),
+                                log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                            )
+                        except Exception as inj_err:
+                            print(f"[mOSdat] ERROR: inject failed: {inj_err}")
+                            return 4
 
                     # B7: VM health probe before scenario start
                     if not getattr(args, "skip_health_probe", False):
@@ -430,7 +582,21 @@ def main() -> int:
         cmd_live,
         cmd_report,
         cmd_visual,
+        cmd_vlm_cache,
     )
+    from automation.commands.preflight import run_preflight
+    from automation.commands.replay import run_replay
+    from automation.commands.build import run_build
+    from automation.commands.doctor import run_doctor
+
+    def cmd_preflight(args) -> int:
+        vms = [v.strip() for v in args.vms.split(",")]
+        return run_preflight(
+            config_path=str(args.config),
+            scenario_name=args.test,
+            vms=vms,
+            expected_symbols=args.expect_symbols or [],
+        )
 
     parser = build_parser()
     args = parser.parse_args()
@@ -452,6 +618,11 @@ def main() -> int:
         "draft": cmd_draft,
         "visual": cmd_visual,
         "dashboard": cmd_dashboard,
+        "preflight": cmd_preflight,
+        "replay": run_replay,
+        "build": run_build,
+        "doctor": run_doctor,
+        "vlm-cache": cmd_vlm_cache,
     }
 
     try:

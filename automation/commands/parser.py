@@ -61,7 +61,10 @@ def _add_author_subparser(sub) -> None:
     p.add_argument("--session", required=True); p.add_argument("--name", default="authored-scenario")
     p = s.add_parser("export", help="Export current draft scenario YAML")
     p.add_argument("--session", required=True); p.add_argument("--name", default="authored-scenario")
-    p.add_argument("--output", help="Write YAML to path instead of embedding it in JSON; use - for stdout JSON")
+    p.add_argument("--output", help="Write YAML/diff to path instead of stdout")
+    p.add_argument("--base", metavar="SCENARIO_YAML", help="I12: base scenario to diff against")
+    p.add_argument("--insert-at-step", type=int, default=None, metavar="N", help="I12: insert recorded steps BEFORE step N (1-indexed); default: append")
+    p.add_argument("--dry-run", action="store_true", help="I12: validate but don't write or emit")
     p = s.add_parser("step", help="Append or replace draft scenario steps")
     p.add_argument("--session", required=True)
     g = p.add_mutually_exclusive_group(required=True)
@@ -153,6 +156,38 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Also export recording/session.gif (MP4 is always attempted)")
     fn_p.add_argument("--record-keep-raw", action="store_true",
                       help="Keep recording/raw frames after export")
+    # I1: declarative userData pre-staging
+    fn_p.add_argument("--inject-config", dest="inject_config", default=None, metavar="JSON",
+                      help="I1: JSON object (inline or @path.json) merged into "
+                           "config.json before launch. Pins __internal__.migrations.version "
+                           "and defaults currentView from --inject-servers.")
+    fn_p.add_argument("--inject-servers", dest="inject_servers", default=None, metavar="LIST",
+                      help="I1: TITLE=URL,TITLE=URL (or @path.json with {title:url} dict). "
+                           "Written as servers.json to both userData dirs before launch.")
+    fn_p.add_argument("--inject-app-name", dest="inject_app_name", default=None, metavar="NAME",
+                      help="I1: Electron productName for userData path detection "
+                           "(default: auto-detect via strings(app.asar)).")
+    fn_p.add_argument("--inject-install-path", dest="inject_install_path", default=None, metavar="PATH",
+                      help="I1: Override install path (binary or dir) for asar/version "
+                           "detection. Default: derived from VM package app_path.")
+    fn_p.add_argument("--inject-migrations-version", dest="inject_migrations_version",
+                      default=None, metavar="VER",
+                      help="I1: pin __internal__.migrations.version explicitly "
+                           "(default: auto-detect via <binary> --version).")
+    fn_p.add_argument("--no-cache", action="store_true", dest="no_cache",
+                      help="I6: disable VLM verify result cache for this run")
+    fn_p.add_argument("--config-snapshots", action="store_true", dest="config_snapshots",
+                      help="I14: capture config.json after each shell step (overrides yaml; default off)")
+    fn_p.add_argument("--var", action="append", dest="vars", default=[], metavar="KEY=VALUE",
+                      help="I8: override or set a scenario var (repeatable). "
+                           "Format: KEY=VALUE. CLI overrides scenario yaml vars: block. "
+                           "Error on duplicate keys within CLI --var flags.")
+    fn_p.add_argument("--from-phase", dest="from_phase", default=None, metavar="ID",
+                      help="I9: start at the first step of named phase ID "
+                           "(overrides --from-step; warns if both given)")
+    fn_p.add_argument("--until-phase", dest="until_phase", default=None, metavar="ID",
+                      help="I9: stop after the last step of named phase ID "
+                           "(overrides --until-step; warns if both given)")
 
     # mosdat confirm
     confirm_p = sub.add_parser(
@@ -240,6 +275,10 @@ def build_parser() -> argparse.ArgumentParser:
     live_p.add_argument("--config", type=Path, default=None,
                         help="mosdat config path; enables browser authoring sessions")
 
+    # mosdat build  (I3: PR clone + build + deploy + verify)
+    from automation.commands.build import add_build_subparser
+    add_build_subparser(sub)
+
     # mosdat author
     _add_author_subparser(sub)
 
@@ -253,6 +292,57 @@ def build_parser() -> argparse.ArgumentParser:
     draft_p.add_argument("--description", default="unnamed", help="Short description of the change")
     draft_p.add_argument("--output", type=Path, default=None, help="Write YAML to path instead of stdout")
     draft_p.add_argument("--templates", action="store_true", help="Write all templates to disk and exit")
+
+    # mosdat preflight
+    pf_p = sub.add_parser(
+        "preflight",
+        help="I2: pre-run health checks for a functional scenario",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Example: mosdat preflight examples/rocketchat.toml "
+            "--vms ubuntu2204 --test 3325-master-toggle "
+            "--expect-symbol isTelephonyEnabled"
+        ),
+    )
+    pf_p.add_argument("config", type=Path, help="Path to mosdat config (TOML)")
+    pf_p.add_argument("--vms", required=True, help="Comma-separated VM names")
+    pf_p.add_argument("--test", required=True, metavar="NAME",
+                      help="Scenario name without .yaml extension")
+    pf_p.add_argument("--expect-symbol", dest="expect_symbols", action="append",
+                      default=[], metavar="SYM",
+                      help="Symbol that must appear in strings <asar> (repeatable)")
+
+    # mosdat replay  (I5: rerun a verify against a cached screenshot)
+    replay_p = sub.add_parser("replay", help="Rerun a VLM verify against a cached result-dir screenshot")
+    replay_p.add_argument("result_dir", metavar="result-dir",
+                          help="Path to VM result dir (contains events.jsonl + screenshots)")
+    replay_p.add_argument("--step", type=int, default=None, metavar="N",
+                          help="Step number to replay (omit to list available steps)")
+    replay_p.add_argument("--verify", metavar="PROMPT", default=None,
+                          help="New verify prompt to send to the VLM")
+    replay_p.add_argument("--model", metavar="MODEL", default=None,
+                          help="VLM model override (default: qwen3.6-35b-a3b-apex-vl)")
+    replay_p.add_argument("--all-attempts", action="store_true", dest="all_attempts",
+                          help="Rerun against every verify_poll screenshot of that step")
+    replay_p.add_argument("--no-cache", action="store_true", dest="no_cache",
+                          help="I6: disable VLM verify result cache for this replay")
+
+    # mosdat vlm-cache  (I6: cache management)
+    cache_p = sub.add_parser("vlm-cache", help="I6: Manage the VLM verify result cache")
+    cache_sub = cache_p.add_subparsers(dest="cache_command", required=True)
+    cache_sub.add_parser("stats", help="Show entry count, size, and hit rate")
+    cache_sub.add_parser("clear", help="Wipe all cached entries")
+    prune_p = cache_sub.add_parser("prune", help="Remove entries older than a duration")
+    prune_p.add_argument(
+        "--older-than", dest="older_than", default="7d", metavar="DURATION",
+        help="Remove entries older than this duration (e.g. 7d, 48h, 3600s). Default: 7d",
+    )
+
+    # mosdat doctor  (I13: VM + host health checks)
+    doctor_p = sub.add_parser("doctor", help="I13: Check VM and host health (SSH, deps, disk, processes)")
+    doctor_p.add_argument("config", type=Path, help="Path to mosdat config (TOML)")
+    doctor_p.add_argument("--vms", default="", metavar="VM1,VM2",
+                          help="Comma-separated VM names to check (default: all VMs in config)")
 
     # mosdat visual  (L4: visual regression — DO NOT reorder; L7 appends after this block)
     visual_p = sub.add_parser("visual", help="Visual regression: capture or check step screenshots via SSIM")
