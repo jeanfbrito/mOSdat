@@ -146,8 +146,13 @@ def build_parser() -> argparse.ArgumentParser:
     fn_p.add_argument("--canary", choices=["auto", "off", "on"],
                       default="auto", dest="canary_override",
                       help="Override scenario's canary setting globally (A/B testing)")
-    fn_p.add_argument("--record-session", action="store_true",
-                      help="Record VNC frames during run and export change-filtered replay artifacts")
+    fn_p.add_argument("--no-record-session", action="store_false",
+                      dest="record_session", default=True,
+                      help="Disable VNC frame recording (recording is ON by default)")
+    # Back-compat: --record-session is the historical opt-in flag; now a no-op
+    # since recording is default-on. Kept hidden so old invocations don't break.
+    fn_p.add_argument("--record-session", action="store_true", dest="record_session",
+                      help=argparse.SUPPRESS)
     fn_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
                       help="Recorder capture rate (default: 10.0)")
     fn_p.add_argument("--record-diff-threshold", type=float, default=3.0, metavar="VALUE",
@@ -226,8 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-state-snapshot", action="store_true", dest="no_state_snapshot",
         help="Skip VM-side state collection",
     )
-    confirm_p.add_argument("--record-session", action="store_true",
-                           help="Record VNC frames during each iteration and export change-filtered replay artifacts")
+    confirm_p.add_argument("--no-record-session", action="store_false",
+                           dest="record_session", default=True,
+                           help="Disable VNC frame recording (recording is ON by default)")
+    # Back-compat hidden alias — recording is default-on now.
+    confirm_p.add_argument("--record-session", action="store_true", dest="record_session",
+                           help=argparse.SUPPRESS)
     confirm_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
                            help="Recorder capture rate (default: 10.0)")
     confirm_p.add_argument("--record-diff-threshold", type=float, default=3.0, metavar="VALUE",

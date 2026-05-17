@@ -6,7 +6,7 @@ usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
                          [--skip-workspace-check] [--skip-model-check]
                          [--timeout SECONDS] [--record] [--output OUTPUT]
                          [--click-verify {auto,off,yesno,diff,diff+yesno}]
-                         [--canary {auto,off,on}] [--record-session]
+                         [--canary {auto,off,on}] [--no-record-session]
                          [--record-fps FPS] [--record-diff-threshold VALUE]
                          [--record-gif] [--record-keep-raw]
                          [--inject-config JSON] [--inject-servers LIST]
@@ -57,8 +57,8 @@ options:
   --canary {auto,off,on}
                         Override scenario's canary setting globally (A/B
                         testing)
-  --record-session      Record VNC frames during run and export change-
-                        filtered replay artifacts
+  --no-record-session   Disable VNC frame recording (recording is ON by
+                        default)
   --record-fps FPS      Recorder capture rate (default: 10.0)
   --record-diff-threshold VALUE
                         Mean grayscale diff threshold for frame retention
