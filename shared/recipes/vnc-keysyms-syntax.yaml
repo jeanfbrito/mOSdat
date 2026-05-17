@@ -1,0 +1,31 @@
+slug: vnc-keysyms-syntax
+title: VNC Key Syntax — _KEYSYMS Table and Valid Key Strings
+symptoms:
+  - "vnc.py key action raises KeyError or sends wrong keysym"
+  - "ctrl+comma silently fails or triggers wrong key"
+  - "multi-char key name (e.g. 'comma') not recognized"
+  - "special key (e.g. Return, Tab, Escape) passed as raw string fails"
+constraint: |
+  The VNC transport (vnc.py) maps key strings through _KEYSYMS before encoding.
+  The main key component must be either a single ASCII character (e.g. ',') or a
+  name present in _KEYSYMS (e.g. 'Return', 'Tab', 'Escape', 'F1'–'F12').
+  Multi-word names like 'comma' are NOT aliases; use ',' directly.
+  Modifier prefix syntax: modifier+key (e.g. ctrl+,  not  ctrl+comma).
+pivots:
+  - id: use-single-char
+    summary: Replace named key aliases with the literal character — use ctrl+, not ctrl+comma
+    cost: low
+    recommended: true
+  - id: check-keysyms-table
+    summary: Grep _KEYSYMS in vnc.py to confirm the exact string before authoring a key step
+    cost: low
+    recommended: true
+  - id: use-xdotool-key-fallback
+    summary: For keys not in _KEYSYMS, fall back to a shell step with xdotool key <keysym>
+    cost: medium
+    recommended: false
+sources:
+  - automation/transport/vnc.py
+related_recipes:
+  - settings-electron-linux
+  - webview-focus-stealing

@@ -1,0 +1,28 @@
+slug: settings-electron-linux
+title: Opening Settings in RC Electron on Linux
+symptoms:
+  - "key: \"ctrl+,\" silently fails"
+  - "alt+w swallowed when login form has focus"
+  - "xdotool mousemove on kebab popup misses (popup auto-dismisses)"
+constraint: |
+  RC Electron registers Settings menu item with NO accelerator field on Linux.
+  Chromium webview steals alt+menu when form input has focus.
+pivots:
+  - id: pre-stage-redux-state
+    summary: Bypass UI entirely; write isTelephonyEnabled etc. directly into config.json
+    cost: low
+    recommended: true
+  - id: click-title-bar-first
+    summary: xdotool mousemove + click title bar to defocus webview, THEN send alt+w
+    cost: medium
+    recommended: false
+  - id: register-accelerator-upstream
+    summary: Send PR to RocketChat/Rocket.Chat.Electron adding CmdOrCtrl+, accelerator
+    cost: high
+    recommended: false
+sources:
+  - .knowledge/mosdat/scenarios/pr3325-bypass-settings-ui-via-config-prestage.md
+  - https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325
+related_recipes:
+  - webview-focus-stealing
+  - vnc-keysyms-syntax

@@ -1,0 +1,34 @@
+slug: redux-persist-migrations-version
+title: Missing migrations.version Causes RC to Re-Run Migrations and Reset State
+symptoms:
+  - "RC Electron resets to onboarding screen on every launch"
+  - "config.json settings (servers, currentView) disappear after app starts"
+  - "telephony settings or workspace URL cleared unexpectedly"
+  - "inject-config values overwritten before first test step runs"
+constraint: |
+  Rocket.Chat Electron uses redux-persist with a migrations system keyed on
+  __internal__.migrations.version in config.json. If this field is absent or set
+  to a version lower than the current app version, RC runs all pending migrations
+  on startup, which resets or overwrites injected config values. The version number
+  must match the value the app would derive from its own binary — typically the
+  app semver (e.g. "3.9.14"). Auto-detection via --inject-migrations-version or
+  the I1 inject_config helper reads the version from the installed binary.
+pivots:
+  - id: pin-migrations-version
+    summary: Include __internal__.migrations.version matching app semver in injected config.json
+    cost: low
+    recommended: true
+  - id: use-inject-config-flag
+    summary: Use mosdat functional --inject-config with --inject-migrations-version (auto-detects from binary)
+    cost: low
+    recommended: true
+  - id: read-version-from-asar
+    summary: SSH into VM, run strings <app.asar> | grep '"version"' to find the exact version string
+    cost: low
+    recommended: false
+sources:
+  - automation/setup/inject_config.py
+  - .knowledge/mosdat/scenarios/pr3325-bypass-settings-ui-via-config-prestage.md
+related_recipes:
+  - settings-electron-linux
+  - second-instance-ipc-xauthority

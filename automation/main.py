@@ -588,6 +588,9 @@ def main() -> int:
     from automation.commands.replay import run_replay
     from automation.commands.build import run_build
     from automation.commands.doctor import run_doctor
+    from automation.commands.recipes import run_recipes
+    from automation.commands.lint import run_lint
+    from automation.commands.trace import run_trace
 
     def cmd_preflight(args) -> int:
         vms = [v.strip() for v in args.vms.split(",")]
@@ -623,6 +626,9 @@ def main() -> int:
         "build": run_build,
         "doctor": run_doctor,
         "vlm-cache": cmd_vlm_cache,
+        "recipes": run_recipes,
+        "lint": run_lint,
+        "trace": run_trace,
     }
 
     try:

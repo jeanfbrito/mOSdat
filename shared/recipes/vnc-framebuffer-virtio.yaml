@@ -1,0 +1,31 @@
+slug: vnc-framebuffer-virtio
+title: Proxmox vga=virtio Breaks Framebuffer for GPU-Composited Apps
+symptoms:
+  - "VNC screen is black or blank after Electron/GTK app launches"
+  - "App window appears in wmctrl list but framebuffer shows nothing"
+  - "GPU-accelerated compositor (mutter, kwin) crashes silently on boot"
+  - "xrandr reports no connected outputs inside VM"
+constraint: |
+  Proxmox vga=virtio uses a paravirtualized framebuffer that does not expose a
+  standard VGA-compatible mode. Compositing window managers (GNOME Mutter, KDE
+  KWin) that probe for DRI/DRM devices fall back incorrectly or crash. GTK4 and
+  Electron apps using GPU acceleration cannot render to the virtio framebuffer via
+  VNC. The fix is to switch to vga=std with machine=q35 which exposes a standard
+  VGA device that compositors and Electron/Chromium handle correctly.
+pivots:
+  - id: switch-to-vga-std
+    summary: Set vga=std and machine=q35 in Proxmox VM hardware config; restart VM
+    cost: low
+    recommended: true
+  - id: disable-compositor
+    summary: "Disable GPU compositing (GNOME: MUTTER_DEBUG_DISABLE_ANIMATIONS=1, KDE: disable effects) as a temporary workaround"
+    cost: medium
+    recommended: false
+  - id: use-serial-console
+    summary: Add serial0 console as fallback display for headless scenarios that don't need VNC rendering
+    cost: medium
+    recommended: false
+sources:
+  - docs/KNOWN_ISSUES.md
+related_recipes:
+  - webview-focus-stealing

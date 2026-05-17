@@ -347,6 +347,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Remove entries older than this duration (e.g. 7d, 48h, 3600s). Default: 7d",
     )
 
+    # mosdat lint  (F1a: static scenario analyzer)
+    lint_p = sub.add_parser(
+        "lint",
+        help="F1a: Static analyzer for functional scenario YAML files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Example: mosdat lint shared/scenarios/functional/3325-master-toggle.yaml",
+    )
+    lint_p.add_argument("scenario", help="Path to scenario YAML file")
+
+    # mosdat trace  (F1b: input capability probe)
+    trace_p = sub.add_parser(
+        "trace",
+        help="F1b: Probe input capabilities (menu accelerators, shortcuts, focus) on a VM",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Example: mosdat trace examples/rocketchat.toml --vms ubuntu2204 --write-manifest",
+    )
+    trace_p.add_argument("config", type=Path, help="Path to mosdat config (TOML)")
+    trace_p.add_argument("--vms", required=True, help="Comma-separated VM names")
+    trace_p.add_argument(
+        "--write-manifest", action="store_true", dest="write_manifest",
+        help="Persist probe results to shared/binary_capabilities/<sha>.json",
+    )
+
     # mosdat doctor  (I13: VM + host health checks)
     doctor_p = sub.add_parser("doctor", help="I13: Check VM and host health (SSH, deps, disk, processes)")
     doctor_p.add_argument("config", type=Path, help="Path to mosdat config (TOML)")
@@ -364,5 +387,14 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Root dir for reference images (default: shared/references/)")
     visual_p.add_argument("--threshold", type=float, default=0.95, metavar="T",
                           help="SSIM threshold [0,1] below which a check fails (default: 0.95)")
+
+    # mosdat recipes  (F2: platform-constraint corpus + pivot browser)
+    recipes_p = sub.add_parser("recipes", help="F2: Browse known platform constraints and workarounds")
+    recipes_sub = recipes_p.add_subparsers(dest="recipes_command", required=True)
+    recipes_sub.add_parser("list", help="List all recipes (slug + title)")
+    show_p = recipes_sub.add_parser("show", help="Show full recipe body")
+    show_p.add_argument("slug", help="Recipe slug (e.g. settings-electron-linux)")
+    search_p = recipes_sub.add_parser("search", help="Search recipes by title, symptoms, or constraint")
+    search_p.add_argument("query", help="Search query (case-insensitive substring)")
 
     return parser

@@ -1,0 +1,33 @@
+slug: webview-focus-stealing
+title: Chromium Webview Consumes Alt+Key When Input Field Focused
+symptoms:
+  - "alt+key shortcut silently swallowed inside Electron window"
+  - "keyboard accelerator works outside login/input forms but not inside them"
+  - "xdotool key alt+w has no effect while cursor is in a text field"
+constraint: |
+  Chromium webview captures all keyboard events (including alt+key combinations)
+  when a DOM input element has focus. The Electron native menu never sees the
+  keystroke. This affects all shortcuts routed through the native menu accelerator
+  system, not just Settings.
+pivots:
+  - id: focus-title-bar-first
+    summary: Click the native title bar (outside webview) with xdotool before sending accelerators to defocus the webview
+    cost: low
+    recommended: true
+  - id: use-wmctrl-activate
+    summary: wmctrl -a <window-title> to raise and activate the window frame, then send key
+    cost: low
+    recommended: false
+  - id: bypass-ui-via-config
+    summary: Write config state directly (config.json / settings API) instead of navigating the UI
+    cost: low
+    recommended: true
+  - id: javascript-blur
+    summary: Inject document.activeElement.blur() via Electron devtools remote before sending key
+    cost: medium
+    recommended: false
+sources:
+  - .knowledge/mosdat/scenarios/pr3325-bypass-settings-ui-via-config-prestage.md
+related_recipes:
+  - settings-electron-linux
+  - vnc-keysyms-syntax

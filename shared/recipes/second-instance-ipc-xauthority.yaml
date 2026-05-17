@@ -1,0 +1,34 @@
+slug: second-instance-ipc-xauthority
+title: Electron second-instance Deep-Link Dispatch Silently Drops Without XAUTHORITY
+symptoms:
+  - "tel: or rocketchat: protocol handler invocation has no visible effect"
+  - "Electron second-instance event fires but window does not activate or navigate"
+  - "xdg-open <deep-link> returns 0 but nothing happens in the running app"
+  - "deep-link test passes in isolation but fails when RC is already running"
+constraint: |
+  Electron's second-instance IPC (used for deep-link dispatch when the app is
+  already running) requires XAUTHORITY to be set in the environment of the process
+  that sends the IPC message. Without it, the X11 display connection required to
+  raise the existing window is silently refused. The second-instance event fires
+  inside the existing app process but the BrowserWindow.focus() / loadURL() calls
+  fail without producing an error log entry. DISPLAY alone is insufficient;
+  XAUTHORITY must also be exported.
+pivots:
+  - id: export-xauthority
+    summary: Add export XAUTHORITY=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1) to the shell step before xdg-open
+    cost: low
+    recommended: true
+  - id: use-x11-auto-in-toml
+    summary: Set x11 = "auto" on the VM in mosdat TOML — I4 auto-injects DISPLAY + XAUTHORITY preamble into shell steps
+    cost: low
+    recommended: true
+  - id: verify-xauthority-in-preflight
+    summary: mosdat preflight checks for XAUTHORITY presence in shell blocks — use --expect-symbol to surface missing env
+    cost: low
+    recommended: false
+sources:
+  - automation/config.py
+  - docs/IMPROVEMENTS.md
+related_recipes:
+  - webview-focus-stealing
+  - redux-persist-migrations-version
