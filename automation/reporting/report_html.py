@@ -339,6 +339,17 @@ def _render_step_block(step_key: str, step_events: list, screenshots: set) -> st
         n = popup_ev["dismissed"]
         popup_note = f'<div class="popup-note">&#x1F4AC; Popup sweep dismissed {n} dialog{"s" if n != 1 else ""}</div>'
 
+    crashed_ev = next((e for e in step_events if e.get("event") == "app_crashed"), None)
+    crashed_note = ""
+    if crashed_ev:
+        source = _esc(crashed_ev.get("source", "unknown"))
+        cleaned = " (Cancel clicked — VM cleaned)" if crashed_ev.get("cleanup_clicked") else ""
+        crashed_note = (
+            f'<div class="app-crashed">&#x1F4A5; APP CRASHED — '
+            f'Rocket.Chat terminated abnormally during this step ({source}){cleaned}. '
+            f'<strong>This is an application regression — fix needed in app code.</strong></div>'
+        )
+
     block_id = f"step-{step_key.replace('.', '-')}"
 
     # I10: if we have a human label, show it prominently; subscript the step number
@@ -361,6 +372,7 @@ def _render_step_block(step_key: str, step_events: list, screenshots: set) -> st
     </span>
     <span class="toggle-arrow">&#x25BC;</span>
   </div>
+  {crashed_note}
   {popup_note}
   <div class="step-body" id="{block_id}-body">
     {sub_html}
@@ -448,6 +460,11 @@ a:hover { text-decoration: underline; }
 .split-sample { margin-top: 4px; font-size: 0.85em; color: #aaa; }
 .retry-row { opacity: 0.85; }
 .popup-note { padding: 5px 14px; color: #60a5fa; font-size: 0.85em; border-top: 1px solid #2a2a2a; }
+.app-crashed { padding: 8px 14px; background: #3a1818; color: #fca5a5; border-top: 2px solid #ef4444; border-bottom: 2px solid #ef4444; font-size: 0.92em; }
+.app-crashed strong { color: #fecaca; }
+.crashed-banner { background: #3a1818; color: #fca5a5; padding: 14px 24px; border-bottom: 3px solid #ef4444; font-size: 0.95em; }
+.crashed-banner strong { color: #fecaca; }
+.crashed-banner .mono { font-family: ui-monospace, monospace; background: #2a1010; padding: 1px 6px; border-radius: 3px; }
 .no-events { color: #555; font-style: italic; padding: 8px 0; }
 .verify-split-row { display: block; }
 .run-footer { border-top: 1px solid #2a2a2a; padding: 12px 24px; color: #555; font-size: 0.82em; display: flex; gap: 20px; flex-wrap: wrap; }
@@ -494,11 +511,26 @@ def render_html(meta: dict, steps: dict, screenshots: set, run_dir: Path, events
         overall_text = "PARTIAL"
 
     steps_html = ""
+    crashed_steps: list[str] = []
     if not steps:
         steps_html = '<div class="no-events">No events captured in events.jsonl (file missing or empty).</div>'
     else:
         for skey, sevents in steps.items():
+            if any(e.get("event") == "app_crashed" for e in sevents):
+                crashed_steps.append(str(skey))
             steps_html += _render_step_block(skey, sevents, screenshots)
+
+    crashed_banner = ""
+    if crashed_steps:
+        steps_str = ", ".join(crashed_steps)
+        crashed_banner = (
+            '<div class="crashed-banner">'
+            '&#x1F4A5; <strong>APP CRASHED</strong> &mdash; the application under test '
+            f'terminated abnormally during step{"s" if len(crashed_steps) != 1 else ""} '
+            f'<span class="mono">{_esc(steps_str)}</span>. This is an application regression; '
+            'fix the application code, not the scenario.'
+            '</div>'
+        )
 
     commit_html = ""
     if meta.get("commit"):
@@ -535,7 +567,7 @@ def render_html(meta: dict, steps: dict, screenshots: set, run_dir: Path, events
     Retried: <span style="color:#fbbf24">{meta["retried"]}</span>
   </div>
 </div>
-
+{crashed_banner}
 <div class="toolbar">
   <label>
     <input type="checkbox" id="filter-failed" onchange="toggleFailedFilter(this.checked)">

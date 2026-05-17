@@ -73,10 +73,12 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         click_verify_override: str = "auto",
         canary_override: str = "auto",
         x11_mode: str = "off",
+        app_process_name: str = "",
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
         self.injector = injector
+        self._app_process_name = app_process_name
         self.screenshot_dir = screenshot_dir
         self.log = log_fn
         self.popup_sweep = popup_sweep

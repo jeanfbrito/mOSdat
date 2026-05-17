@@ -267,6 +267,7 @@ def cmd_functional(args) -> int:
                         vmid=vm.vmid if checkpoint_config.get("enabled") else None,
                         click_verify_override=getattr(args, "click_verify", "auto"),
                         canary_override=getattr(args, "canary_override", "auto"),
+                        app_process_name=config.app.process_name,
                     )
 
                     # B7: VM health probe before scenario start

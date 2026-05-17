@@ -193,7 +193,18 @@ Write-Output "focus:ok"
             except (ValueError, AttributeError):
                 return False
         else:
-            result = self.ssh.run(f"pgrep -f '{name}' | head -1", timeout=10)
+            # pgrep -f over SSH self-matches the ssh bash cmdline (the search
+            # string appears as a literal argument). Filter via /proc/<pid>/exe
+            # which is a symlink to the real executable — bash/sshd/pgrep won't
+            # have the target name in their exe path.
+            base = name.rsplit("/", 1)[-1]
+            cmd = (
+                "for p in $(pgrep -f " + repr(base) + " 2>/dev/null); do "
+                "exe=$(readlink /proc/$p/exe 2>/dev/null); "
+                f"case \"$exe\" in *{base}*) echo $p; exit 0;; esac; "
+                "done; exit 1"
+            )
+            result = self.ssh.run(cmd, timeout=10)
             return result.returncode == 0 and bool(result.stdout.strip())
 
     def launch(self, cmd: str) -> None:

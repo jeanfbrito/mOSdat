@@ -28,18 +28,21 @@ class _VerifyMixin:
 
     _APPORT_CRASH_QUESTION = (
         "is this an Ubuntu/GNOME apport crash report dialog with text like "
-        "'The application Rocket.Chat has closed unexpectedly' or "
-        "'System program problem detected', or any system-crash report dialog "
-        "indicating the application terminated abnormally"
+        "'The application Rocket.Chat has closed unexpectedly', "
+        "'System program problem detected', or an Apport bug-report dialog "
+        "with a Cancel button (indicates the application terminated abnormally)"
+    )
+    _APPORT_CANCEL_TARGET = (
+        "the 'Cancel' button on the Apport crash report dialog "
+        "(typically on the lower-left or lower-right of the small Apport window)"
     )
 
     def _sweep_popups(self, step_num, max_attempts: int = 2) -> int:
         """Dismiss modal dialogs / popups before a localize step (B3).
 
         For each popup detected:
-          1. Probe if it's an apport crash dialog. If yes, raise AppCrashedError
-             — the app window is gone, the scenario MUST stop. Do not try to
-             dismiss; treating a crash as recoverable hides regressions.
+          1. Probe if it's an apport crash dialog. If yes, VLM-localize the
+             Cancel button and click it (Bezier motion).
           2. Otherwise send Escape (legacy path).
 
         Returns the count of popups dismissed.
@@ -60,9 +63,10 @@ class _VerifyMixin:
                            answer="yes" if found else "no", latency_ms=latency_ms, kind="popup_sweep")
                 if not found:
                     break
-                # A2: Detect apport/system-crash dialog BEFORE attempting any dismiss.
-                # If present, the app window is closed → raise to halt scenario.
-                self._fail_if_apport_visible(screenshot, step_num)
+                if self._handle_apport_or_fail(screenshot, step_num):
+                    dismissed += 1
+                    time.sleep(1.0)
+                    continue
                 self.injector.key("escape")
                 time.sleep(0.5)
                 dismissed += 1
@@ -75,12 +79,48 @@ class _VerifyMixin:
         self._emit("popup_sweep", step_num=step_num, dismissed=dismissed)
         return dismissed
 
-    def _fail_if_apport_visible(self, screenshot, step_num) -> None:
-        """A2: Raise AppCrashedError if an apport crash dialog is visible.
+    def _fail_if_app_process_dead(self, step_num) -> bool:
+        """SSH-side check: is the app-under-test process still running?
 
-        Called both from popup-sweep and as an explicit guard. Caller is
-        responsible for catching nothing — the exception is meant to abort
-        the entire scenario because the app under test has died.
+        Fast (~100ms) signal that the app crashed even when no apport dialog
+        is visible (apport queues only one dump per executable). Raises
+        AppCrashedError on dead process.
+        """
+        from automation.runners.functional import AppCrashedError
+        try:
+            process_name = getattr(self, "_app_process_name", None) or "rocketchat-desktop"
+            t0 = time.perf_counter()
+            running = self.injector.process_running(process_name)
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            self._emit("process_probe", step_num=step_num,
+                       process=process_name, running=running,
+                       latency_ms=latency_ms)
+            if running:
+                return False
+        except Exception as e:
+            self.log(f"    → process probe error ({e}), skipping process check")
+            return False
+        self.log(f"    → APP CRASHED — process '{process_name}' not running")
+        self._emit("app_crashed", step_num=step_num,
+                   source="process_not_running",
+                   process=process_name)
+        raise AppCrashedError(
+            f"Application process '{process_name}' is not running at step "
+            f"{step_num}. The app under test crashed silently (no apport "
+            "dialog this run). Scenario marked failed — fix needed in app code."
+        )
+
+    def _handle_apport_or_fail(self, screenshot, step_num) -> bool:
+        """Detect apport crash dialog, VLM-click Cancel to leave the VM clean,
+        then raise AppCrashedError so the scenario fails with a clear signal.
+
+        Click-Cancel is for VM hygiene (next scenario starts clean), not
+        recovery — an apport dialog means the app crashed and the scenario
+        is invalid. The test report must mark this run as crashed so the
+        regression in the application code is visible.
+
+        Returns False (so callers can fall through to other handling) when
+        no apport dialog is visible. Otherwise always raises AppCrashedError.
         """
         from automation.runners.functional import AppCrashedError
         t0 = time.perf_counter()
@@ -90,13 +130,37 @@ class _VerifyMixin:
                    answer="yes" if is_apport else "no",
                    latency_ms=round((time.perf_counter() - t0) * 1000),
                    kind="apport_crash_probe")
-        if is_apport:
-            self.log("    → APP CRASHED — apport dialog detected, halting scenario")
-            self._emit("app_crashed", step_num=step_num, source="apport_dialog_detected")
-            raise AppCrashedError(
-                "Rocket.Chat crashed — apport dialog visible. Scenario aborted; "
-                "the app window has closed and no further steps can run."
-            )
+        if not is_apport:
+            return False
+
+        screen_size = (screenshot.width, screenshot.height)
+        cleaned = False
+        try:
+            t1 = time.perf_counter()
+            coords = self.vlm.localize(screenshot, self._APPORT_CANCEL_TARGET, screen_size=screen_size)
+            self._emit("vlm_localize", step_num=step_num, attempt=1,
+                       target=self._APPORT_CANCEL_TARGET[:80],
+                       coords=list(coords) if coords else None,
+                       latency_ms=round((time.perf_counter() - t1) * 1000),
+                       kind="apport_cancel_localize")
+            if coords:
+                x, y = int(coords[0]), int(coords[1])
+                self.injector.click(x, y, motion="bezier")
+                self._emit("apport_cancel_click", step_num=step_num, coords=[x, y])
+                self.log(f"    → apport Cancel clicked at ({x},{y}) (VM cleanup before halt)")
+                cleaned = True
+        except Exception as e:
+            self.log(f"    → apport cleanup click failed ({e}); halting anyway")
+
+        self._emit("app_crashed", step_num=step_num,
+                   source="apport_dialog_detected",
+                   cleanup_clicked=cleaned)
+        self.log("    → APP CRASHED — Rocket.Chat terminated abnormally, scenario marked failed")
+        raise AppCrashedError(
+            "Rocket.Chat crashed — apport dialog detected at step "
+            f"{step_num}. The app under test has a regression that needs "
+            "fixing in the application code; the scenario is marked failed."
+        )
 
     def _verify_call(
         self,

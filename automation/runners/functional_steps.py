@@ -478,7 +478,8 @@ class _StepsMixin:
                     # A4: short-circuit verify retries when an apport crash dialog is the cause.
                     # Without this, 3 verify retries on greg burn 90-120s before the eventual
                     # FAIL — and the operator can't tell from logs that the app crashed.
-                    self._fail_if_apport_visible(screenshot, step_num)
+                    self._handle_apport_or_fail(screenshot, step_num)
+                    self._fail_if_app_process_dead(step_num)
                     if attempt < step.retries:
                         self.log("    ✗ not verified, retrying...")
                         self._emit("retry", step_num=step_num, attempt=attempt, reason="verify_failed")
@@ -526,7 +527,8 @@ class _StepsMixin:
                     screenshot, _ = self.screenshotter.capture()
                     self._save_screenshot(screenshot, f"step{step_num}_fail_attempt{attempt}")
                     # A4: same short-circuit as verify path
-                    self._fail_if_apport_visible(screenshot, step_num)
+                    self._handle_apport_or_fail(screenshot, step_num)
+                    self._fail_if_app_process_dead(step_num)
                     if attempt < step.retries:
                         self.log("    ✗ accept_any: no prompt matched, retrying...")
                         self._emit("retry", step_num=step_num, attempt=attempt,

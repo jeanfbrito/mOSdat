@@ -420,6 +420,7 @@ def cmd_functional(args) -> int:
                         click_verify_override=getattr(args, "click_verify", "auto"),
                         canary_override=getattr(args, "canary_override", "auto"),
                         x11_mode=getattr(vm, "x11", "off"),
+                        app_process_name=config.app.process_name,
                     )
                     # I14: enable config snapshots if scenario opts in OR --config-snapshots flag set
                     runner._config_snapshots = (
