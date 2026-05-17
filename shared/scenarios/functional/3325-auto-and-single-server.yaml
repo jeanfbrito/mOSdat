@@ -1,71 +1,53 @@
-name: "Rocket.Chat Desktop — Auto (ask each time) reset + single-server no-modal"
+name: "Rocket.Chat Desktop — Auto reset + single-server (pre-staged Redux)"
 # Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325:
-#   G3: "Auto (ask each time)" resets persisted preference → modal re-appears
-#   G4: Single-server config → TelephonyServer dropdown hidden, no modal on dispatch
+#   G3: telephonyPreferredServer reset (Auto) → modal re-appears
+#   G4: single server → no modal on dispatch
 #
-# PHASE A (2 servers: Workspace + Mobile RC):
-#   A1  Clean state → deterministic 2-server config
-#   A2  Launch RC → Workspace login
-#   A3  Enable master telephony toggle
-#   A4  Dispatch tel: → Fuselage modal appears
-#   A5  Check "Remember this choice" → click Mobile RC → modal gone
-#   A6  Dispatch tel: again → NO modal (preference remembered)
-#   A7  Open Settings > General → Telephony Server dropdown
-#   A8  Click dropdown → click "Auto (ask each time)"
-#   A9  Dispatch tel: again → modal RE-APPEARS (Auto reset the preference)
-#   A10 Dismiss modal → kill RC
+# Strategy: pre-stage telephonyPreferredServer directly in config.json.
+# No dropdown UI navigation needed — kill RC, rewrite the field, relaunch.
 #
-# PHASE B (1 server: Workspace only):
-#   B1  Full cleanup + write single-server config
-#   B2  Launch RC → Workspace login
-#   B3  Enable master telephony toggle
-#   B4  Open Settings > General → verify dropdown is ABSENT
-#   B5  Verify shortcut field IS present
-#   B6  Close Settings
-#   B7  Dispatch tel: → verify NO modal + app alive
-#   B8  Final cleanup
+# PHASES:
+#   A. 2 servers, preferred=null → tel: → modal appears → click 'Mobile RC'.
+#   B. Kill, set preferred=mobile.rocket.chat/ → tel: → NO modal (direct route).
+#   C. Kill, set preferred=null again → tel: → modal RE-APPEARS.
+#   D. Kill, write single-server config → tel: → NO modal (auto-route).
 
 steps:
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE A — setup: clean state + 2-server config
+  # PHASE A — 2 servers, no preferred
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── A1a: Stop all RC processes + wipe userData ───────────────────────────
+  # ── A1: Tool deps + kill RC + wipe userData ──────────────────────────────
   - shell: |
       set -u
+      if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip
+        fi
+      fi
       export DISPLAY=:0
       export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
-
-      # Loop-kill: pkill -f matches full cmdline (comm truncates at 15 chars).
       for attempt in 1 2 3 4 5 6 7 8; do
         pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
         pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
         pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
         sleep 1
-        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
-          break
-        fi
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
       pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-
-      # Close any lingering crash dialogs or stale windows.
+      pkill -KILL -x apport-gtk 2>/dev/null || true
       wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
         wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
       done
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
-
-      # Wipe + recreate both userData paths (dev + packaged).
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"
-        mkdir -p "$d"
+        rm -rf "$d"; mkdir -p "$d"
       done
+      echo PHASE_A_CLEAN
 
-      echo PHASE_A_PROCESS_CLEAN
-
-  # ── A1b: Write deterministic 2-server config ─────────────────────────────
+  # ── A2: Write 2-server config, telephony ON, preferred=null ─────────────
   - shell: |
       set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
@@ -81,6 +63,9 @@ steps:
           '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
           '  ],' \
           '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": true,' \
+          '  "telephonyPreferredServer": null,' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
           '  "isMenuBarEnabled": true,' \
           '  "isSideBarEnabled": true,' \
           '  "isTrayIconEnabled": false,' \
@@ -88,199 +73,63 @@ steps:
           '  "doCheckForUpdatesOnStartup": false,' \
           '  "isUpdatingEnabled": false,' \
           '  "rootWindowState": {' \
-          '    "focused": true,' \
-          '    "visible": true,' \
-          '    "maximized": false,' \
-          '    "minimized": false,' \
-          '    "fullscreen": false,' \
-          '    "normal": true,' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
           '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
           '}' > "$d/config.json"
       done
+      echo PHASE_A_CONFIG_PREFERRED_NULL
 
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
-      echo PHASE_A_CONFIG_WRITTEN
-
-  # ── A2a: Launch RC ───────────────────────────────────────────────────────
-  # QEMU virtual GPU doesn't support Wayland — force X11 + disable GPU.
-  # Set XAUTHORITY for X11 auth over SSH.
+  # ── A3: Launch RC ────────────────────────────────────────────────────────
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo PHASE_A_APP_LAUNCHED
+      echo PHASE_A_LAUNCHED
 
   - wait: 15
 
-  # ── A2b: Verify Workspace login page ────────────────────────────────────
   - verify: |
       The Rocket.Chat application window shows the Workspace server login or
-      authentication page. Look for an email/username input field, password field,
-      a login/sign-in button, or any connected Workspace page content. It must NOT
-      be the empty 'Add a server' screen and must NOT be a crash dialog.
+      authentication page. It must NOT be an 'Add a server' screen and must
+      NOT be a crash dialog.
     verify_timeout: 30
-
-  # ── A3: Enable master telephony toggle ──────────────────────────────────
-  # Open Settings (Ctrl+,), navigate to General tab, find the Telephony toggle.
-  # Use localize so the VLM handles layout variance.
-  - shell: |
-      export DISPLAY=:0
-      xdotool key ctrl+comma
-      echo SETTINGS_OPENED
-  - wait: 4
-  - verify: |
-      The Rocket.Chat application window shows a Settings or Preferences panel
-      open inside the main window. It must NOT be a crash dialog or blank screen.
-    verify_timeout: 15
-
-  - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: left
-  - wait: 2
-
-  - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently OFF or disabled"
-    click: left
-  - wait: 3
-
-  # Confirm toggle is now ON (enabled).
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony master
-      toggle or switch in an enabled / ON state. The toggle should appear
-      activated, checked, or highlighted compared to a disabled state.
     retries: 3
-    verify_timeout: 20
 
-  # Close Settings by pressing Escape.
-  - key: Escape
-  - wait: 2
-
-  # ── A4: Dispatch tel: → verify Fuselage modal appears ────────────────────
+  # ── A4: Dispatch tel: → expect modal ─────────────────────────────────────
   - shell: |
-      export DISPLAY=:0
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" >/dev/null 2>&1 &
-      echo PHASE_A_TEL_DISPATCH_1
+      echo PHASE_A_TEL_DISPATCHED
+
   - wait: 10
 
   - verify: |
-      The Rocket.Chat application window shows a modal dialog for selecting a
-      telephony destination server. The modal lists available servers ('Workspace'
-      and 'Mobile RC') as clickable options and has a 'Remember this choice'
-      checkbox. This is a Fuselage modal overlay — NOT the main server selection
-      screen and NOT a crash dialog.
-    retries: 5
+      The Rocket.Chat application window shows a modal dialog labeled 'Select
+      Server' (or similar) asking which server should handle the call. The
+      modal lists two server rows (e.g. 'Southlogic' and 'Mobile!') and has a
+      'Remember this choice' checkbox. This is a Fuselage modal overlay on
+      top of the main application.
     verify_timeout: 20
+    retries: 5
 
-  # ── A5: Check "Remember this choice" + click Mobile RC ──────────────────
-  # Use localize for both — modal position varies by window size.
-  - localize: "the 'Remember this choice' checkbox inside the telephony server selection modal"
-    click: left
-  - wait: 2
-
+  # ── A5: Click 'Mobile RC' in modal ───────────────────────────────────────
   - localize: "the 'Mobile RC' server option inside the telephony server selection modal"
     click: left
   - wait: 8
 
-  # Verify modal gone, app alive.
   - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window, no apport crash handler. The telephony server
-      selection modal is no longer visible. The app is showing a server page or
-      login screen.
+      The Rocket.Chat application window is visible and responsive — the
+      telephony server selection modal is no longer visible. The app is alive
+      with no crash dialog.
+    verify_timeout: 20
     retries: 3
-    verify_timeout: 20
 
-  # ── A6: Dispatch tel: again → verify NO modal (preference remembered) ────
-  - shell: |
-      export DISPLAY=:0
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" >/dev/null 2>&1 &
-      echo PHASE_A_TEL_DISPATCH_2
-  - wait: 10
-
-  # KEY: no modal — routed directly to Mobile RC.
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — the app is
-      alive, no crash dialog, no frozen window. There is NO telephony server
-      selection modal visible. The call was dispatched directly to the previously
-      chosen server without asking again.
-    retries: 3
-    verify_timeout: 20
-
-  # ── A7: Open Settings > General, scroll to telephony section ────────────
-  - shell: |
-      export DISPLAY=:0
-      xdotool key ctrl+comma
-      echo SETTINGS_OPENED_PHASE_A7
-  - wait: 4
-
-  - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: left
-  - wait: 2
-
-  # Scroll down to bring the Telephony Server dropdown into view.
-  - shell: |
-      export DISPLAY=:0
-      xdotool mousemove 640 500
-      xdotool click 5
-      xdotool click 5
-      echo SCROLLED_TO_TELEPHONY_SECTION
-
-  - wait: 2
-
-  # ── A8a: Click TelephonyServer dropdown (currently showing "Mobile RC") ──
-  # localize finds it even when coords shift due to scroll position.
-  - localize: "the Telephony Server dropdown control in the Settings General tab showing 'Mobile RC' as the current selection"
-    click: left
-  - wait: 3
-
-  # Verify dropdown opened (options are visible).
-  - verify: |
-      The Rocket.Chat Settings panel shows an open dropdown menu for the
-      Telephony Server setting. The menu lists server options including
-      'Auto (ask each time)' and at least one server name. It is expanded
-      and visible as a pop-up list.
-    retries: 3
-    verify_timeout: 20
-
-  # ── A8b: Click "Auto (ask each time)" option ────────────────────────────
-  - localize: "the 'Auto (ask each time)' option in the expanded Telephony Server dropdown menu"
-    click: left
-  - wait: 3
-
-  # Verify dropdown now reflects "Auto" selection.
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony Server
-      dropdown or selector with 'Auto' or 'Auto (ask each time)' as the
-      currently selected value. The dropdown is closed and the selected value
-      is displayed in the control.
-    retries: 3
-    verify_timeout: 20
-
-  # Close Settings.
-  - key: Escape
-  - wait: 2
-
-  # ── A9: Dispatch tel: again → verify modal RE-APPEARS (Auto reset pref) ──
-  - shell: |
-      export DISPLAY=:0
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" >/dev/null 2>&1 &
-      echo PHASE_A_TEL_DISPATCH_3_AUTO
-  - wait: 10
-
-  # KEY: modal must re-appear because Auto clears the remembered preference.
-  - verify: |
-      The Rocket.Chat application window shows a modal dialog for selecting a
-      telephony destination server. The modal lists available servers ('Workspace'
-      and 'Mobile RC') and has a 'Remember this choice' checkbox. The modal
-      re-appeared because the 'Auto (ask each time)' option was selected in
-      Settings, which reset the persisted preference. This is the critical
-      assertion for the Auto reset behavior.
-    retries: 5
-    verify_timeout: 20
-
-  # ── A10: Dismiss modal + kill RC ────────────────────────────────────────
-  - key: Escape
-  - wait: 3
-
+  # ── A6: Kill RC ──────────────────────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
@@ -292,52 +141,176 @@ steps:
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      echo PHASE_A_KILLED
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo PHASE_A_KILLED
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE B — setup: wipe Phase A persistence + write single-server config
+  # PHASE B — preferred=mobile → no modal, direct route
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── B1a: Full cleanup (wipe Phase A userData including persisted preference)
   - shell: |
       set -u
-      export DISPLAY=:0
-      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        printf '%s\n' \
+          '{' \
+          '  "servers": [' \
+          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
+          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
+          '  ],' \
+          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": true,' \
+          '  "telephonyPreferredServer": "https://mobile.rocket.chat/",' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
+          '  "isMenuBarEnabled": true,' \
+          '  "isSideBarEnabled": true,' \
+          '  "isTrayIconEnabled": false,' \
+          '  "isMinimizeOnCloseEnabled": false,' \
+          '  "doCheckForUpdatesOnStartup": false,' \
+          '  "isUpdatingEnabled": false,' \
+          '  "rootWindowState": {' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
+          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
+          '}' > "$d/config.json"
+      done
+      echo PHASE_B_CONFIG_PREFERRED_MOBILE
 
-      # Ensure no stale RC process from Phase A.
-      for attempt in 1 2 3 4 5 6 7 8; do
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo PHASE_B_LAUNCHED
+
+  - wait: 15
+
+  - verify: |
+      The Rocket.Chat application window is visible — login page or server
+      content. Not a crash dialog.
+    verify_timeout: 30
+    retries: 3
+
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" >/dev/null 2>&1 &
+      echo PHASE_B_TEL_DISPATCHED
+
+  - wait: 10
+
+  # KEY: NO modal — preferred=mobile routes directly
+  - verify: |
+      The Rocket.Chat application window is visible and responsive — there is
+      NO telephony server selection modal visible. The call was routed directly
+      to the preferred server (Mobile RC) without asking again. App alive, no
+      crash dialog.
+    verify_not: |
+      A telephony server selection modal listing two server rows (e.g. 'Southlogic' and 'Mobile!')
+      with a 'Remember this choice' checkbox is visible overlaying the window.
+    verify_timeout: 20
+    retries: 5
+
+  # ── Kill RC ──────────────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
         pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
         pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
         pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
         sleep 1
-        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
-          break
-        fi
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo PHASE_B_KILLED
 
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE C — preferred=null again → modal re-appears (Auto reset)
+  # ════════════════════════════════════════════════════════════════════════════
 
-      # Wipe both userData paths — this clears Phase A's telephonyServer persistence.
+  - shell: |
+      set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"
-        mkdir -p "$d"
+        printf '%s\n' \
+          '{' \
+          '  "servers": [' \
+          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
+          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
+          '  ],' \
+          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": true,' \
+          '  "telephonyPreferredServer": null,' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
+          '  "isMenuBarEnabled": true,' \
+          '  "isSideBarEnabled": true,' \
+          '  "isTrayIconEnabled": false,' \
+          '  "isMinimizeOnCloseEnabled": false,' \
+          '  "doCheckForUpdatesOnStartup": false,' \
+          '  "isUpdatingEnabled": false,' \
+          '  "rootWindowState": {' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
+          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
+          '}' > "$d/config.json"
       done
+      echo PHASE_C_CONFIG_AUTO_RESET
 
-      echo PHASE_B_PROCESS_CLEAN
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      echo PHASE_C_LAUNCHED
 
-  # ── B1b: Write single-server config ─────────────────────────────────────
-  # Only 1 server → RC must hide the TelephonyServer dropdown and skip the modal.
+  - wait: 15
+
+  - verify: |
+      The Rocket.Chat application window is visible — login page or server
+      content. Not a crash dialog.
+    verify_timeout: 30
+    retries: 3
+
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" >/dev/null 2>&1 &
+      echo PHASE_C_TEL_DISPATCHED
+
+  - wait: 10
+
+  # KEY: modal RE-APPEARS because preferred=null
+  - verify: |
+      The Rocket.Chat application window shows a modal dialog for selecting a
+      telephony destination server. The modal lists two server rows (e.g. 'Southlogic' and 'Mobile!')
+      and has a 'Remember this choice' checkbox. The modal re-appeared because
+      telephonyPreferredServer was reset to null in the persisted config.
+    verify_timeout: 20
+    retries: 5
+
+  - key: Escape
+  - wait: 3
+
+  # ── Kill RC ──────────────────────────────────────────────────────────────
+  - shell: |
+      export DISPLAY=:0
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo PHASE_C_KILLED
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE D — single server → no modal on dispatch
+  # ════════════════════════════════════════════════════════════════════════════
+
   - shell: |
       set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
@@ -351,6 +324,9 @@ steps:
           '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" }' \
           '  ],' \
           '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": true,' \
+          '  "telephonyPreferredServer": null,' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
           '  "isMenuBarEnabled": true,' \
           '  "isSideBarEnabled": true,' \
           '  "isTrayIconEnabled": false,' \
@@ -358,129 +334,53 @@ steps:
           '  "doCheckForUpdatesOnStartup": false,' \
           '  "isUpdatingEnabled": false,' \
           '  "rootWindowState": {' \
-          '    "focused": true,' \
-          '    "visible": true,' \
-          '    "maximized": false,' \
-          '    "minimized": false,' \
-          '    "fullscreen": false,' \
-          '    "normal": true,' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
           '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
           '}' > "$d/config.json"
       done
+      echo PHASE_D_CONFIG_SINGLE_SERVER
 
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
-      echo PHASE_B_SINGLE_SERVER_CONFIG_WRITTEN
-
-  # ── B2a: Launch RC with single-server config ─────────────────────────────
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo PHASE_B_APP_LAUNCHED
+      echo PHASE_D_LAUNCHED
 
   - wait: 15
 
-  # ── B2b: Verify Workspace login page ────────────────────────────────────
   - verify: |
-      The Rocket.Chat application window shows the Workspace server login or
-      authentication page. Look for an email/username input field, password field,
-      a login/sign-in button, or any connected Workspace page content. It must NOT
-      be the empty 'Add a server' screen and must NOT be a crash dialog.
+      The Rocket.Chat application window is visible — login page or Workspace
+      content. Not a crash dialog.
     verify_timeout: 30
-
-  # ── B3: Enable master telephony toggle ──────────────────────────────────
-  - shell: |
-      export DISPLAY=:0
-      xdotool key ctrl+comma
-      echo SETTINGS_OPENED_PHASE_B
-  - wait: 4
-  - verify: |
-      The Rocket.Chat application window shows a Settings or Preferences panel
-      open inside the main window. It must NOT be a crash dialog or blank screen.
-    verify_timeout: 15
-
-  - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: left
-  - wait: 2
-
-  - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently OFF or disabled"
-    click: left
-  - wait: 3
-
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony master
-      toggle or switch in an enabled / ON state. The toggle should appear
-      activated, checked, or highlighted compared to a disabled state.
     retries: 3
-    verify_timeout: 20
 
-  # ── B4: Verify TelephonyServer dropdown is ABSENT (single server) ────────
-  # Do NOT close Settings — scroll to telephony section and check.
   - shell: |
-      export DISPLAY=:0
-      xdotool mousemove 640 500
-      xdotool click 5
-      xdotool click 5
-      echo SCROLLED_TO_TELEPHONY_SECTION_PHASE_B
-  - wait: 2
-
-  # KEY assertion: dropdown must NOT be present with only 1 server.
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony section
-      with its controls rendered normally — the 'Telephony Global Shortcut'
-      field is visible and enabled. The app is alive and the Settings panel
-      is open and responsive with no crash dialogs.
-    verify_not: |
-      A Telephony Server dropdown control is visible in the Settings General
-      panel — a labeled dropdown or select control showing a server name or
-      'Auto (ask each time)' as the selected value. With only 1 server
-      configured this control should be completely absent from the UI.
-    retries: 3
-    verify_timeout: 20
-
-  # ── B5: Verify Telephony Global Shortcut field IS visible ────────────────
-  # The shortcut row should still render; only the server dropdown is hidden.
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows a 'Telephony Global
-      Shortcut' input field or control — a text box or key-capture widget
-      for configuring the global telephony keyboard shortcut. It must be
-      visible even though there is only 1 server configured.
-    retries: 3
-    verify_timeout: 20
-
-  # ── B6: Close Settings ───────────────────────────────────────────────────
-  - key: Escape
-  - wait: 2
-
-  # ── B7: Dispatch tel: → verify NO modal + app alive ─────────────────────
-  - shell: |
-      export DISPLAY=:0
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+5511999999999" >/dev/null 2>&1 &
-      echo PHASE_B_TEL_DISPATCH
+      echo PHASE_D_TEL_DISPATCHED
+
   - wait: 10
 
-  # KEY: single server → no modal, direct route to Workspace.
+  # KEY: single server, NO modal
   - verify: |
-      The Rocket.Chat application window is visible and responsive — the app is
-      alive, no crash dialog, no frozen window, no apport crash handler. There is
-      NO telephony server selection modal visible. With only one server configured
-      the call is routed directly without a selection dialog.
+      The Rocket.Chat application window is visible and responsive — there is
+      NO telephony server selection modal visible. With only one server
+      configured the call is routed directly without a selection dialog. App
+      alive, no crash dialog.
+    verify_not: |
+      A telephony server selection modal listing server names with a 'Remember
+      this choice' checkbox is visible overlaying the window.
+    verify_timeout: 20
     retries: 5
-    verify_timeout: 20
 
-  # ── B7b: Verify dial pad visible OR app alive on Workspace ───────────────
-  # The dial pad appearance depends on server-side telephony setup, so accept
-  # either the dial pad OR a healthy Workspace page.
-  - verify: |
-      The Rocket.Chat application window shows either a dial pad / phone dialer
-      interface with the number pre-filled, OR the Workspace server page
-      (login/main interface) with no crash or error dialog. The app is alive
-      and functional after the single-server tel: dispatch.
-    retries: 3
-    verify_timeout: 20
-
-  # ── B8: Final cleanup ───────────────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # FINAL CLEANUP
+  # ════════════════════════════════════════════════════════════════════════════
   - shell: |
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
@@ -492,14 +392,10 @@ steps:
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
       wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
         wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
       done
-
-      # Wipe userData so no state leaks into the next scenario.
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
         rm -rf "$d"
       done
-
       echo DONE

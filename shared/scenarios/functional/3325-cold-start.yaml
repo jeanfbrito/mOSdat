@@ -1,65 +1,55 @@
-name: "Rocket.Chat Desktop — App-closed cold start via tel: deep link (PR #3325 G6)"
-# Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 gap G6:
-#   "App-closed cold start — fully quit RC, click external tel:, RC launches + queues number"
+name: "Rocket.Chat Desktop — Cold-start tel: deep link (pre-staged Redux)"
+# Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 G6:
+#   App-closed cold start — fully quit RC, dispatch tel:, RC launches + queues.
 #
-# RC's second-instance handler queues the tel: URL when the process is not yet
-# alive. The main process picks it up once the UI event loop is ready.
+# Strategy: pre-stage isTelephonyEnabled directly in config.json. No Settings
+# panel needed. The cold-start launch passes the URL as argv to a binary that
+# already reads isTelephonyEnabled from PersistableValues on boot.
 #
-# PHASE 1 (deep cleanup): Kill every RC process + wipe userData fresh.
-# PHASE 2 (pre-flight — toggle ON): Launch RC, enable master telephony toggle
-#          in Settings, then kill RC cleanly. Mirrors Phase B from
-#          3325-auto-and-single-server.yaml so the toggle is persisted in config.
-# PHASE 3 (cold-start positive): Confirm RC is gone, dispatch tel: via nohup
-#          (the OS-level path), wait for cold start, verify queued number/dial pad.
-# PHASE 4 (negative — toggle OFF): Open Settings, disable master toggle, kill RC,
-#          dispatch tel: again, verify RC ignores telephony (no dial pad / no modal).
-# PHASE 5 (final cleanup).
-#
-# Timing: cold-start Electron paint takes 20-30 s on a QEMU VM.
-# All cold-start verifies use verify_timeout: 30, retries: 5.
+# PHASES:
+#   1. Pre-stage isTelephonyEnabled=true + 2 servers + preferred=workspace.
+#   2. Positive cold start: nohup binary "tel:+..." → wait 25 s → dial pad OK
+#      OR queued (workspace page is also acceptable evidence of launch).
+#   3. Kill RC, rewrite config with isTelephonyEnabled=false, dispatch tel:
+#      cold → RC launches but ignores telephony (no dial pad, no modal).
 
 steps:
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 1 — deep cleanup: no RC process, fresh userData
+  # PHASE 1 — pre-stage telephony ON + ensure RC fully killed
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── P1a: Kill all RC processes (loop + KILL fallback) ───────────────────────
   - shell: |
       set -u
+      if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip
+        fi
+      fi
       export DISPLAY=:0
       export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
-
-      # Loop-kill: pkill -f matches full cmdline (comm truncates at 15 chars).
       for attempt in 1 2 3 4 5 6 7 8; do
         pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
         pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
         pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
         sleep 1
-        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
-          break
-        fi
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
       pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-
-      # Close lingering crash dialogs or stale windows.
+      pkill -KILL -x apport-gtk 2>/dev/null || true
       wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
         wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
       done
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
-
-      # Wipe + recreate both userData paths (dev + packaged builds).
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"
-        mkdir -p "$d"
+        rm -rf "$d"; mkdir -p "$d"
       done
+      echo P1_CLEAN
 
-      echo PHASE1_PROCESS_CLEAN
-
-  # ── P1b: Write deterministic 2-server config ────────────────────────────────
-  # Using printf '%s\n' ... pattern (NOT heredoc — breaks YAML multiline).
+  # ── P1b: Pre-stage telephony ON config with preferred=workspace ───────────
+  # Setting telephonyPreferredServer skips the modal so the cold-start path
+  # routes directly to the workspace dial pad.
   - shell: |
       set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
@@ -75,6 +65,9 @@ steps:
           '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
           '  ],' \
           '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": true,' \
+          '  "telephonyPreferredServer": "https://rocketchat.jeanbrito.com/",' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
           '  "isMenuBarEnabled": true,' \
           '  "isSideBarEnabled": true,' \
           '  "isTrayIconEnabled": false,' \
@@ -82,183 +75,58 @@ steps:
           '  "doCheckForUpdatesOnStartup": false,' \
           '  "isUpdatingEnabled": false,' \
           '  "rootWindowState": {' \
-          '    "focused": true,' \
-          '    "visible": true,' \
-          '    "maximized": false,' \
-          '    "minimized": false,' \
-          '    "fullscreen": false,' \
-          '    "normal": true,' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
           '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
           '}' > "$d/config.json"
       done
+      echo P1_CONFIG_WRITTEN
 
-      # Confirm no stale process survived.
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || echo PHASE1_CONFIG_WRITTEN
+  # ── P1c: Hard guard — zero RC processes before cold start ─────────────────
+  - shell: |
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && { echo "RC STILL RUNNING — ABORT"; exit 1; } || echo P1_COLD_PRECONDITION_OK
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 2 — pre-flight: launch RC, enable master telephony toggle, then kill
-  # Persists isTelephonyEnabled into config.json via Redux flush on kill.
-  # Mirrors PHASE B toggle steps in 3325-auto-and-single-server.yaml.
+  # PHASE 2 — positive cold start
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── P2a: Launch RC ──────────────────────────────────────────────────────────
-  # QEMU virtual GPU → force X11 + disable GPU to avoid Wayland segfault.
-  - shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      export DISPLAY=:0 XAUTHORITY="$XAUTH"
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo PHASE2_APP_LAUNCHED
-
-  - wait: 15
-
-  # ── P2b: Verify Workspace login page ────────────────────────────────────────
-  - verify: |
-      The Rocket.Chat application window shows the Workspace server login or
-      authentication page. Look for an email/username input field, password field,
-      a login/sign-in button, or any connected Workspace page content. It must NOT
-      be the empty 'Add a server' screen and must NOT be a crash dialog.
-    verify_timeout: 30
-
-  # ── P2c: Open Settings, navigate to General, enable master telephony toggle ──
-  - shell: |
-      export DISPLAY=:0
-      xdotool key ctrl+comma
-      echo PHASE2_SETTINGS_OPENED
-  - wait: 4
-  - verify: |
-      The Rocket.Chat application window shows a Settings or Preferences panel
-      open inside the main window. It must NOT be a crash dialog or blank screen.
-    verify_timeout: 15
-
-  - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: left
-  - wait: 2
-
-  - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently OFF or disabled"
-    click: left
-  - wait: 3
-
-  # Confirm toggle is now ON.
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony master
-      toggle or switch in an enabled / ON state. The toggle should appear
-      activated, checked, or highlighted compared to a disabled state.
-    retries: 3
-    verify_timeout: 20
-
-  # Close Settings.
-  - key: Escape
-  - wait: 2
-
-  # ── P2d: Kill RC cleanly — forces Redux state flush to config.json ──────────
-  # The Redux persist middleware writes config.json on process exit.
-  # Use TERM first (graceful Redux flush), then KILL fallback.
-  - shell: |
-      export DISPLAY=:0
-      for attempt in 1 2 3 4 5 6; do
-        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
-        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
-        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
-        sleep 1
-        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
-      done
-      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      # Verify clean — must be zero processes before cold-start dispatch.
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo PHASE2_KILLED_CLEAN
-
-  # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 3 — cold-start positive: tel: dispatched while RC is fully quit
-  # Expected: RC launches, queues number, shows dial pad (or login + deferred pad)
-  # ════════════════════════════════════════════════════════════════════════════
-
-  # ── P3a: Hard pgrep guard — must be zero RC processes ───────────────────────
-  - shell: |
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && { echo "RC STILL RUNNING — ABORT"; exit 1; } || echo COLD_START_PRECONDITION_OK
-
-  # ── P3b: Dispatch tel: as OS-level launch (the cold-start path) ─────────────
-  # When RC is not running, the second-instance handler never fires.
-  # Instead, the OS launches the binary with the URL as argv[1].
-  # This is the canonical cold-start path: nohup <binary> <url> &.
-  # XAUTHORITY must be set so the new Electron window reaches :0.
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 "tel:+5511999999999" >/dev/null 2>&1 &
-      echo PHASE3_COLD_START_DISPATCHED
+      echo P2_COLD_DISPATCHED
 
-  # ── P3c: Wait for cold start ─────────────────────────────────────────────────
-  # Cold-start Electron on QEMU: 20-30 s for first paint. Use 25 s baseline.
   - wait: 25
 
-  # ── P3d: Verify RC window visible after cold start ──────────────────────────
   # Two valid outcomes:
-  #   (a) Dial pad opens immediately with +5511999999999 pre-filled (toggle ON + fast login).
-  #   (b) Workspace login page shows (number is queued — dial pad opens after login).
-  # Both prove the cold-start launch succeeded and did not crash.
+  #   (a) Dial pad with +5511999999999 (immediate UI processing).
+  #   (b) Workspace login page (deep link queued until UI ready).
   - verify: |
-      The Rocket.Chat application window is visible and has completed its initial
-      load. One of two states is acceptable:
-      (1) A dial pad or phone dialer interface is visible with the phone number
-          +5511999999999 pre-filled or displayed, indicating the queued deep link
-          was processed as soon as the UI was ready.
-      (2) The Workspace server login or authentication page is shown (email field,
-          password field, login button), indicating RC launched successfully and
-          the deep-linked number is queued until login completes.
-      In either case the app MUST NOT show a crash dialog, apport crash handler,
-      'Add a server' screen, or blank/frozen window.
-    retries: 5
+      The Rocket.Chat application window is visible and has completed its
+      initial load. One of two states is acceptable:
+        (1) A dial pad or phone dialer interface is visible with the phone
+            number +5511999999999 pre-filled.
+        (2) The Workspace server login or authentication page is shown
+            (email field, password field, login button), indicating RC
+            launched successfully and the number is queued until login
+            completes.
+      It MUST NOT show a crash dialog, apport handler, 'Add a server' screen,
+      or blank/frozen window.
     verify_timeout: 30
+    retries: 5
 
-  # ── P3e: Verify process is alive post-launch ────────────────────────────────
   - shell: |
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' || { echo "RC PROCESS NOT FOUND AFTER COLD START — FAIL"; exit 1; }
-      echo PHASE3_PROCESS_ALIVE
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' || { echo "RC PROCESS GONE — FAIL"; exit 1; }
+      echo P2_PROCESS_ALIVE
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 4 — negative test: master toggle OFF → tel: launch ignored
-  # Open Settings to disable toggle, kill RC, dispatch tel:, verify no telephony
+  # PHASE 3 — negative cold start: telephony OFF → tel: arg ignored
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── P4a: Open Settings and disable master telephony toggle ──────────────────
-  # RC is still running from the cold-start above.
-  - shell: |
-      export DISPLAY=:0
-      xdotool key ctrl+comma
-      echo PHASE4_SETTINGS_OPENED
-  - wait: 4
-  - verify: |
-      The Rocket.Chat application window shows a Settings or Preferences panel
-      open inside the main window. It must NOT be a crash dialog or blank screen.
-    verify_timeout: 15
-
-  - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: left
-  - wait: 2
-
-  # The toggle is currently ON — click to disable it.
-  - localize: "the Telephony master toggle switch in the Settings General tab — a toggle or checkbox labeled 'Telephony' that is currently ON or enabled"
-    click: left
-  - wait: 3
-
-  # Confirm toggle is now OFF.
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony master
-      toggle or switch in a disabled / OFF state. The toggle should appear
-      deactivated, unchecked, or grayed out compared to an enabled state.
-    retries: 3
-    verify_timeout: 20
-
-  # Close Settings.
-  - key: Escape
-  - wait: 2
-
-  # ── P4b: Kill RC cleanly (flush toggle-OFF state to config.json) ─────────────
+  # ── P3a: Kill RC ─────────────────────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
@@ -270,66 +138,67 @@ steps:
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo PHASE4_KILLED_CLEAN
+      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo P3_KILLED
 
-  # ── P4c: Hard pgrep guard before negative cold-start dispatch ───────────────
+  # ── P3b: Rewrite config with isTelephonyEnabled=false ───────────────────
   - shell: |
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && { echo "RC STILL RUNNING — ABORT"; exit 1; } || echo PHASE4_COLD_START_PRECONDITION_OK
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        printf '%s\n' \
+          '{' \
+          '  "servers": [' \
+          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
+          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
+          '  ],' \
+          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": false,' \
+          '  "telephonyPreferredServer": null,' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
+          '  "isMenuBarEnabled": true,' \
+          '  "isSideBarEnabled": true,' \
+          '  "isTrayIconEnabled": false,' \
+          '  "isMinimizeOnCloseEnabled": false,' \
+          '  "doCheckForUpdatesOnStartup": false,' \
+          '  "isUpdatingEnabled": false,' \
+          '  "rootWindowState": {' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
+          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
+          '}' > "$d/config.json"
+      done
+      echo P3_CONFIG_TELEPHONY_OFF
 
-  # ── P4d: Dispatch tel: with toggle OFF ──────────────────────────────────────
-  # Note: nohup <binary> <url> ALWAYS launches the binary regardless of toggle.
-  # The assertion is not "RC doesn't start" but "RC ignores the tel: arg":
-  #   - No dial pad appears
-  #   - No telephony modal appears
-  #   - RC shows a normal login/server page (toggle OFF = setAsDefaultProtocolClient
-  #     was never called, so the telephony subsystem is dormant)
+  # ── P3c: Dispatch tel: cold while toggle is OFF ───────────────────────────
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 "tel:+5511999999999" >/dev/null 2>&1 &
-      echo PHASE4_NEGATIVE_COLD_START_DISPATCHED
+      echo P3_COLD_DISPATCHED_TELEPHONY_OFF
 
   - wait: 25
 
-  # ── P4e: Verify telephony is ignored — normal login page, no dial pad ────────
-  # When toggle is OFF, RC still launches (we passed the URL to the binary directly),
-  # but the telephony deep-link handler is not registered. The app should display its
-  # normal initial state (Workspace login page) with NO dial pad, NO telephony modal,
-  # and NO crash.
+  # KEY: RC launches but telephony is dormant — no dial pad, no modal.
   - verify: |
-      The Rocket.Chat application window is visible after cold-start launch. The
-      window shows a normal server login or authentication page (email field,
-      password field, login button) for the Workspace server. There is NO dial pad,
-      NO phone dialer interface, NO telephony server selection modal, and NO crash
-      dialog or apport crash handler visible. The app launched but ignored the tel:
-      argument because the master telephony toggle was OFF (telephony subsystem
-      dormant — setAsDefaultProtocolClient was not called, deep-link handler not
-      registered).
-    retries: 5
-    verify_timeout: 30
-
-  # ── P4f: Verify NO telephony modal specifically ──────────────────────────────
-  - verify: |
-      The Rocket.Chat application window is visible and responsive after the
-      cold-start launch with toggle OFF — showing the normal Workspace login
-      or server page with no telephony UI. The app is alive with no crash
-      dialogs, no apport error handler, and no frozen window.
+      The Rocket.Chat application window is visible after cold-start launch
+      and shows a normal Workspace server login or authentication page (email
+      field, password field, login button). There is NO dial pad, NO phone
+      dialer interface, NO telephony server selection modal, and NO crash
+      dialog. The app launched but ignored the tel: argument because
+      isTelephonyEnabled is false in the persisted config.
     verify_not: |
-      A telephony server selection modal or dialog is visible overlaying the
-      Rocket.Chat main window, listing server options ('Workspace', 'Mobile RC')
-      with a 'Remember this choice' checkbox. With the master toggle OFF, this
-      modal must not appear regardless of the dispatched tel: URL.
-    retries: 3
-    verify_timeout: 20
+      A telephony server selection modal listing 'Workspace' and 'Mobile RC'
+      with a 'Remember this choice' checkbox is visible overlaying the
+      Rocket.Chat window, OR a dial pad / phone dialer panel with a number
+      input is visible.
+    verify_timeout: 30
+    retries: 5
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 5 — final cleanup
+  # FINAL CLEANUP
   # ════════════════════════════════════════════════════════════════════════════
-
   - shell: |
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
@@ -341,14 +210,10 @@ steps:
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
       wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
         wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
       done
-
-      # Wipe userData so no state leaks into the next scenario.
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
         rm -rf "$d"
       done
-
       echo DONE

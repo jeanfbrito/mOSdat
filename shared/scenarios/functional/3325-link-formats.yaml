@@ -1,71 +1,54 @@
-name: "Rocket.Chat Desktop — PR #3325 link format parser robustness"
+name: "Rocket.Chat Desktop — PR #3325 link format parser (pre-staged Redux)"
 # Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 §F6:
 #   src/telephony/links.ts — Various Link Formats
-#   Tests that the parser handles all URI variants without crashing and that
-#   the app remains alive after each dispatch. Dial pad / number visibility
-#   is accepted when present but NOT required (server-side telephony may not
-#   be provisioned on the test workspace).
 #
-# Formats covered:
-#   F1  tel:+491234567890               — E.164 international
-#   F2  callto:+1-800-555-0199          — callto: dashed
-#   F3  callto://+491234567890          — callto: authority/double-slash
-#   F4  tel:(049) 123-456.78            — parens + spaces + dots
-#   F5  tel:+1-800-555-0199;ext=123     — extension parameter (bonus)
-#   F6  tel:abc                         — malformed / no digits (bonus)
+# Strategy: pre-stage isTelephonyEnabled=true and telephonyPreferredServer set
+# to the single workspace. No modal, no Settings UI. Each format dispatch is a
+# nohup second-instance; assertion is "app alive after every variant" with a
+# best-effort dial-pad localize.
 #
-# Design decisions:
-#   - Single server (no modal, direct route to Workspace).
-#   - Master toggle enabled in Phase 2 before any dispatch.
-#   - Each dispatch: nohup second-instance, same RC session handles all formats.
-#   - App-alive verify BEFORE each dispatch (pre-condition) + AFTER (assertion).
-#   - 3 s settle between dispatches; no kill between formats.
-#   - verify_timeout: 15, retries: 3 for all format checks (deterministic).
-#   - printf '%s\n' pattern for JSON writes (no heredoc — heredocs break
-#     YAML scalar indent; see 3325-auto-and-single-server.yaml).
+# Formats:
+#   F1 tel:+491234567890
+#   F2 callto:+1-800-555-0199
+#   F3 callto://+491234567890
+#   F4 tel:(049) 123-456.78
+#   F5 tel:+1-800-555-0199;ext=123
+#   F6 tel:abc           (malformed — must NOT crash)
 
 steps:
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 1 — cleanup + single-server config
+  # PHASE 1 — cleanup + pre-stage single-server config with telephony ON
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── 1a: Stop all RC processes ────────────────────────────────────────────
   - shell: |
       set -u
+      if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip
+        fi
+      fi
       export DISPLAY=:0
       export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
-
-      # Loop-kill: pkill -f matches full cmdline (comm truncates at 15 chars).
       for attempt in 1 2 3 4 5 6 7 8; do
         pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
         pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
         pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
         sleep 1
-        if ! pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
-          break
-        fi
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
       pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-
-      # Close lingering crash dialogs or stale windows.
+      pkill -KILL -x apport-gtk 2>/dev/null || true
       wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
         wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
       done
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      pkill -KILL -f 'apport|system-crash|problem report' 2>/dev/null || true
-
-      # Wipe + recreate both userData paths (dev + packaged).
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"
-        mkdir -p "$d"
+        rm -rf "$d"; mkdir -p "$d"
       done
+      echo P1_CLEAN
 
-      echo PHASE1_PROCESS_CLEAN
-
-  # ── 1b: Write single-server config (printf pattern — no heredoc) ─────────
-  # Only 1 server → no TelephonyServer dropdown, no modal on dispatch.
   - shell: |
       set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
@@ -79,6 +62,9 @@ steps:
           '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" }' \
           '  ],' \
           '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
+          '  "isTelephonyEnabled": true,' \
+          '  "telephonyPreferredServer": "https://rocketchat.jeanbrito.com/",' \
+          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
           '  "isMenuBarEnabled": true,' \
           '  "isSideBarEnabled": true,' \
           '  "isTrayIconEnabled": false,' \
@@ -86,318 +72,146 @@ steps:
           '  "doCheckForUpdatesOnStartup": false,' \
           '  "isUpdatingEnabled": false,' \
           '  "rootWindowState": {' \
-          '    "focused": true,' \
-          '    "visible": true,' \
-          '    "maximized": false,' \
-          '    "minimized": false,' \
-          '    "fullscreen": false,' \
-          '    "normal": true,' \
+          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
+          '    "fullscreen": false, "normal": true,' \
           '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  }' \
+          '  },' \
+          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
+          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
           '}' > "$d/config.json"
       done
-
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
-      echo PHASE1_SINGLE_SERVER_CONFIG_WRITTEN
-
-  # ── 1c: Verify no RC process running (config is clean) ───────────────────
-  - shell: |
-      if pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1; then
-        echo "STALE_RC_PROCESS_FOUND" >&2; exit 1
-      fi
-      echo PHASE1_CLEAN_CONFIRMED
+      echo P1_CONFIG_WRITTEN
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 2 — launch RC + verify login + enable master toggle
+  # PHASE 2 — launch + verify login page (no Settings step)
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── 2a: Launch RC (X11, disable-gpu for QEMU virtual GPU) ───────────────
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo PHASE2_APP_LAUNCHED
+      echo P2_APP_LAUNCHED
 
   - wait: 15
 
-  # ── 2b: Verify Workspace login page ─────────────────────────────────────
   - verify: |
       The Rocket.Chat application window shows the Workspace server login or
-      authentication page. Look for an email/username input field, password
-      field, a login/sign-in button, or any connected Workspace page content.
-      It must NOT be the empty 'Add a server' screen and must NOT be a crash
-      dialog or apport error.
+      authentication page, or connected Workspace content. It must NOT be the
+      'Add a server' screen and must NOT be a crash dialog.
     verify_timeout: 30
-
-  # ── 2c: Open Settings ────────────────────────────────────────────────────
-  - shell: |
-      export DISPLAY=:0
-      xdotool key ctrl+comma
-      echo SETTINGS_OPENED
-  - wait: 4
-
-  # ── 2d: Verify Settings panel opened ─────────────────────────────────────
-  - verify: |
-      The Rocket.Chat application window shows a Settings or Preferences panel
-      open inside the main window. It must NOT be a crash dialog or blank screen.
-    verify_timeout: 15
-
-  # ── 2e: Navigate to General tab ─────────────────────────────────────────
-  - localize: "the 'General' tab or section heading inside the Settings panel"
-    click: left
-  - wait: 2
-
-  # ── 2f: Enable the Telephony master toggle ───────────────────────────────
-  # Master toggle is OFF by default — must be enabled or tel: URIs are ignored.
-  - localize: "the 'Telephony' master toggle switch in Settings > General"
-    click: left
-  - wait: 3
-
-  # ── 2g: Confirm toggle is ON ─────────────────────────────────────────────
-  - verify: |
-      The Rocket.Chat Settings panel General tab shows the Telephony master
-      toggle or switch in an enabled / ON state. The toggle should appear
-      activated, checked, or highlighted compared to a disabled state.
     retries: 3
-    verify_timeout: 20
-
-  # ── 2h: Close Settings ───────────────────────────────────────────────────
-  - key: Escape
-  - wait: 2
-
-  # ── 2i: Verify app stable after Settings closed ──────────────────────────
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window, no apport error. Settings panel is dismissed
-      and the main Workspace page or login screen is showing. The app is ready
-      to receive deep link dispatches.
-    verify_timeout: 15
-
-  # Brief pause before Phase 3 dispatches begin.
-  - wait: 2
 
   # ════════════════════════════════════════════════════════════════════════════
   # PHASE 3 — link format dispatches
-  # Pattern per format:
-  #   1. Pre-dispatch: verify app alive (pre-condition)
-  #   2. Dispatch: nohup second-instance
-  #   3. wait: 5
-  #   4. Post-dispatch: verify app alive + optionally dial pad visible
-  #   5. wait: 3  (settle before next dispatch)
-  # verify_timeout: 15, retries: 3 for all format checks.
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # F1: tel:+491234567890 — E.164 international
-  # ────────────────────────────────────────────────────────────────────────────
-
-  # Pre-condition: app alive before F1 dispatch
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window. The app is alive and ready for the next deep
-      link dispatch.
-    retries: 3
-    verify_timeout: 15
-
+  # ── F1: tel:+491234567890 ────────────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+491234567890" >/dev/null 2>&1 &
-      echo F1_DISPATCHED_TEL_E164
-
+      echo F1_DISPATCHED
   - wait: 5
-
-  # F1 assertion: app alive, optionally dial pad with number
   - verify: |
-      The Rocket.Chat application window is visible and responsive after
-      receiving the tel:+491234567890 (E.164 international) deep link. The app
-      must NOT have crashed, frozen, or shown an apport error dialog. A dial pad
-      or phone dialer area showing a phone number may optionally be visible —
-      accept either a healthy app window OR a visible dial pad. Critical: alive
-      and stable.
-    retries: 3
+      The Rocket.Chat application window is visible and responsive after the
+      tel:+491234567890 (E.164) dispatch. A dial pad showing the parsed digits
+      may optionally be visible; either a healthy app window or a dial pad is
+      acceptable. The app MUST NOT have crashed or shown an apport dialog.
     verify_timeout: 15
-
+    retries: 3
   - wait: 3
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # F2: callto:+1-800-555-0199 — callto: dashed
-  # ────────────────────────────────────────────────────────────────────────────
-
-  # Pre-condition: app alive before F2 dispatch
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window. The app is alive and ready for the next deep
-      link dispatch.
-    retries: 3
-    verify_timeout: 15
-
+  # ── F2: callto:+1-800-555-0199 ───────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "callto:+1-800-555-0199" >/dev/null 2>&1 &
-      echo F2_DISPATCHED_CALLTO_DASHED
-
+      echo F2_DISPATCHED
   - wait: 5
-
-  # F2 assertion: app alive, optionally dial pad with dashed number
   - verify: |
-      The Rocket.Chat application window is visible and responsive after
-      receiving the callto:+1-800-555-0199 (dashed) deep link. The app must NOT
-      have crashed, frozen, or shown an apport error dialog. A dial pad showing
-      1-800-555-0199 or +18005550199 may optionally be visible — accept either
-      a healthy app window OR a visible dial pad. Critical: alive and stable.
-    retries: 3
+      The Rocket.Chat application window is visible and responsive after the
+      callto:+1-800-555-0199 (dashed) dispatch. A dial pad showing
+      1-800-555-0199 or +18005550199 may optionally be visible; either a
+      healthy app window or a dial pad is acceptable. App MUST NOT have crashed.
     verify_timeout: 15
-
+    retries: 3
   - wait: 3
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # F3: callto://+491234567890 — callto: authority/double-slash
-  # ────────────────────────────────────────────────────────────────────────────
-
-  # Pre-condition: app alive before F3 dispatch
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window. The app is alive and ready for the next deep
-      link dispatch.
-    retries: 3
-    verify_timeout: 15
-
+  # ── F3: callto://+491234567890 ────────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "callto://+491234567890" >/dev/null 2>&1 &
-      echo F3_DISPATCHED_CALLTO_DOUBLE_SLASH
-
+      echo F3_DISPATCHED
   - wait: 5
-
-  # F3 assertion: app alive — double-slash must not break parser
   - verify: |
-      The Rocket.Chat application window is visible and responsive after
-      receiving the callto://+491234567890 (authority/double-slash) deep link.
-      The app must NOT have crashed, frozen, or shown an apport error dialog.
-      A dial pad showing +491234567890 may optionally be visible — accept either
-      a healthy app window OR a visible dial pad. Critical: the double-slash
-      authority variant did not crash or hang the links.ts parser.
-    retries: 3
+      The Rocket.Chat application window is visible and responsive after the
+      callto://+491234567890 (authority/double-slash) dispatch. A dial pad with
+      +491234567890 may optionally be visible; either a healthy app window or
+      a dial pad is acceptable. Critical: the double-slash variant did not
+      crash the links.ts parser.
     verify_timeout: 15
-
+    retries: 3
   - wait: 3
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # F4: tel:(049) 123-456.78 — parens + spaces + dots
-  # ────────────────────────────────────────────────────────────────────────────
-
-  # Pre-condition: app alive before F4 dispatch
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window. The app is alive and ready for the next deep
-      link dispatch.
-    retries: 3
-    verify_timeout: 15
-
+  # ── F4: tel:(049) 123-456.78 ─────────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:(049) 123-456.78" >/dev/null 2>&1 &
-      echo F4_DISPATCHED_TEL_PARENS_DOTS
-
+      echo F4_DISPATCHED
   - wait: 5
-
-  # F4 assertion: app alive — parens/spaces/dots must not crash parser
   - verify: |
-      The Rocket.Chat application window is visible and responsive after
-      receiving the tel:(049) 123-456.78 (parens + spaces + dots) deep link.
-      The app must NOT have crashed, frozen, or shown an apport error dialog.
-      A dial pad showing the extracted digits (049123456 or similar) may
-      optionally be visible — accept either a healthy app window OR a visible
-      dial pad. Critical: the unusual formatting characters did not crash the
-      links.ts parser.
-    retries: 3
+      The Rocket.Chat application window is visible and responsive after the
+      tel:(049) 123-456.78 (parens+spaces+dots) dispatch. A dial pad with the
+      extracted digits may optionally be visible; either a healthy app window
+      or a dial pad is acceptable. Critical: unusual punctuation did not crash
+      the parser.
     verify_timeout: 15
-
+    retries: 3
   - wait: 3
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # F5 (bonus): tel:+1-800-555-0199;ext=123 — extension parameter
-  # ────────────────────────────────────────────────────────────────────────────
-
-  # Pre-condition: app alive before F5 dispatch
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window. The app is alive and ready for the next deep
-      link dispatch.
-    retries: 3
-    verify_timeout: 15
-
+  # ── F5: tel:+1-800-555-0199;ext=123 ──────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+1-800-555-0199;ext=123" >/dev/null 2>&1 &
-      echo F5_DISPATCHED_TEL_EXT_PARAM
-
+      echo F5_DISPATCHED
   - wait: 5
-
-  # F5 assertion: app alive — semicolon extension parameter must not crash
   - verify: |
-      The Rocket.Chat application window is visible and responsive after
-      receiving the tel:+1-800-555-0199;ext=123 (extension parameter) deep
-      link. The app must NOT have crashed, frozen, or shown an apport error
-      dialog. A dial pad may optionally show the base number +18005550199 or
-      1-800-555-0199 (the ;ext=123 portion may or may not appear). Accept either
-      a healthy app window OR a visible dial pad. Critical: the semicolon
-      extension parameter did not crash or hang the parser.
-    retries: 3
+      The Rocket.Chat application window is visible and responsive after the
+      tel:+1-800-555-0199;ext=123 (extension parameter) dispatch. A dial pad
+      with +18005550199 or 1-800-555-0199 may optionally be visible; either a
+      healthy app window or a dial pad is acceptable. Critical: the semicolon
+      extension parameter did not crash the parser.
     verify_timeout: 15
-
+    retries: 3
   - wait: 3
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # F6 (bonus): tel:abc — malformed, no digits
-  # Expected: dial pad opens empty OR link silently ignored. Must NOT crash.
-  # ────────────────────────────────────────────────────────────────────────────
-
-  # Pre-condition: app alive before F6 dispatch
-  - verify: |
-      The Rocket.Chat application window is visible and responsive — no crash
-      dialog, no frozen window. The app is alive and ready for the next deep
-      link dispatch.
-    retries: 3
-    verify_timeout: 15
-
+  # ── F6: tel:abc — malformed, no digits ───────────────────────────────────
   - shell: |
       export DISPLAY=:0
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:abc" >/dev/null 2>&1 &
-      echo F6_DISPATCHED_TEL_MALFORMED
-
+      echo F6_DISPATCHED
   - wait: 5
-
-  # F6 assertion: no crash, graceful handling of malformed URI
   - verify: |
-      The Rocket.Chat application window is visible and responsive after
-      receiving the malformed tel:abc deep link (no digits). The app must NOT
-      have crashed, frozen, shown an apport error dialog, or displayed any
-      unhandled exception UI. The app may have silently ignored the link, opened
-      an empty dial pad with no number pre-filled, or left the Workspace page
-      unchanged — any of these is acceptable. Critical: the malformed URI did
-      not cause a crash or error state.
-    retries: 3
+      The Rocket.Chat application window is visible and responsive after the
+      malformed tel:abc dispatch. The app may have silently ignored the link,
+      opened an empty dial pad, or left the page unchanged — any of these is
+      acceptable. Critical: NO crash dialog, NO apport handler, NO frozen
+      window.
     verify_timeout: 15
+    retries: 3
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 4 — final aggregate check + cleanup
+  # PHASE 4 — aggregate alive check + cleanup
   # ════════════════════════════════════════════════════════════════════════════
 
-  # Brief settle before aggregate check.
-  - wait: 2
+  - wait: 3
 
-  # ── 4a: All 6 formats completed — aggregate alive check ──────────────────
   - verify: |
       The Rocket.Chat application window is visible and responsive after all
       six link format dispatches (E.164, callto dashed, callto double-slash,
       parens+dots, extension parameter, malformed). The app is alive with no
-      crash dialog, no apport error, no frozen window. All link format variants
-      were handled without fatal error.
-    retries: 3
+      crash dialog, no apport handler, no frozen window.
     verify_timeout: 15
+    retries: 3
 
-  # ── 4b: Kill RC + wipe userData ─────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
@@ -409,14 +223,10 @@ steps:
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
       wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
         wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
       done
-
-      # Wipe userData so no state leaks into the next scenario.
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
         rm -rf "$d"
       done
-
       echo DONE

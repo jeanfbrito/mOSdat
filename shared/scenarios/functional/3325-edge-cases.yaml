@@ -59,7 +59,7 @@ steps:
             { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },
             { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }
           ],
-          "currentView": { "url": "https://rocketchat.jeanbrito.com/" },
+          "currentView": "https://rocketchat.jeanbrito.com/",
           "isMenuBarEnabled": true,
           "isSideBarEnabled": true,
           "isTrayIconEnabled": false,
