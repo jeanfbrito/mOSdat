@@ -2,14 +2,26 @@
 
 The VncClient is expected to be opened (entered as a context manager) by
 the caller; Screenshotter just forwards `capture()` to it.
+
+When a LatestFrameBus is attached (via attach_bus), capture() returns the
+latest frame from the bus instead of issuing a direct VNC pull.  This
+eliminates contention between the SessionRecorder's capture loop and the
+scenario runner's ad-hoc captures.
 """
 
+import logging
 import time
 import threading
+from typing import Optional, TYPE_CHECKING
 
 from PIL import Image
 
 from ..transport.vnc import VncClient, VncClientError
+
+if TYPE_CHECKING:
+    from ..recording.frame_bus import LatestFrameBus
+
+_log = logging.getLogger(__name__)
 
 
 class ScreenshotError(Exception):
@@ -28,13 +40,51 @@ class Screenshotter:
         self._vnc = vnc
         # VNC recv path is not re-entrant; serialize captures across threads.
         self._capture_lock = threading.Lock()
+        self._bus: Optional["LatestFrameBus"] = None
 
-    def capture(self) -> tuple[Image.Image, tuple[int, int]]:
+    # ------------------------------------------------------------------
+    # Bus wiring (called by SessionRecorder.start / _stop_capture)
+    # ------------------------------------------------------------------
+
+    def attach_bus(self, bus: "LatestFrameBus") -> None:
+        """Bind a LatestFrameBus so capture() reads from it instead of VNC."""
+        self._bus = bus
+
+    def detach_bus(self) -> None:
+        """Unbind the bus; subsequent capture() calls revert to direct VNC."""
+        self._bus = None
+
+    # ------------------------------------------------------------------
+    # Core capture
+    # ------------------------------------------------------------------
+
+    def _capture_vnc_direct(self) -> tuple[Image.Image, tuple[int, int]]:
+        """Issue a direct VNC capture, bypassing the frame bus.
+
+        Used internally by both the bus-consumer fallback path and by
+        SessionRecorder._capture_loop (which is the bus producer and must
+        never read from the bus it writes to).
+        """
         try:
             with self._capture_lock:
                 return self._vnc.capture()
         except VncClientError as e:
             raise ScreenshotError(str(e)) from e
+
+    def capture(self) -> tuple[Image.Image, tuple[int, int]]:
+        bus = self._bus
+        if bus is not None:
+            t0 = time.monotonic()
+            result = bus.get_after(t0, timeout_s=3.0)
+            if result is not None:
+                img, _capture_time = result
+                return img, img.size
+            # Bus timed out — fall through to direct VNC as defensive fallback.
+            _log.debug(
+                "LatestFrameBus.get_after timed out after 3 s; "
+                "falling back to direct VNC capture"
+            )
+        return self._capture_vnc_direct()
 
     def wait_for_stable(
         self,

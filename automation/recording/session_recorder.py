@@ -17,6 +17,8 @@ import xxhash
 
 from PIL import Image
 
+from .frame_bus import LatestFrameBus
+
 
 @dataclass
 class RecordingArtifacts:
@@ -57,6 +59,7 @@ class SessionRecorder:
         self._capture_errors = 0
         self._started_at: Optional[str] = None
         self._ended_at: Optional[str] = None
+        self._bus: Optional[LatestFrameBus] = None
 
     def start(self) -> None:
         if self._running:
@@ -70,6 +73,9 @@ class SessionRecorder:
         self._frame_id = 0
         self._capture_errors = 0
         self._started_at = datetime.now().isoformat()
+        self._bus = LatestFrameBus()
+        if hasattr(self.screenshotter, "attach_bus"):
+            self.screenshotter.attach_bus(self._bus)
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._running = True
         self._thread.start()
@@ -137,6 +143,9 @@ class SessionRecorder:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        if hasattr(self.screenshotter, "detach_bus"):
+            self.screenshotter.detach_bus()
+        self._bus = None
         self._ended_at = datetime.now().isoformat()
         self._running = False
         self._log("recorder stopped")
@@ -150,12 +159,20 @@ class SessionRecorder:
                 continue
             next_tick = now + self.interval
             try:
-                img, _ = self.screenshotter.capture()
+                # Use _capture_vnc_direct when available so the recorder loop
+                # (the bus producer) never reads from the bus it writes to.
+                _do_capture = getattr(
+                    self.screenshotter, "_capture_vnc_direct", self.screenshotter.capture
+                )
+                img, _ = _do_capture()
+                capture_time = time.monotonic()
                 self._frame_id += 1
                 frame_name = f"frame_{self._frame_id:06d}.png"
                 frame_path = self.raw_dir / frame_name
                 img.save(frame_path)
                 self._append_index(frame_name)
+                if self._bus is not None:
+                    self._bus.push(img, capture_time)
             except Exception as exc:
                 self._capture_errors += 1
                 if self._capture_errors == 1 or self._capture_errors % 10 == 0:

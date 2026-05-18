@@ -37,7 +37,7 @@ class ConfirmInvocation:
     emit_html: bool = False
     skip_state_snapshot: bool = False
     record_session: bool = False
-    record_fps: float = 5.0
+    record_fps: float = 30.0
     record_gif: bool = False
     record_keep_raw: bool = False
     repro_command: str = ""                    # the original CLI string for reporter footer

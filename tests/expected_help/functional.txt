@@ -61,9 +61,9 @@ options:
                         testing)
   --no-record-session   Disable VNC frame recording (recording is ON by
                         default)
-  --record-fps FPS      Recorder capture rate request (default: 5.0). Higher
-                        values starve the scenario runner's screenshots —
-                        recorder + runner share the VNC capture lock.
+  --record-fps FPS      Recorder capture rate request (default: 30.0). Runner
+                        reads from the same bus so contention is gone; actual
+                        rate caps at VNC capture latency.
   --record-gif          Also export recording/session.gif (MP4 is always
                         attempted)
   --record-keep-raw     Keep recording/raw frames after export

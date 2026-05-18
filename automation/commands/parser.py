@@ -155,14 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
     # since recording is default-on. Kept hidden so old invocations don't break.
     fn_p.add_argument("--record-session", action="store_true", dest="record_session",
                       help=argparse.SUPPRESS)
-    # Why 5 and not higher? The recorder thread shares Screenshotter._capture_lock
-    # with the scenario runner. Each VNC capture costs ~115 ms today, so >9 FPS
-    # request makes the recorder hold the lock continuously and starves scenario
-    # verify captures (modal screenshots arrive after the popup auto-dismisses).
-    # Don't bump this without first either (a) optimizing VNC capture latency or
-    # (b) giving the scenario runner lock-priority over the recorder.
-    fn_p.add_argument("--record-fps", type=float, default=5.0, metavar="FPS",
-                      help="Recorder capture rate request (default: 5.0). Higher values starve the scenario runner's screenshots — recorder + runner share the VNC capture lock.")
+    # Recorder + runner now share a LatestFrameBus (frame_bus.py). The recorder
+    # is the only VNC producer; the runner consumes the most-recent post-deadline
+    # frame from the bus. Higher recorder FPS no longer starves runner captures.
+    # Actual raw FPS is still bounded by VNC capture latency (~20–50 ms/frame).
+    fn_p.add_argument("--record-fps", type=float, default=30.0, metavar="FPS",
+                      help="Recorder capture rate request (default: 30.0). Runner reads from the same bus so contention is gone; actual rate caps at VNC capture latency.")
     fn_p.add_argument("--record-gif", action="store_true",
                       help="Also export recording/session.gif (MP4 is always attempted)")
     fn_p.add_argument("--record-keep-raw", action="store_true",
@@ -243,8 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Back-compat hidden alias — recording is default-on now.
     confirm_p.add_argument("--record-session", action="store_true", dest="record_session",
                            help=argparse.SUPPRESS)
-    confirm_p.add_argument("--record-fps", type=float, default=5.0, metavar="FPS",
-                           help="Recorder capture rate request (default: 5.0). Higher values starve the scenario runner — see --record-fps in functional subcommand.")
+    confirm_p.add_argument("--record-fps", type=float, default=30.0, metavar="FPS",
+                           help="Recorder capture rate request (default: 30.0). Runner shares the frame bus — see --record-fps in functional subcommand.")
     confirm_p.add_argument("--record-gif", action="store_true",
                            help="Also export recording/session.gif (MP4 is always attempted)")
     confirm_p.add_argument("--record-keep-raw", action="store_true",
