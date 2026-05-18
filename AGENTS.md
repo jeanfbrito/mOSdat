@@ -25,6 +25,12 @@ background_task(agent="explore", prompt="Monitor VM 103 until IP appears...")
 
 ---
 
+## Testing
+
+See `.claude/test-strategy.md` for the scoped-tests-first workflow.
+
+---
+
 ## Project Overview
 
 General-purpose multi-OS Electron/desktop UI testing with VLM verification, scenario authoring, build/deploy automation, preflight/doctor validation, replay, and session recording — targeting Linux and Windows VMs via Proxmox.
