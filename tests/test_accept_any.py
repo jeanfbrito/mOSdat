@@ -117,10 +117,14 @@ def test_example_scenario_validates():
 
 
 def test_global_shortcut_scenario_validates():
-    """3325-global-shortcut.yaml (updated with accept_any) passes schema validation."""
+    """3325-global-shortcut.yaml (uses routines) passes schema validation after loader expansion."""
+    from automation.runners.scenario_loader import load_test_yaml
     path = _PROJ / "shared" / "scenarios" / "functional" / "3325-global-shortcut.yaml"
-    data = yaml.safe_load(path.read_text())
-    ScenarioModel.model_validate(data)
+    # Use load_test_yaml: it expands `routine:` calls before model_validate.
+    # Bare ScenarioModel.model_validate fails on raw `routine:` shorthand
+    # because RoutineStep is not in the step union — routines are an authoring
+    # convenience, not a runtime step type.
+    load_test_yaml(path)
 
 
 # ---------------------------------------------------------------------------

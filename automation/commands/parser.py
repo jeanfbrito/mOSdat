@@ -155,8 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     # since recording is default-on. Kept hidden so old invocations don't break.
     fn_p.add_argument("--record-session", action="store_true", dest="record_session",
                       help=argparse.SUPPRESS)
-    fn_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
-                      help="Recorder capture rate (default: 10.0)")
+    fn_p.add_argument("--record-fps", type=float, default=30.0, metavar="FPS",
+                      help="Recorder capture rate request (default: 30.0). Actual raw FPS is capped by VNC capture latency (~8-9 FPS today); xxh3 dedupe and 1 s hold cap keep MP4 size sane regardless.")
     fn_p.add_argument("--record-gif", action="store_true",
                       help="Also export recording/session.gif (MP4 is always attempted)")
     fn_p.add_argument("--record-keep-raw", action="store_true",
@@ -237,8 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Back-compat hidden alias — recording is default-on now.
     confirm_p.add_argument("--record-session", action="store_true", dest="record_session",
                            help=argparse.SUPPRESS)
-    confirm_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
-                           help="Recorder capture rate (default: 10.0)")
+    confirm_p.add_argument("--record-fps", type=float, default=30.0, metavar="FPS",
+                           help="Recorder capture rate request (default: 30.0). Actual raw FPS is capped by VNC capture latency.")
     confirm_p.add_argument("--record-gif", action="store_true",
                            help="Also export recording/session.gif (MP4 is always attempted)")
     confirm_p.add_argument("--record-keep-raw", action="store_true",

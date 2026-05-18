@@ -61,7 +61,10 @@ options:
                         testing)
   --no-record-session   Disable VNC frame recording (recording is ON by
                         default)
-  --record-fps FPS      Recorder capture rate (default: 10.0)
+  --record-fps FPS      Recorder capture rate request (default: 30.0). Actual
+                        raw FPS is capped by VNC capture latency (~8-9 FPS
+                        today); xxh3 dedupe and 1 s hold cap keep MP4 size
+                        sane regardless.
   --record-gif          Also export recording/session.gif (MP4 is always
                         attempted)
   --record-keep-raw     Keep recording/raw frames after export
