@@ -46,7 +46,6 @@ import pytest
 from automation.commands import build as build_mod
 from automation.commands.build import (
     TARGETS,
-    artifact_is_fresh,
     derive_clone_dir,
     match_artifact,
     parse_verify_symbols,
@@ -237,7 +236,7 @@ def test_artifact_first_picks_latest_matching_comment() -> None:
     comment that contains a .deb link, ignoring older bot comments and
     non-bot comments."""
     pr_data = _load_fixture("pr3325_comments.json")
-    url, created_at = pick_artifact_url(pr_data, ".deb")
+    url = pick_artifact_url(pr_data, ".deb")
 
     # The fixture has two github-actions[bot] comments with .deb links.
     # The later one (2026-05-10T10:30:00Z) has rocketchat-4.14.1-linux-amd64.deb.
@@ -245,22 +244,10 @@ def test_artifact_first_picks_latest_matching_comment() -> None:
         "https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat"
         "/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.deb"
     )
-    assert created_at == "2026-05-10T10:30:00Z"
-
-
-def test_artifact_first_falls_back_when_stale() -> None:
-    """artifact_is_fresh returns False when the artifact comment is older than
-    the PR head commit (beyond the _FRESHNESS_SLACK_S grace window)."""
-    # Artifact built at 09:00, head commit pushed at 10:00 — clearly stale.
-    assert not artifact_is_fresh(
-        comment_created_at="2026-05-10T09:00:00Z",
-        pr_head_committed_date="2026-05-10T10:00:00Z",
-    )
 
 
 def test_artifact_first_falls_back_when_no_comment() -> None:
-    """pick_artifact_url returns (None, None) when no bot comment contains an
-    S3 .deb URL."""
+    """pick_artifact_url returns None when no bot comment contains an S3 .deb URL."""
     pr_data = {
         "comments": [
             {
@@ -276,9 +263,8 @@ def test_artifact_first_falls_back_when_no_comment() -> None:
         ],
         "commits": [{"oid": "abc", "committedDate": "2026-05-10T10:00:00Z"}],
     }
-    url, ts = pick_artifact_url(pr_data, ".deb")
+    url = pick_artifact_url(pr_data, ".deb")
     assert url is None
-    assert ts is None
 
 
 def test_artifact_first_caches_by_sha(tmp_path: Path, monkeypatch) -> None:

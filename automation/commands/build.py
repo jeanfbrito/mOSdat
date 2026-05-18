@@ -279,22 +279,6 @@ _S3_DEB_RE = re.compile(r"https://[^\s)\"']+\.deb")
 # Bot identity used by the GitHub Actions app.
 _BOT_AUTHOR_LOGIN = "github-actions"
 
-# Freshness tolerance: artifact must be at most this many seconds older than
-# the PR head commit.  We allow 60 s of slack so a commit that triggers the
-# build within the same minute is still considered fresh.
-_FRESHNESS_SLACK_S = 60
-
-
-def _parse_iso(ts: str) -> datetime:
-    """Parse an ISO-8601 timestamp to a UTC-aware datetime.
-
-    Handles both ``Z`` suffix and ``+00:00`` offset.
-    """
-    ts = ts.strip()
-    if ts.endswith("Z"):
-        ts = ts[:-1] + "+00:00"
-    return datetime.fromisoformat(ts)
-
 
 def fetch_pr_metadata(pr: int, repo: str) -> dict:
     """Call ``gh pr view`` and return the parsed JSON.
@@ -324,23 +308,21 @@ def fetch_pr_metadata(pr: int, repo: str) -> dict:
 def pick_artifact_url(
     pr_data: dict,
     extension: str = ".deb",
-) -> tuple[Optional[str], Optional[str]]:
-    """Scan PR comments and return ``(url, comment_created_at)`` for the most
-    recent github-actions comment that contains an S3 URL ending in
-    ``extension``.
+) -> Optional[str]:
+    """Scan PR comments and return the URL from the most recent github-actions
+    comment that contains an S3 URL ending in ``extension``.
 
-    Returns ``(None, None)`` when no matching comment is found.
+    Returns ``None`` when no matching comment is found.
 
     Only ``extension == ".deb"`` is actively exercised in v1.
     # TODO: extend regex for .rpm / .AppImage / .exe when those targets land.
     """
     if extension != ".deb":
-        return None, None
+        return None
 
     pattern = _S3_DEB_RE
 
     best_url: Optional[str] = None
-    best_ts: Optional[str] = None
     best_dt: Optional[datetime] = None
 
     for comment in pr_data.get("comments", []):
@@ -362,34 +344,17 @@ def pick_artifact_url(
             continue
 
         try:
-            dt = _parse_iso(created_at)
+            dt = datetime.fromisoformat(
+                created_at.rstrip("Z").replace("Z", "+00:00")
+            )
         except ValueError:
             continue
 
         if best_dt is None or dt > best_dt:
             best_url = matches[0]
-            best_ts = created_at
             best_dt = dt
 
-    return best_url, best_ts
-
-
-def artifact_is_fresh(
-    comment_created_at: str,
-    pr_head_committed_date: str,
-) -> bool:
-    """Return True iff the artifact was built AFTER the PR head commit.
-
-    Allows ``_FRESHNESS_SLACK_S`` seconds of backwards slack so a commit and
-    the bot post that happen within the same minute are still considered fresh.
-    """
-    from datetime import timedelta
-    try:
-        artifact_dt = _parse_iso(comment_created_at)
-        commit_dt = _parse_iso(pr_head_committed_date)
-    except ValueError:
-        return False
-    return artifact_dt >= commit_dt - timedelta(seconds=_FRESHNESS_SLACK_S)
+    return best_url
 
 
 def _artifact_cache_dir(pr: int) -> Path:
@@ -503,6 +468,9 @@ def resolve_artifact(
     if not _gate_check_ci_build_success(pr, repo, head_sha, head_ref):
         return None
 
+    # Gates 1+2 passed — log success before proceeding.
+    _log(f"[artifact-first] Gates 1+2 passed (label present, CI success for HEAD {head_sha[:7]}) — using artifact URL")
+
     # 3. Check cache — skip download if same SHA already present.
     cache_dir = _artifact_cache_dir(pr)
     # Look for any .deb in the cache dir with a matching .sha sidecar.
@@ -514,20 +482,12 @@ def resolve_artifact(
                 return existing
 
     # 4. Scan comments for the S3 URL.
-    url, comment_ts = pick_artifact_url(pr_data, target_ext)
+    url = pick_artifact_url(pr_data, target_ext)
     if url is None:
         _log("[artifact-first] no matching S3 URL found in PR comments; falling back")
         return None
 
-    # 5. Freshness gate (comment-timestamp heuristic as third line of defense).
-    if not artifact_is_fresh(comment_ts, head_date):
-        _log(
-            f"[artifact-first] artifact stale — comment at {comment_ts}, "
-            f"head commit at {head_date}; falling back to local clone+build"
-        )
-        return None
-
-    # 6. Dry-run — just report what would happen.
+    # 5. Dry-run — just report what would happen.
     filename = url.split("/")[-1]
     dest = cache_dir / filename
     if dry_run:
@@ -535,7 +495,7 @@ def resolve_artifact(
         _log(f"[dry-run] would save to: {dest}")
         return dest  # Return a path so deploy dry-run can proceed.
 
-    # 7. Download.
+    # 6. Download.
     cache_dir.mkdir(parents=True, exist_ok=True)
     _log(f"[artifact-first] downloading {url}")
     if shutil.which("aria2c"):
@@ -547,7 +507,7 @@ def resolve_artifact(
         _log(f"[artifact-first] download failed (rc={rc}); falling back")
         return None
 
-    # 8. Verify download integrity.
+    # 7. Verify download integrity.
     if shutil.which("dpkg-deb"):
         vrc, _, verr = _capture(["dpkg-deb", "-I", str(dest)], timeout=30)
         if vrc != 0:
@@ -564,7 +524,7 @@ def resolve_artifact(
             dest.unlink(missing_ok=True)
             return None
 
-    # 9. Write SHA sidecar so next run hits the cache.
+    # 8. Write SHA sidecar so next run hits the cache.
     _sha_sidecar(dest).write_text(head_sha)
     _log(f"[artifact-first] ready — {dest} ({dest.stat().st_size // 1024} KiB)")
     return dest
