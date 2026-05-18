@@ -131,8 +131,12 @@ def expand_call(
     routine = load_routine(name)
     resolved_inputs = _resolve_inputs(routine, call_inputs, parent_vars)
 
-    # Build jinja render env: parent vars + resolved inputs
-    render_vars = {**parent_vars, **{k: str(v) for k, v in resolved_inputs.items()}}
+    # Build jinja render env: parent vars + resolved inputs.
+    # Pass native types (lists/dicts) through unchanged so jinja filters like
+    # `tojson` receive the original value, not its Python repr. Coercing via
+    # str() double-encodes complex inputs and yields shell-broken single-quoted
+    # payloads downstream.
+    render_vars = {**parent_vars, **resolved_inputs}
 
     # Select main steps: check fallbacks first
     main_steps, fallback_used = _select_steps(

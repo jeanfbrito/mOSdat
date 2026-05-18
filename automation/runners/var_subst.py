@@ -77,8 +77,14 @@ def render_steps(steps: list[dict], vars: dict[str, Any]) -> list[dict]:
         # Fallback: regex-based substitution that raises on missing var
         return _render_steps_regex(steps, vars)
 
-    # Cast all var values to str (numbers/bools → string)
-    str_vars = {k: str(v) for k, v in vars.items()}
+    # Cast scalar var values to str so {{ foo }} prints cleanly. Keep
+    # lists/dicts as native types so jinja filters like `tojson` receive
+    # the original structure rather than its Python repr (which would
+    # double-encode with single quotes and break shell parsers downstream).
+    str_vars = {
+        k: v if isinstance(v, (list, dict)) else str(v)
+        for k, v in vars.items()
+    }
 
     env = Environment(undefined=StrictUndefined)
     env.globals.update(str_vars)
