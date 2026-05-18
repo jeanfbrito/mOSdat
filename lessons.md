@@ -29,3 +29,41 @@ These are mosdat-specific patterns; every supported OS needs them addressed in i
 ## Open loops / known limitations
 - **GPU passthrough exclusivity not enforced framework-side.** Multiple parallel mosdat invocations could race on GPU attach. C2 snapshot checkpoints help but don't lock. See task #43 for fix.
 - **Visual regression is opt-in only.** SSIM-diff against reference screenshots not yet integrated. See task #42.
+
+## Routine engine (R1+)
+
+### Routine input serialization (Cost: ~30min diagnostic + 2 retries)
+**What happened**: `launch-rocketchat` routine silently failed on every call. RC process exited shortly after launch, scenario stalled at first verify with `process_not_running`. No clear error in the runner log.
+**Root cause**: `automation/routines/runner.py:135` did `render_vars = {**parent_vars, **{k: str(v) for k, v in resolved_inputs.items()}}`. `str(v)` coerced a list-of-dicts `servers` input to its Python `repr()` (single quotes). Then jinja `{{ servers | tojson }}` JSON-encoded the **string** → `"[{'title': 'Workspace', ...}]"` (double-encoded shell-broken payload). `json.loads` returned a string, downstream `s[0]['url']` raised TypeError, config-writer step exited 1, RC launched without config and died.
+**What solved it**: Pass native types: `render_vars = {**parent_vars, **resolved_inputs}`. Same fix in `automation/runners/var_subst.py:81` — only coerce scalars to str, leave lists/dicts native.
+**Rule**: When routing user values through a Jinja env, NEVER blanket-`str()` complex types. Jinja prints scalars cleanly via `{{ x }}` and handles lists/dicts correctly via filters like `tojson`. Coercion-on-entry breaks filter semantics.
+
+## Test isolation (the 23-failure investigation)
+
+### sys.modules pop without re-import = stub trap (Cost: ~2h triage)
+**What happened**: Full pytest suite reported 23 failures; each file passed in isolation. Tests failed with `AttributeError: module 'PIL.Image' has no attribute 'new'` and `ValueError: cannot determine region size; use 4-item box`.
+**Root cause**: Three-file chain. `tests/test_build_cmd.py` popped every `PIL*` entry at module top. `tests/test_chaos_infra.py` collected next, saw PIL.Image absent, installed a `types.ModuleType("PIL.Image")` stub (with `Image = object`). `tests/test_cursor_motion_integration.py` then bound local `Image` via `from PIL import Image` → STUB. `Image.new` did not exist. Multiple pop+reimport cycles also produced distinct PIL.Image module instances with different `Image` classes → cross-module `isinstance(crop, Image.Image)` returned False inside `composite.paste(...)` → "needs 4-item box".
+**What solved it**:
+1. Stop popping `PIL` from sys.modules in `test_build_cmd / test_doctor / test_inject_config / test_replay / test_x11_preamble`.
+2. Add `_PIL_WAS_REAL` guard to `test_if_visible` so it only stubs PIL when never loaded.
+3. conftest `pytest_collection_finish` targets-re-imports `automation.transport.ssh` + `automation.setup.capability` when stubs are detected.
+4. conftest reorders `test_negative / test_concurrent_safety / test_proxmox_vm / test_build_cmd` LAST.
+**Rule**: NEVER pop a real library module from sys.modules unless immediately re-imported. The hole between pop and re-import is when a sibling installs a destructive stub. Real PIL lives in the venv; it never needs stubbing.
+
+### Discovery: Multiple PIL.Image module instances break isinstance
+**Context**: Even after fixing the stub install, runner_features tests still failed with `paste()` "needs 4-item box".
+**Insight**: `sys.modules.pop("PIL.Image")` then `import PIL.Image` creates a NEW module object — old name-bindings still reference the OLD. Each has its own `Image` class. PIL's paste does `isinstance(im, Image.Image)`; cross-module isinstance is False → fall through to color-fill path → 4-item-box error.
+**Implication**: Module identity is process-global. Pop+reimport patterns create copies; downstream cross-module isinstance silently switches semantics.
+
+### Multiple pytest_collection_modifyitems hooks in conftest: last def wins
+**What happened**: Added a `pytest_collection_modifyitems` hook to reorder files. Hook never fired.
+**Root cause**: conftest.py already had a second `pytest_collection_modifyitems` 200 lines later for `--live` marker skipping. Python module-level: second `def` overrides first by name. pytest only registers the latter.
+**Rule**: One named function per pytest hook per conftest.py. Factor multi-concern logic into helpers; call from a single dispatcher.
+
+## Recording / VNC capture
+
+### Frame-diff filter: max-pixel not mean (Cost: ~45min)
+**What happened**: GIFs recorded by `mosdat functional --record-gif` looked empty. raw=103, filtered=7. Cursor motion frames dropped.
+**Root cause**: `mean_abs_diff` on 64×64 grayscale thumbnails with default threshold 3.0. A cursor moving 1-2 pixels on a 1280×720 frame is sub-pixel on the 64×64 thumb; bilinear blurs to ~0.06 intensity mean — way below threshold.
+**What solved it**: Switch metric to `max_abs_diff` (`ImageStat.Stat(diff).extrema[0][1]`); bump thumb to 256×256 (cursor lands as 3-6px sprite, max diff ~100+); default threshold 1.0 (drop only pixel-identical frames).
+**Rule**: When filtering for "did anything visible change", use MAX or count-of-changed-pixels, not MEAN. Mean averages sparse motion into the noise floor.
