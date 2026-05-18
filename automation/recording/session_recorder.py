@@ -13,7 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from PIL import Image, ImageChops, ImageStat
+import xxhash
+
+from PIL import Image
 
 
 @dataclass
@@ -35,7 +37,6 @@ class SessionRecorder:
         screenshotter,
         recording_dir: Path,
         fps: float = 10.0,
-        diff_threshold: float = 1.0,
         keep_raw: bool = False,
         log_fn: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -47,7 +48,6 @@ class SessionRecorder:
         self.manifest_path = self.recording_dir / "manifest.json"
         self.fps = max(1.0, float(fps))
         self.interval = 1.0 / self.fps
-        self.diff_threshold = float(diff_threshold)
         self.keep_raw = keep_raw
         self._log = log_fn or (lambda _msg: None)
         self._stop = threading.Event()
@@ -169,32 +169,6 @@ class SessionRecorder:
         with self.index_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
-    # Thumbnail size for diff comparison. 64x64 was too aggressive — a 1-2 px
-    # cursor motion on a 1280x720 frame blurs to sub-1-intensity max-diff under
-    # bilinear downsample and gets dropped as "no change". 256x256 preserves
-    # enough detail that any cursor move registers, while keeping per-frame
-    # diff cheap (~65k pixels vs ~4k).
-    _THUMB_SIZE = (256, 256)
-
-    @staticmethod
-    def _thumb(image_path: Path) -> Image.Image:
-        with Image.open(image_path) as img:
-            return img.convert("L").resize(
-                SessionRecorder._THUMB_SIZE, Image.Resampling.BILINEAR
-            )
-
-    @staticmethod
-    def _max_abs_diff(a: Image.Image, b: Image.Image) -> float:
-        # Max absolute per-pixel intensity diff on a 64x64 grayscale thumbnail.
-        # Mean would average a moving cursor (a handful of pixels out of 4096)
-        # down into the JPEG/compression noise floor, dropping motion-only
-        # frames. Max keeps any frame where at least one pixel differs
-        # meaningfully — exactly what "frame has visible change" means.
-        if a.size != b.size or a.mode != b.mode:
-            return 255.0
-        diff = ImageChops.difference(a, b)
-        return float(ImageStat.Stat(diff).extrema[0][1])
-
     def _filter_and_copy(self, raw_frames: list[Path]) -> list[Path]:
         if self.filtered_dir.exists():
             for p in self.filtered_dir.glob("frame_*.png"):
@@ -212,20 +186,16 @@ class SessionRecorder:
                 os.utime(dest, (ts, ts))
             return [dest]
 
-        keep_indices = {0, len(raw_frames) - 1}
-        last_kept_thumb = self._thumb(raw_frames[0])
-
-        for idx in range(1, len(raw_frames) - 1):
-            curr_thumb = self._thumb(raw_frames[idx])
-            max_diff = self._max_abs_diff(last_kept_thumb, curr_thumb)
-            if max_diff >= self.diff_threshold:
-                keep_indices.add(idx)
-                last_kept_thumb = curr_thumb
-
+        last_idx = len(raw_frames) - 1
+        last_kept_hash: Optional[int] = None
         kept = []
         out_num = 1
         for idx, src in enumerate(raw_frames):
-            if idx in keep_indices:
+            with Image.open(src) as im:
+                h = xxhash.xxh3_64_intdigest(im.tobytes())
+            is_first = idx == 0
+            is_last = idx == last_idx
+            if is_first or is_last or h != last_kept_hash:
                 dest = self.filtered_dir / f"frame_{out_num:06d}.png"
                 shutil.copy2(src, dest)
                 ts = ts_by_name.get(src.name)
@@ -233,6 +203,7 @@ class SessionRecorder:
                     os.utime(dest, (ts, ts))
                 kept.append(dest)
                 out_num += 1
+                last_kept_hash = h
         return kept
 
     def _load_index_timestamps(self) -> dict[str, float]:
@@ -286,10 +257,13 @@ class SessionRecorder:
 
         frame_times = [p.stat().st_mtime for p in kept_frames]
         durations = []
+        # Hold cap = 1.0s: xxh3 dedupe already collapsed identical frames,
+        # so any gap >1s means "screen was idle that long" — no info gain
+        # from stretching replay to match real wall-clock idle stretches.
         for idx in range(len(frame_times) - 1):
             dt = frame_times[idx + 1] - frame_times[idx]
-            durations.append(min(10.0, max(1.0 / self.fps, dt)))
-        tail = max(0.8, min(2.5, (sum(durations) / len(durations)) if durations else 1.2))
+            durations.append(min(1.0, max(1.0 / self.fps, dt)))
+        tail = max(0.8, min(1.0, (sum(durations) / len(durations)) if durations else 1.0))
         durations.append(tail)
 
         total = sum(durations)
@@ -383,7 +357,7 @@ class SessionRecorder:
             "started_at": self._started_at,
             "ended_at": self._ended_at,
             "fps": self.fps,
-            "diff_threshold": self.diff_threshold,
+            "hash_algo": "xxh3_64",
             "raw_frames": raw_count,
             "filtered_frames": filtered_count,
             "capture_errors": self._capture_errors,

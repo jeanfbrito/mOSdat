@@ -8,8 +8,7 @@ usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
                          [--output OUTPUT]
                          [--click-verify {auto,off,yesno,diff,diff+yesno}]
                          [--canary {auto,off,on}] [--no-record-session]
-                         [--record-fps FPS] [--record-diff-threshold VALUE]
-                         [--record-gif] [--record-keep-raw]
+                         [--record-fps FPS] [--record-gif] [--record-keep-raw]
                          [--inject-config JSON] [--inject-servers LIST]
                          [--inject-app-name NAME] [--inject-install-path PATH]
                          [--inject-migrations-version VER] [--no-cache]
@@ -63,12 +62,6 @@ options:
   --no-record-session   Disable VNC frame recording (recording is ON by
                         default)
   --record-fps FPS      Recorder capture rate (default: 10.0)
-  --record-diff-threshold VALUE
-                        Max-pixel grayscale diff threshold (0-255) for frame
-                        retention. Any frame whose max-pixel diff vs the last
-                        kept frame meets this is kept. Default 1.0 = drop only
-                        pixel-identical frames; raise to skip near-duplicates.
-                        (default: 1.0)
   --record-gif          Also export recording/session.gif (MP4 is always
                         attempted)
   --record-keep-raw     Keep recording/raw frames after export

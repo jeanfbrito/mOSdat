@@ -39,7 +39,6 @@ def cmd_confirm(args) -> int:
         skip_state_snapshot=args.no_state_snapshot,
         record_session=args.record_session,
         record_fps=args.record_fps,
-        record_diff_threshold=args.record_diff_threshold,
         record_gif=args.record_gif,
         record_keep_raw=args.record_keep_raw,
         repro_command=repro,

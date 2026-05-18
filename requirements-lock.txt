@@ -121,4 +121,5 @@ uuid7==0.1.0
 uvicorn==0.44.0
 wcwidth==0.6.0
 websockets==16.0
+xxhash==3.7.0
 yarl==1.23.0

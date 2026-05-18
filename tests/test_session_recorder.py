@@ -44,46 +44,10 @@ def _make_recorder(tmp_path: Path, **kwargs) -> SessionRecorder:
     )
 
 
-def _solid_png(path: Path, color: int) -> Path:
-    """Write a 64x64 grayscale PNG filled with a single color value."""
-    Image.new("L", (64, 64), color=color).save(path)
+def _solid_png(path: Path, color: tuple) -> Path:
+    """Write an 8x8 RGB PNG filled with a single color value."""
+    Image.new("RGB", (8, 8), color=color).save(path)
     return path
-
-
-# ---------------------------------------------------------------------------
-# _max_abs_diff
-# ---------------------------------------------------------------------------
-
-
-def test_max_abs_diff_identical(tmp_path):
-    img_a = Image.new("L", (64, 64), color=128)
-    img_b = Image.new("L", (64, 64), color=128)
-    result = SessionRecorder._max_abs_diff(img_a, img_b)
-    assert result == 0.0
-
-
-def test_max_abs_diff_max_contrast(tmp_path):
-    img_black = Image.new("L", (64, 64), color=0)
-    img_white = Image.new("L", (64, 64), color=255)
-    result = SessionRecorder._max_abs_diff(img_black, img_white)
-    assert result == 255.0
-
-
-def test_max_abs_diff_sparse_change_kept(tmp_path):
-    # A single high-contrast pixel (simulating cursor on a 64x64 thumb) must
-    # register as a meaningful diff. Mean would round this to ~0.06.
-    img_a = Image.new("L", (64, 64), color=0)
-    img_b = Image.new("L", (64, 64), color=0)
-    img_b.putpixel((10, 10), 255)
-    result = SessionRecorder._max_abs_diff(img_a, img_b)
-    assert result == 255.0
-
-
-def test_max_abs_diff_size_mismatch(tmp_path):
-    img_a = Image.new("L", (64, 64), color=0)
-    img_b = Image.new("L", (32, 32), color=0)
-    result = SessionRecorder._max_abs_diff(img_a, img_b)
-    assert result == 255.0
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +71,8 @@ def test_has_ffmpeg_missing():
 
 
 def test_filter_and_copy_identical_sequence(tmp_path):
-    """5 identical frames → only first + last kept (exactly 2)."""
-    rec = _make_recorder(tmp_path, diff_threshold=3.0)
+    """5 identical frames → only first + last kept (hash dedupes middle 3)."""
+    rec = _make_recorder(tmp_path)
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     rec.raw_dir = raw_dir
@@ -118,23 +82,23 @@ def test_filter_and_copy_identical_sequence(tmp_path):
     frames = []
     for i in range(1, 6):
         p = raw_dir / f"frame_{i:06d}.png"
-        _solid_png(p, color=100)
+        _solid_png(p, color=(100, 100, 100))
         frames.append(p)
 
     kept = rec._filter_and_copy(frames)
     assert len(kept) == 2
 
 
-def test_filter_and_copy_contrast_jump(tmp_path):
-    """2 black, 1 white (middle), 2 black → ≥3 kept (first, white, last)."""
-    rec = _make_recorder(tmp_path, diff_threshold=10.0)
+def test_filter_and_copy_all_distinct(tmp_path):
+    """5 frames each with a unique fill color → all 5 kept."""
+    rec = _make_recorder(tmp_path)
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
     rec.raw_dir = raw_dir
     rec.filtered_dir = tmp_path / "filtered"
     rec.index_path = tmp_path / "index.jsonl"
 
-    colors = [0, 0, 255, 0, 0]
+    colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90), (100, 110, 120), (130, 140, 150)]
     frames = []
     for i, c in enumerate(colors, start=1):
         p = raw_dir / f"frame_{i:06d}.png"
@@ -142,7 +106,7 @@ def test_filter_and_copy_contrast_jump(tmp_path):
         frames.append(p)
 
     kept = rec._filter_and_copy(frames)
-    assert len(kept) >= 3
+    assert len(kept) == 5
 
 
 # ---------------------------------------------------------------------------

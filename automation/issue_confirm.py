@@ -38,7 +38,6 @@ class ConfirmInvocation:
     skip_state_snapshot: bool = False
     record_session: bool = False
     record_fps: float = 10.0
-    record_diff_threshold: float = 1.0
     record_gif: bool = False
     record_keep_raw: bool = False
     repro_command: str = ""                    # the original CLI string for reporter footer
@@ -357,7 +356,6 @@ def run_confirm(inv: ConfirmInvocation) -> ConfirmRunArtifacts:
                     screenshotter=runner.screenshotter,
                     recording_dir=iter_dir / "recording",
                     fps=inv.record_fps,
-                    diff_threshold=inv.record_diff_threshold,
                     keep_raw=inv.record_keep_raw,
                     log_fn=lambda msg: print(f"[mosdat] {msg}"),
                 )
