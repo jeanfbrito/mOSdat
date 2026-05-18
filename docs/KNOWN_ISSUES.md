@@ -213,3 +213,28 @@
   mosdat bug.
 - **Ref**: Observed 2026-05-17 during V3 master-toggle validation with greg
   via crof.ai; finder agent verdict + live VM crash inspection.
+
+## RFB capture used pixel-count completion gate (fixed)
+
+- **Status**: RESOLVED — fixed in `automation/transport/vnc.py`
+- **Symptom**: `VncClient.capture()` returned screenshots that were N frames
+  behind the real screen state. Post-click popups and transient UI were
+  invisible to the VLM, causing widespread localize/verify flakiness (kebab
+  click 2026-05-18: popup rendered on VM but absent in capture at 09:35:14).
+- **Root cause 1 (stale buffer)**: `_Reader._buf` and any pending WebSocket
+  frames from unsolicited server FB updates (cursor moves, dirty regions) were
+  not drained before sending a new `FramebufferUpdateRequest`. The stale bytes
+  were consumed as if they were the fresh response, leaving the actual response
+  buffered for the next capture call.
+- **Root cause 2 (wrong completion gate)**: `_grab_framebuffer()` exited its
+  read loop when `painted >= W*H`. Overlapping rectangles in one FB update
+  double-counted pixels, so the gate fired before all rectangles in the message
+  were consumed.
+- **Fix**: (a) `capture()` now drains `_reader._buf` and any pending WS frames
+  via `recv(timeout=0)` before sending the FBUR. (b) `_grab_framebuffer()` now
+  reads exactly one `FramebufferUpdate` message (consuming all its declared
+  rectangles) and returns immediately, matching the RFB §7.6.1 one-request →
+  one-response contract.
+- **Affects**: All scenarios relying on post-action screen state (localize,
+  verify, verify_not after click/key). Visible on ubuntu2204 QEMU VNC path.
+- **Ref**: Auditor diagnosis 2026-05-18; fixed same session.

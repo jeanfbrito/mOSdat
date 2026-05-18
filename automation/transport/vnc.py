@@ -21,6 +21,7 @@ Use as a context manager:
 
 from __future__ import annotations
 
+import os
 import ssl
 import struct
 import time
@@ -87,6 +88,10 @@ _MODIFIERS = {
 
 _SHIFTED = set('~!@#$%^&*()_+{}|:"<>?')
 
+# Post-action settle delay (milliseconds) — allows framebuffer to reflect state
+# before the next capture(). Can be overridden via MOSDAT_VNC_SETTLE_MS env var.
+_DEFAULT_SETTLE_MS = int(os.environ.get("MOSDAT_VNC_SETTLE_MS", "1000"))
+
 
 def _reverse_bits(b: int) -> int:
     """Reverse the 8 bits of a byte — RFB VNC-auth quirk."""
@@ -148,6 +153,7 @@ class VncClient:
         self._button_mask = 0  # current mouse button state
         self._cursor_x: int = 0
         self._cursor_y: int = 0
+        self._settle_ms = _DEFAULT_SETTLE_MS
 
     # ---- context-manager lifecycle ----
 
@@ -170,10 +176,35 @@ class VncClient:
     def size(self) -> tuple[int, int]:
         return self._width, self._height
 
+    def _settle(self) -> None:
+        """Sleep for _settle_ms milliseconds to allow framebuffer to reflect post-action state."""
+        if self._settle_ms > 0:
+            time.sleep(self._settle_ms / 1000)
+
     # ---- public actions ----
 
     def capture(self) -> tuple[Image.Image, tuple[int, int]]:
         self._require_open()
+        assert self._reader is not None
+        # Drain any stale bytes that accumulated since the last capture (e.g.
+        # unsolicited FramebufferUpdates from cursor moves / dirty regions).
+        # Two layers: the _Reader internal buffer, then any pending WS frames.
+        stale_buf = len(self._reader._buf)
+        self._reader._buf.clear()
+        stale_ws = 0
+        assert self._ws is not None
+        while True:
+            try:
+                chunk = self._ws.recv(timeout=0)
+                stale_ws += len(chunk) if isinstance(chunk, (bytes, bytearray)) else len(chunk.encode("latin-1"))
+            except TimeoutError:
+                break
+        if stale_buf or stale_ws:
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                "capture: drained %d buffered + %d WS bytes before FBUR",
+                stale_buf, stale_ws,
+            )
         self._send(struct.pack(">BBHHHH", _CMSG_FB_UPDATE_REQUEST, 0, 0, 0, self._width, self._height))
         return self._grab_framebuffer(), (self._width, self._height)
 
@@ -224,7 +255,7 @@ class VncClient:
         self._cursor_x = target_x
         self._cursor_y = target_y
 
-    def click(self, x: int, y: int, button: int = 1) -> None:
+    def click(self, x: int, y: int, button: int = 1, settle: bool = True) -> None:
         """Press+release a mouse button at (x, y). button: 1=left, 2=middle, 3=right."""
         self._require_open()
         bit = 1 << (button - 1)
@@ -232,8 +263,10 @@ class VncClient:
         self._pointer_event(x, y, self._button_mask | bit)         # press
         time.sleep(0.03)
         self._pointer_event(x, y, self._button_mask & ~bit)        # release
+        if settle:
+            self._settle()
 
-    def type_text(self, text: str, delay: float = 0.01) -> None:
+    def type_text(self, text: str, delay: float = 0.01, settle: bool = True) -> None:
         """Type a string by emitting keydown+keyup per character."""
         self._require_open()
         for ch in text:
@@ -247,8 +280,10 @@ class VncClient:
                 self._key_event(_MODIFIERS["shift"], False)
             if delay:
                 time.sleep(delay)
+        if settle:
+            self._settle()
 
-    def key(self, name: str) -> None:
+    def key(self, name: str, settle: bool = True) -> None:
         """Press a named key or a combo like 'ctrl+a', 'alt+f4'."""
         self._require_open()
         parts = [p.strip().lower() for p in name.split("+")]
@@ -274,6 +309,8 @@ class VncClient:
         self._key_event(main_sym, False)
         for sym in reversed(mod_syms):
             self._key_event(sym, False)
+        if settle:
+            self._settle()
 
     # ---- low-level RFB messages ----
 
@@ -430,16 +467,18 @@ class VncClient:
     # ---- Framebuffer grab ----
 
     def _grab_framebuffer(self) -> Image.Image:
+        """Read exactly one FramebufferUpdate message and return it as an image.
+
+        Bell and ServerCut messages that arrive before the FB update are
+        silently consumed.  Raises VncClientError on unknown message types or
+        unsupported encodings.
+        """
         r = self._reader
         assert r is not None
         W, H = self._width, self._height
         canvas = Image.new("RGB", (W, H))
-        painted = 0
-        target = W * H
-        max_messages = 32
 
-        while painted < target and max_messages > 0:
-            max_messages -= 1
+        while True:
             (msg_type,) = struct.unpack(">B", r.read(1))
 
             if msg_type == _MSG_FB_UPDATE:
@@ -456,7 +495,8 @@ class VncClient:
                     raw = r.read(w * h * 4)
                     tile = Image.frombytes("RGB", (w, h), raw, "raw", "BGRX")
                     canvas.paste(tile, (x, y))
-                    painted += w * h
+                # Exactly one FB update consumed — return immediately.
+                return canvas
 
             elif msg_type == _MSG_BELL:
                 continue
@@ -469,10 +509,6 @@ class VncClient:
 
             else:
                 raise VncClientError(f"Unknown server message type: {msg_type}")
-
-        if painted < target:
-            raise VncClientError(f"Framebuffer incomplete: painted {painted}/{target} pixels")
-        return canvas
 
 
 # Back-compat aliases for the old module name

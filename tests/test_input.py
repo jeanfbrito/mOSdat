@@ -133,6 +133,7 @@ def _open_client() -> VncClient:
     c._width = 1920
     c._height = 1080
     c._button_mask = 0
+    c._settle_ms = 1000  # Initialize settle delay (required by new settle feature)
     ws = MagicMock()
     ws.send = MagicMock()
     c._ws = ws
