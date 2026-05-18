@@ -18,7 +18,6 @@ for _name in list(_sys.modules):
     if (
         _name.startswith("automation.transport")
         or _name.startswith("automation.vlm")
-        or _name.startswith("PIL")
         or _name in (
             "openai",
             "httpx",

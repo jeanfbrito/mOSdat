@@ -14,12 +14,19 @@ from unittest.mock import MagicMock, patch
 # Stub out heavy imports that functional_runner.py imports at module level so
 # we can test without the full dependency tree installed.
 # ---------------------------------------------------------------------------
-for mod in ("PIL", "PIL.Image"):
-    if mod not in sys.modules:
-        sys.modules[mod] = types.ModuleType(mod)
-# PIL.Image needs an Image class attribute (used in type hints)
-sys.modules["PIL.Image"].Image = object
-sys.modules["PIL"].Image = sys.modules["PIL.Image"]
+# Only stub PIL when it is NOT already loaded. Mutating the real PIL.Image
+# module (`PIL.Image.Image = object`) corrupts every sibling test that holds
+# a `from PIL import Image` binding — they share the same module object, so
+# the rebinding survives this file's tests and breaks downstream files like
+# test_cursor_motion_integration and test_runner_features.
+_PIL_WAS_REAL = "PIL.Image" in sys.modules
+if not _PIL_WAS_REAL:
+    for mod in ("PIL", "PIL.Image"):
+        if mod not in sys.modules:
+            sys.modules[mod] = types.ModuleType(mod)
+    # PIL.Image needs an Image class attribute (used in type hints)
+    sys.modules["PIL.Image"].Image = object
+    sys.modules["PIL"].Image = sys.modules["PIL.Image"]
 
 # Minimal stubs for the three local modules functional_runner imports
 for stub in (
@@ -142,7 +149,7 @@ class TestIfVisibleExecute(unittest.TestCase):
         vlm.verify.assert_called_once()
         # then_step triggered localize → click
         vlm.localize.assert_called_once()
-        injector.click.assert_called_once_with(100, 200, button=1)
+        injector.click.assert_called_once_with(100, 200, button=1, motion=None, dwell_ms=None)
 
     def test_multiple_then_steps_execute_in_order(self):
         runner, vlm, injector = _make_runner(vlm_verify_return=True)

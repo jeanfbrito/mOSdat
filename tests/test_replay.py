@@ -15,8 +15,7 @@ from __future__ import annotations
 import sys as _sys
 for _name in list(_sys.modules):
     if (
-        _name.startswith("PIL")
-        or _name.startswith("automation.vlm")
+        _name.startswith("automation.vlm")
         or _name.startswith("automation.transport")
         or _name in (
             "openai",

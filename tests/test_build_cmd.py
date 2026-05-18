@@ -18,7 +18,11 @@ for _name in list(_sys.modules):
     if (
         _name.startswith("automation.transport")
         or _name.startswith("automation.vlm")
-        or _name.startswith("PIL")
+        # NOTE: do NOT pop "PIL" or "PIL.Image" — multiple pop+reimport
+        # cycles produce distinct PIL.Image MODULE INSTANCES (each with its
+        # own Image class), and downstream isinstance() checks compare
+        # across the copies and fail. Real PIL is installed in the venv and
+        # never needs to be a stub; just leave its sys.modules entries alone.
         or _name in (
             "openai",
             "httpx",
