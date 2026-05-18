@@ -82,7 +82,11 @@ steps:
       config = {
           'servers': servers_arr,
           'currentView': {'url': first_url},
-          'isTelephonyEnabled': tel_enabled,
+          # NOTE: isTelephonyEnabled intentionally omitted.
+          # Pre-staging this field in config.json causes a SIGTRAP crash in the
+          # PR3325 branch (src/app/PersistableValues.ts does not include it).
+          # The app wipes config.json on crash. Use the UI toggle (enable-telephony-toggle
+          # routine) to set this state after launch. See docs/KNOWN_ISSUES.md.
           'telephonyPreferredServer': pref_server,
           'telephonyGlobalShortcutConfig': {'enabled': accel is not None, 'accelerator': accel},
           'isMenuBarEnabled': True,

@@ -3,6 +3,13 @@ name: "Rocket.Chat Desktop — Click-to-Call master telephony toggle (PR #3325 G
 #   F1: Master toggle drives whether tel: dispatches surface the Fuselage modal.
 # Worked example: routines-first scenario authoring. See docs/routines.md
 # § "Worked example: PR #3325 master-toggle".
+#
+# NOTE (2026-05-18): isTelephonyEnabled can no longer be pre-staged in config.json.
+# The PR3325 branch crashes with SIGTRAP when this field appears in config.json
+# (PersistableValues.ts omits it → hydration throws → app wipes config and crashes).
+# Phase B now enables the toggle via the Settings UI instead.
+# See docs/KNOWN_ISSUES.md — "Rocket.Chat.Electron PR #3325 — app crashes when
+# isTelephonyEnabled is pre-staged in config.json".
 
 vars:
   workspace_url: "https://rocketchat.jeanbrito.com"
@@ -13,11 +20,11 @@ phases:
     name: "toggle OFF baseline"
     from_step: 1
   - id: B
-    name: "toggle ON via config pre-stage"
+    name: "toggle ON via Settings UI"
     from_step: 7
 
 steps:
-  # ── A1: cleanup + launch with telephony OFF ──────────────────────────────
+  # ── A1: cleanup + launch with telephony OFF (default) ────────────────────
   - routine: cleanup-rocketchat
   - routine:
       name: launch-rocketchat
@@ -38,12 +45,12 @@ steps:
       telephony subsystem is dormant and the tel: link was silently ignored.
     verify_not: |
       A telephony modal or dial pad dialog is overlaying the Rocket.Chat window.
-      Look for a server selection dialog listing 'Workspace' and 'Mobile RC',
+      Look for a server selection dialog listing server options,
       or any dialog containing a phone number input or dial pad controls.
     verify_timeout: 15
     retries: 3
 
-  # ── B1: cleanup + relaunch with telephony ON ─────────────────────────────
+  # ── B1: cleanup + relaunch (telephony_enabled is a no-op on PR3325 branch)
   - routine: cleanup-rocketchat
   - routine:
       name: launch-rocketchat
@@ -53,20 +60,65 @@ steps:
           - { title: "Mobile RC", url: "{{ mobile_url }}" }
         telephony_enabled: true
 
-  # ── B2: dispatch tel: — Fuselage modal MUST appear ───────────────────────
+  # ── B2: open Settings via sidebar kebab (position-aware) ─────────────────
+  # (Cannot pre-stage isTelephonyEnabled in config.json — PR3325 crashes on it)
+  # open-settings routine uses alt+w which navigates to the first server in the
+  # Window menu rather than opening Settings on this RC build. Instead, use the
+  # sidebar kebab with geometry-relative coordinates so window repositioning
+  # does not break the click.
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      # Focus RC window by WM_CLASS (class is "rocket.chat" on Ubuntu)
+      WID=$(xdotool search --class "rocket.chat" 2>/dev/null | tail -1 || true)
+      if [ -z "$WID" ]; then
+        WID=$(xdotool search --name "Rocket.Chat" 2>/dev/null | tail -1 || true)
+      fi
+      echo "RC window ID: $WID"
+      if [ -n "$WID" ]; then
+        xdotool windowfocus --sync "$WID"; sleep 1
+      fi
+      wmctrl -a 'Rocket.Chat' 2>/dev/null || true; sleep 1
+      # Compute kebab position from actual window geometry
+      GEOM=$(xdotool getwindowgeometry "$WID" 2>/dev/null || echo "")
+      WIN_X=$(echo "$GEOM" | grep -oP 'Position: \K[0-9]+' | head -1 || echo "0")
+      WIN_Y=$(echo "$GEOM" | grep -oP 'Position: [0-9]+,\K[0-9]+' | head -1 || echo "0")
+      WIN_H=$(echo "$GEOM" | grep -oP 'Geometry: [0-9]+x\K[0-9]+' | head -1 || echo "800")
+      echo "Win pos=($WIN_X,$WIN_Y) h=$WIN_H"
+      # Kebab: ~20px from left edge of window, ~55px from window bottom
+      KEBAB_X=$((WIN_X + 20))
+      KEBAB_Y=$((WIN_Y + WIN_H - 55))
+      echo "Clicking kebab at ($KEBAB_X,$KEBAB_Y)"
+      xdotool mousemove "$KEBAB_X" "$KEBAB_Y" click 1; sleep 2
+      echo KEBAB_CLICKED
+  - localize: "the 'Settings' or 'Desktop Settings' menu item in the popup menu that opened from the sidebar kebab/three-dot button"
+    click: left
+    dwell_ms: 250
+  - wait: 3
+  - verify: "Rocket.Chat Settings or Preferences panel is visible inside the main application window — General/About/etc. tabs visible. Not a crash dialog, not a blank screen."
+    verify_timeout: 15
+    retries: 3
+
+  # ── B3: enable telephony toggle ───────────────────────────────────────────
+  - routine: enable-telephony-toggle
+
+  # ── B5: dispatch tel: — Fuselage modal MUST appear ───────────────────────
+  # Settings panel stays open — the modal overlays whatever RC is showing.
   - routine:
       name: dispatch-tel-link
       with: { number: "+5511999999999" }
   - verify: |
       The Rocket.Chat application window shows a modal dialog for selecting a
-      telephony destination server. It lists available servers ('Workspace' and
-      'Mobile RC') as clickable options and has a 'Remember this choice'
-      checkbox. This is a Fuselage modal overlay on top of the main application
-      — NOT the main server selection screen and NOT the Settings panel.
+      telephony destination server. It lists at least two available servers as
+      clickable options (the servers may show their workspace-fetched names
+      rather than the configured titles 'Workspace' and 'Mobile RC' — any two
+      server entries are acceptable) and has a 'Remember this choice' checkbox.
+      This is a Fuselage modal overlay on top of the main application —
+      NOT the main server selection screen and NOT the Settings panel.
     verify_timeout: 20
     retries: 5
 
-  # ── B3: dismiss modal ────────────────────────────────────────────────────
+  # ── B6: dismiss modal ────────────────────────────────────────────────────
   - key: Escape
   - wait: 2
 

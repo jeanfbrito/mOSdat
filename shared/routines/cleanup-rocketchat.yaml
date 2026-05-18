@@ -39,5 +39,11 @@ steps:
         mkdir -p "$d"
       done
 
+      # Also wipe Electron cache dirs so stale Redux/session data cannot persist
+      # across crash-wipe cycles.
+      for d in "$HOME/.cache/Rocket.Chat" "$HOME/.cache/Rocket.Chat (development)"; do
+        rm -rf "$d" || true
+      done
+
       pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' && exit 1 || true
       echo CLEANUP_RC_DONE
