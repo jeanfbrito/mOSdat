@@ -34,6 +34,11 @@ functional = ["pillow>=10.0", "openai>=1.0", "pyyaml>=6.0", "websockets>=13.0", 
 packages = ["automation"]
 
 [tool.pytest.ini_options]
+# Hard per-test timeout so a hung VNC/SSH/HTTP call cannot block the suite
+# for hours. Real unit tests finish in <1s; anything genuinely needing more
+# (live VM, end-to-end) opts in via @pytest.mark.timeout(N).
+timeout = 30
+timeout_method = "thread"
 markers = [
     "live: tests that require a real VM (skipped without --live)",
     "issue: regression tests for tracked GitHub issues",

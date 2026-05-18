@@ -13,13 +13,93 @@ __init__ chain is never traversed.  See _load_module() below.
 
 import importlib.util
 import json
+import socket
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
+
+
+# ---------------------------------------------------------------------------
+# Anti-hang safeguards
+# ---------------------------------------------------------------------------
+# Three layers protect the suite from hanging forever on a stuck VNC/SSH/HTTP
+# call. Tests that genuinely need more time mark with @pytest.mark.timeout(N).
+#
+#   1. socket.setdefaulttimeout(10) — any blocking socket op (paramiko, http,
+#      raw VNC handshake) that forgot an explicit timeout raises socket.timeout
+#      after 10s instead of blocking the worker thread forever.
+#   2. pytest-timeout (pyproject.toml: timeout=30) — per-test hard budget.
+#   3. Heartbeat thread — prints the currently-running test plus elapsed wall
+#      time every 10s when it exceeds the interval. If pytest output goes
+#      silent you can still tell what is stuck.
+socket.setdefaulttimeout(10)
+
+
+class _Heartbeat:
+    """Background thread that periodically reports the active test."""
+
+    def __init__(self, interval: float = 10.0):
+        self.interval = interval
+        self.active: "tuple[str, float] | None" = None
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._run, name="pytest-heartbeat", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def set_active(self, nodeid):
+        self.active = (nodeid, time.monotonic()) if nodeid else None
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            cur = self.active
+            if cur is None:
+                continue
+            nodeid, started = cur
+            elapsed = time.monotonic() - started
+            if elapsed < self.interval:
+                continue
+            print(
+                f"\n[heartbeat] still running: {nodeid} ({elapsed:.1f}s)",
+                file=sys.stderr,
+                flush=True,
+            )
+
+
+_heartbeat = _Heartbeat()
+
+
+def pytest_sessionstart(session):
+    _heartbeat.start()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _heartbeat.stop()
+
+
+def pytest_runtest_logstart(nodeid, location):
+    _heartbeat.set_active(nodeid)
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    _heartbeat.set_active(None)
+
 
 _PROJ = Path(__file__).parent.parent   # .../mOSdat
 

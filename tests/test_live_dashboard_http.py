@@ -41,11 +41,20 @@ def _write_events(path: Path, events: list[dict]) -> None:
 
 
 def _start_server(broadcaster: live.SSEBroadcaster, results_root: Path, author_manager=None):
-    """Start dashboard server on a free port; return (server, port)."""
-    from http.server import HTTPServer
+    """Start dashboard server on a free port; return (server, port).
+
+    Uses ``ThreadingHTTPServer`` (matching production in ``live_dashboard.py``).
+    The single-threaded ``HTTPServer`` deadlocks ``shutdown()`` when an SSE
+    ``/stream`` request is in flight: the serving thread is stuck inside the
+    handler's blocking write loop and can never return to the poll cycle that
+    notices the stop flag, so ``shutdown()`` waits for ``_is_shut_down``
+    forever (the original ~19-minute test hang).
+    """
+    from http.server import ThreadingHTTPServer
 
     handler_cls = live._make_handler(broadcaster, results_root, author_manager=author_manager)
-    server = HTTPServer(("127.0.0.1", 0), handler_cls)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    server.daemon_threads = True
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     return server, server.server_address[1]
