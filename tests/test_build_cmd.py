@@ -35,6 +35,7 @@ for _name in list(_sys.modules):
         _sys.modules.pop(_name, None)
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -45,9 +46,12 @@ import pytest
 from automation.commands import build as build_mod
 from automation.commands.build import (
     TARGETS,
+    artifact_is_fresh,
     derive_clone_dir,
     match_artifact,
     parse_verify_symbols,
+    pick_artifact_url,
+    resolve_artifact,
     resolve_target,
 )
 from automation.commands.parser import build_parser
@@ -189,6 +193,7 @@ def test_run_build_dry_run_succeeds(monkeypatch, capsys) -> None:
         verify_symbol=["isTelephonyEnabled", "telephonyGlobalShortcutConfig"],
         config=None,
         dry_run=True,
+        artifact_first=False,  # skip artifact lookup so _capture is not called
     )
     rc = build_mod.run_build(args)
     assert rc == 0
@@ -213,6 +218,242 @@ def test_cli_build_help_runs() -> None:
     assert "--target" in result.stdout
     assert "--verify-symbol" in result.stdout
     assert "--dry-run" in result.stdout
+    assert "--artifact-first" in result.stdout
+    assert "--no-artifact-first" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Artifact-first helpers
+# ---------------------------------------------------------------------------
+
+def _load_fixture(name: str) -> dict:
+    fixture_path = Path(__file__).parent / "fixtures" / name
+    with open(fixture_path) as f:
+        return json.load(f)
+
+
+def test_artifact_first_picks_latest_matching_comment() -> None:
+    """pick_artifact_url returns the URL from the MOST RECENT github-actions
+    comment that contains a .deb link, ignoring older bot comments and
+    non-bot comments."""
+    pr_data = _load_fixture("pr3325_comments.json")
+    url, created_at = pick_artifact_url(pr_data, ".deb")
+
+    # The fixture has two github-actions[bot] comments with .deb links.
+    # The later one (2026-05-10T10:30:00Z) has rocketchat-4.14.1-linux-amd64.deb.
+    assert url == (
+        "https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat"
+        "/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.deb"
+    )
+    assert created_at == "2026-05-10T10:30:00Z"
+
+
+def test_artifact_first_falls_back_when_stale() -> None:
+    """artifact_is_fresh returns False when the artifact comment is older than
+    the PR head commit (beyond the _FRESHNESS_SLACK_S grace window)."""
+    # Artifact built at 09:00, head commit pushed at 10:00 — clearly stale.
+    assert not artifact_is_fresh(
+        comment_created_at="2026-05-10T09:00:00Z",
+        pr_head_committed_date="2026-05-10T10:00:00Z",
+    )
+
+
+def test_artifact_first_falls_back_when_no_comment() -> None:
+    """pick_artifact_url returns (None, None) when no bot comment contains an
+    S3 .deb URL."""
+    pr_data = {
+        "comments": [
+            {
+                "author": {"login": "jeanfbrito"},
+                "body": "No S3 links here.",
+                "createdAt": "2026-05-10T10:00:00Z",
+            },
+            {
+                "author": {"login": "github-actions[bot]"},
+                "body": "Build succeeded! Download from our internal mirror.",
+                "createdAt": "2026-05-10T10:30:00Z",
+            },
+        ],
+        "commits": [{"oid": "abc", "committedDate": "2026-05-10T10:00:00Z"}],
+    }
+    url, ts = pick_artifact_url(pr_data, ".deb")
+    assert url is None
+    assert ts is None
+
+
+def test_artifact_first_caches_by_sha(tmp_path: Path, monkeypatch) -> None:
+    """resolve_artifact returns the cached path without calling download when
+    a .sha sidecar matching the PR head SHA already exists."""
+    import json as _json
+
+    pr = 3325
+    head_sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
+    # Pre-populate cache dir.
+    cache_dir = tmp_path / ".cache" / "mosdat" / f"pr{pr}"
+    cache_dir.mkdir(parents=True)
+    cached_deb = cache_dir / "rocketchat-4.14.1-linux-amd64.deb"
+    cached_deb.write_bytes(b"\x00fake")
+    # Write the SHA sidecar that matches the PR head.
+    (cached_deb.with_suffix(".deb.sha")).write_text(head_sha)
+
+    # Redirect Path.home() so the function uses our tmp cache.
+    monkeypatch.setattr(build_mod.Path, "home", staticmethod(lambda: tmp_path))
+
+    # Stub Gate 1: label is present.
+    def mock_gh_pr_view_labels(_pr, _repo):
+        return {"labels": [{"name": "build-artifacts"}]}
+
+    # Stub gh_pr_head_ref.
+    def mock_gh_pr_head_ref(_pr, _repo):
+        return "feature-branch"
+
+    # Stub Gate 2: CI run succeeded with matching SHA.
+    def mock_gh_run_list_builds(_repo, _branch):
+        return [
+            {
+                "name": "build and test",
+                "conclusion": "success",
+                "headSha": head_sha,
+                "createdAt": "2026-05-10T10:30:00Z",
+            }
+        ]
+
+    # Stub fetch_pr_metadata to return minimal PR data with matching SHA.
+    pr_data = {
+        "headRefOid": head_sha,
+        "commits": [
+            {"oid": head_sha, "committedDate": "2026-05-10T10:00:00Z"}
+        ],
+        "comments": [],
+        "updatedAt": "2026-05-10T12:00:00Z",
+    }
+    monkeypatch.setattr(build_mod, "fetch_pr_metadata", lambda _pr, _repo: pr_data)
+    monkeypatch.setattr(build_mod, "_gh_pr_view_labels", mock_gh_pr_view_labels)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", mock_gh_pr_head_ref)
+    monkeypatch.setattr(build_mod, "_gh_run_list_builds", mock_gh_run_list_builds)
+
+    # Stub _run / _capture to fail loudly if called (download must NOT happen).
+    def _no_download(*a, **kw):
+        raise AssertionError(f"unexpected _run/_capture in cache-hit path: {a}")
+
+    monkeypatch.setattr(build_mod, "_run", _no_download)
+    monkeypatch.setattr(build_mod, "_capture", _no_download)
+
+    result = resolve_artifact(pr, "RocketChat/Rocket.Chat.Electron", ".deb")
+    assert result == cached_deb
+
+
+def test_artifact_first_falls_back_when_label_missing(monkeypatch, capsys) -> None:
+    """resolve_artifact returns None and logs when PR lacks 'build-artifacts' label."""
+    pr = 3325
+    repo = "RocketChat/Rocket.Chat.Electron"
+
+    # Stub _gh_pr_view_labels to return empty labels (no 'build-artifacts').
+    def mock_gh_pr_view_labels(_pr, _repo):
+        return {"labels": [{"name": "bug"}, {"name": "enhancement"}]}
+
+    monkeypatch.setattr(build_mod, "_gh_pr_view_labels", mock_gh_pr_view_labels)
+
+    result = resolve_artifact(pr, repo, ".deb")
+    assert result is None
+
+    out = capsys.readouterr().out
+    assert "[artifact-first] PR #3325 missing 'build-artifacts' label" in out
+    assert "Add the label to skip yarn build on future runs" in out
+
+
+def test_artifact_first_falls_back_when_ci_run_for_older_sha(monkeypatch, capsys) -> None:
+    """resolve_artifact returns None when latest CI build is for an older HEAD SHA."""
+    pr = 3325
+    repo = "RocketChat/Rocket.Chat.Electron"
+    old_sha = "0000000000000000000000000000000000000000"
+    new_sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
+    # Mock Gate 1: label is present.
+    def mock_gh_pr_view_labels(_pr, _repo):
+        return {"labels": [{"name": "build-artifacts"}]}
+
+    # Mock gh_pr_head_ref.
+    def mock_gh_pr_head_ref(_pr, _repo):
+        return "feature-branch"
+
+    # Mock Gate 2: CI run list returns a run for an older SHA.
+    def mock_gh_run_list_builds(_repo, _branch):
+        return [
+            {
+                "name": "build and test",
+                "conclusion": "success",
+                "headSha": old_sha,
+                "createdAt": "2026-05-10T10:00:00Z",
+            }
+        ]
+
+    # Mock fetch_pr_metadata to return current (newer) HEAD SHA.
+    def mock_fetch_pr_metadata(_pr, _repo):
+        return {
+            "commits": [{"oid": new_sha, "committedDate": "2026-05-10T10:30:00Z"}],
+            "comments": [],
+            "updatedAt": "2026-05-10T12:00:00Z",
+        }
+
+    monkeypatch.setattr(build_mod, "_gh_pr_view_labels", mock_gh_pr_view_labels)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", mock_gh_pr_head_ref)
+    monkeypatch.setattr(build_mod, "_gh_run_list_builds", mock_gh_run_list_builds)
+    monkeypatch.setattr(build_mod, "fetch_pr_metadata", mock_fetch_pr_metadata)
+
+    result = resolve_artifact(pr, repo, ".deb")
+    assert result is None
+
+    out = capsys.readouterr().out
+    assert "[artifact-first] CI build hasn't run for current HEAD" in out
+    assert "falling back" in out
+
+
+def test_artifact_first_falls_back_when_ci_failed(monkeypatch, capsys) -> None:
+    """resolve_artifact returns None when latest CI build failed."""
+    pr = 3325
+    repo = "RocketChat/Rocket.Chat.Electron"
+    head_sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+
+    # Mock Gate 1: label is present.
+    def mock_gh_pr_view_labels(_pr, _repo):
+        return {"labels": [{"name": "build-artifacts"}]}
+
+    # Mock gh_pr_head_ref.
+    def mock_gh_pr_head_ref(_pr, _repo):
+        return "feature-branch"
+
+    # Mock Gate 2: CI run list returns a run with same HEAD SHA but failed conclusion.
+    def mock_gh_run_list_builds(_repo, _branch):
+        return [
+            {
+                "name": "build and test",
+                "conclusion": "failure",
+                "headSha": head_sha,
+                "createdAt": "2026-05-10T10:30:00Z",
+            }
+        ]
+
+    # Mock fetch_pr_metadata.
+    def mock_fetch_pr_metadata(_pr, _repo):
+        return {
+            "commits": [{"oid": head_sha, "committedDate": "2026-05-10T10:00:00Z"}],
+            "comments": [],
+            "updatedAt": "2026-05-10T12:00:00Z",
+        }
+
+    monkeypatch.setattr(build_mod, "_gh_pr_view_labels", mock_gh_pr_view_labels)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", mock_gh_pr_head_ref)
+    monkeypatch.setattr(build_mod, "_gh_run_list_builds", mock_gh_run_list_builds)
+    monkeypatch.setattr(build_mod, "fetch_pr_metadata", mock_fetch_pr_metadata)
+
+    result = resolve_artifact(pr, repo, ".deb")
+    assert result is None
+
+    out = capsys.readouterr().out
+    assert "[artifact-first] latest CI build failed (conclusion=failure)" in out
+    assert "falling back" in out
 
 
 # ---------------------------------------------------------------------------

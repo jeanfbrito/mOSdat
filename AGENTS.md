@@ -29,6 +29,15 @@ background_task(agent="explore", prompt="Monitor VM 103 until IP appears...")
 
 See `.claude/test-strategy.md` for the scoped-tests-first workflow.
 
+## PR scenarios
+
+Any scenario named `<PR#>-<...>.yaml` targets a specific Rocket.Chat.Electron PR.
+Before running it, ALWAYS run `mosdat build --pr <PR#> --deploy <vm> --verify-symbol <sym>`
+to confirm the deployed `app.asar` actually contains the feature under test.
+
+Stale binaries produce false-negative scenario failures that look like framework
+bugs. See `.claude/skills/mosdat-pr-preflight/SKILL.md` for the enforced workflow.
+
 ---
 
 ## Project Overview

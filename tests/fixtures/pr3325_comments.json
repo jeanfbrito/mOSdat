@@ -1,0 +1,41 @@
+{
+  "headRefOid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "updatedAt": "2026-05-10T12:00:00Z",
+  "commits": [
+    {
+      "oid": "0000000000000000000000000000000000000001",
+      "committedDate": "2026-05-01T08:00:00Z"
+    },
+    {
+      "oid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "committedDate": "2026-05-10T10:00:00Z"
+    }
+  ],
+  "comments": [
+    {
+      "author": {"login": "jeanfbrito"},
+      "body": "This PR adds click-to-call deep link support via tel: and callto: URIs.",
+      "createdAt": "2026-05-01T09:00:00Z"
+    },
+    {
+      "author": {"login": "github-actions[bot]"},
+      "body": "## Old build (stale)\n\nLinux installer download:\n- [rocketchat-4.14.0-linux-amd64.deb](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.0-linux-amd64.deb)\n- [rocketchat-4.14.0-linux-amd64.snap](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.0-linux-amd64.snap)\n\nmacOS installer download:\n- [Rocket.Chat-4.14.0.dmg](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/macos-latest/Rocket.Chat-4.14.0.dmg)\n",
+      "createdAt": "2026-05-01T10:00:00Z"
+    },
+    {
+      "author": {"login": "reviewer-bot"},
+      "body": "LGTM, approving the automated checks.",
+      "createdAt": "2026-05-05T14:00:00Z"
+    },
+    {
+      "author": {"login": "github-actions[bot]"},
+      "body": "## Build successful\n\nLinux installer download:\n- [rocketchat-4.14.1-linux-amd64.deb](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.deb)\n- [rocketchat-4.14.1-linux-amd64.snap](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.snap)\n\nmacOS installer download:\n- [Rocket.Chat-4.14.1.dmg](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/macos-latest/Rocket.Chat-4.14.1.dmg)\n- [Rocket.Chat-4.14.1.pkg](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/macos-latest/Rocket.Chat-4.14.1.pkg)\n\nWindows installer download:\n- [Rocket.Chat-Setup-4.14.1.exe](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/windows-latest/Rocket.Chat-Setup-4.14.1.exe)\n- [Rocket.Chat-4.14.1.msi](https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/windows-latest/Rocket.Chat-4.14.1.msi)\n",
+      "createdAt": "2026-05-10T10:30:00Z"
+    },
+    {
+      "author": {"login": "jeanfbrito"},
+      "body": "Addressed review comments. Updated telephony main.ts to include the reactive watcher.",
+      "createdAt": "2026-05-10T11:00:00Z"
+    }
+  ]
+}

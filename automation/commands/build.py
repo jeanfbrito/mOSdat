@@ -11,6 +11,14 @@ Design notes:
 - For v1 only ``--target deb`` is implemented end-to-end on Linux. rpm/AppImage/
   exe paths are stubbed with TODO comments so the dispatcher table stays cheap
   to extend.
+- ``--artifact-first`` (default ON): fetch the prebuilt .deb from the S3 URL
+  posted by the github-actions bot in PR comments before falling back to local
+  yarn build. Requires ``gh`` and ``aria2c`` (or ``curl``) on PATH.
+
+Runtime tool requirements:
+- ``gh`` — GitHub CLI, authenticated (used for PR metadata, cloning).
+- ``aria2c`` — fast multi-connection downloader (preferred). Falls back to
+  ``curl -L --fail`` if aria2c is not present.
 
 Exit codes:
     0  — all OK
@@ -26,12 +34,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -220,6 +230,344 @@ def gh_pr_head_ref(pr: int, repo: str) -> str:
         raise RuntimeError(f"`gh pr view {pr}` failed: {err.strip()}")
     data = json.loads(out)
     return data["headRefName"]
+
+
+def _gh_pr_view_labels(pr: int, repo: str) -> dict:
+    """Call ``gh pr view --json labels`` and return the parsed labels dict.
+
+    Returns a dict with a "labels" key containing a list of {"name": "..."}
+    objects.
+    """
+    rc, out, err = _capture(
+        ["gh", "pr", "view", str(pr), "--repo", repo, "--json", "labels"],
+        timeout=30,
+    )
+    if rc != 0:
+        raise RuntimeError(f"`gh pr view {pr}` (labels) failed: {err.strip()}")
+    return json.loads(out)
+
+
+def _gh_run_list_builds(repo: str, branch: str) -> list:
+    """Call ``gh run list`` for builds on a given branch.
+
+    Returns a list of run objects:
+    [{"name": "...", "conclusion": "...", "headSha": "...", "createdAt": "..."}, ...]
+    """
+    rc, out, err = _capture(
+        [
+            "gh", "run", "list",
+            "--repo", repo,
+            "--branch", branch,
+            "--json", "conclusion,headSha,name,createdAt",
+            "--limit", "20",
+        ],
+        timeout=30,
+    )
+    if rc != 0:
+        raise RuntimeError(f"`gh run list` failed: {err.strip()}")
+    return json.loads(out)
+
+
+# ---------------------------------------------------------------------------
+# Artifact-first helpers  (--artifact-first / --no-artifact-first)
+# ---------------------------------------------------------------------------
+
+# S3 URL pattern used by the github-actions CI bot.
+# Example: https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.deb
+_S3_DEB_RE = re.compile(r"https://[^\s)\"']+\.deb")
+
+# Bot identity used by the GitHub Actions app.
+_BOT_AUTHOR_LOGIN = "github-actions"
+
+# Freshness tolerance: artifact must be at most this many seconds older than
+# the PR head commit.  We allow 60 s of slack so a commit that triggers the
+# build within the same minute is still considered fresh.
+_FRESHNESS_SLACK_S = 60
+
+
+def _parse_iso(ts: str) -> datetime:
+    """Parse an ISO-8601 timestamp to a UTC-aware datetime.
+
+    Handles both ``Z`` suffix and ``+00:00`` offset.
+    """
+    ts = ts.strip()
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    return datetime.fromisoformat(ts)
+
+
+def fetch_pr_metadata(pr: int, repo: str) -> dict:
+    """Call ``gh pr view`` and return the parsed JSON.
+
+    Returns a dict with at least::
+
+        {
+            "comments": [...],
+            "commits":  [...],   # list, last item is head
+            "updatedAt": "...",
+            "headRefOid": "...",
+        }
+    """
+    rc, out, err = _capture(
+        [
+            "gh", "pr", "view", str(pr),
+            "--repo", repo,
+            "--json", "comments,commits,updatedAt,headRefOid",
+        ],
+        timeout=30,
+    )
+    if rc != 0:
+        raise RuntimeError(f"`gh pr view {pr}` failed: {err.strip()}")
+    return json.loads(out)
+
+
+def pick_artifact_url(
+    pr_data: dict,
+    extension: str = ".deb",
+) -> tuple[Optional[str], Optional[str]]:
+    """Scan PR comments and return ``(url, comment_created_at)`` for the most
+    recent github-actions comment that contains an S3 URL ending in
+    ``extension``.
+
+    Returns ``(None, None)`` when no matching comment is found.
+
+    Only ``extension == ".deb"`` is actively exercised in v1.
+    # TODO: extend regex for .rpm / .AppImage / .exe when those targets land.
+    """
+    if extension != ".deb":
+        return None, None
+
+    pattern = _S3_DEB_RE
+
+    best_url: Optional[str] = None
+    best_ts: Optional[str] = None
+    best_dt: Optional[datetime] = None
+
+    for comment in pr_data.get("comments", []):
+        # gh CLI returns author as {"login": "..."} for regular users and
+        # {"login": "github-actions[bot]"} or {"login": "github-actions"}
+        # for the Actions bot.  Accept either form.
+        author = comment.get("author", {})
+        login: str = author.get("login", "")
+        if _BOT_AUTHOR_LOGIN not in login:
+            continue
+
+        body: str = comment.get("body", "")
+        matches = pattern.findall(body)
+        if not matches:
+            continue
+
+        created_at: str = comment.get("createdAt", "")
+        if not created_at:
+            continue
+
+        try:
+            dt = _parse_iso(created_at)
+        except ValueError:
+            continue
+
+        if best_dt is None or dt > best_dt:
+            best_url = matches[0]
+            best_ts = created_at
+            best_dt = dt
+
+    return best_url, best_ts
+
+
+def artifact_is_fresh(
+    comment_created_at: str,
+    pr_head_committed_date: str,
+) -> bool:
+    """Return True iff the artifact was built AFTER the PR head commit.
+
+    Allows ``_FRESHNESS_SLACK_S`` seconds of backwards slack so a commit and
+    the bot post that happen within the same minute are still considered fresh.
+    """
+    from datetime import timedelta
+    try:
+        artifact_dt = _parse_iso(comment_created_at)
+        commit_dt = _parse_iso(pr_head_committed_date)
+    except ValueError:
+        return False
+    return artifact_dt >= commit_dt - timedelta(seconds=_FRESHNESS_SLACK_S)
+
+
+def _artifact_cache_dir(pr: int) -> Path:
+    return Path.home() / ".cache" / "mosdat" / f"pr{pr}"
+
+
+def _sha_sidecar(artifact_path: Path) -> Path:
+    return artifact_path.with_suffix(artifact_path.suffix + ".sha")
+
+
+def _gate_check_build_artifacts_label(pr: int, repo: str) -> bool:
+    """Gate 1: Check if the PR has the 'build-artifacts' label.
+
+    Returns True if the label is present, False otherwise (logs and falls back).
+    """
+    try:
+        labels_data = _gh_pr_view_labels(pr, repo)
+        labels = labels_data.get("labels", [])
+        for label in labels:
+            if label.get("name") == "build-artifacts":
+                return True
+        # Label not found.
+        _log(f"[artifact-first] PR #{pr} missing 'build-artifacts' label — falling back to local clone+build. Add the label to skip yarn build on future runs.")
+        return False
+    except Exception as e:
+        _log(f"[artifact-first] could not check labels ({e}); falling back")
+        return False
+
+
+def _gate_check_ci_build_success(pr: int, repo: str, head_sha: str, head_ref: str) -> bool:
+    """Gate 2: Check if the latest CI build run succeeded for the current HEAD.
+
+    Returns True if the most recent build run's headSha matches PR head SHA and
+    conclusion is "success". Logs and returns False otherwise.
+    """
+    try:
+        runs = _gh_run_list_builds(repo, head_ref)
+
+        # Filter to runs whose name contains "build" (case-insensitive).
+        build_runs = [r for r in runs if "build" in r.get("name", "").lower()]
+        if not build_runs:
+            _log(f"[artifact-first] no CI build runs found for branch {head_ref} — falling back")
+            return False
+
+        # Take the most recent one (first in the list, as gh returns newest first).
+        latest_run = build_runs[0]
+        run_sha = latest_run.get("headSha", "")
+        conclusion = latest_run.get("conclusion", "")
+
+        if run_sha != head_sha:
+            _log(
+                f"[artifact-first] CI build hasn't run for current HEAD {head_sha[:7]} yet "
+                f"(last run was {run_sha[:7]}) — falling back."
+            )
+            return False
+
+        if conclusion != "success":
+            _log(f"[artifact-first] latest CI build failed (conclusion={conclusion}) — falling back.")
+            return False
+
+        return True
+    except Exception as e:
+        _log(f"[artifact-first] could not check CI runs ({e}); falling back")
+        return False
+
+
+def resolve_artifact(
+    pr: int,
+    repo: str,
+    target_ext: str,
+    *,
+    dry_run: bool = False,
+) -> Optional[Path]:
+    """Try to fetch a prebuilt artifact from the PR's S3 comment URLs.
+
+    Returns the local ``Path`` to the downloaded file, or ``None`` on any
+    failure (no comment, stale, download failure, verify failure).  Callers
+    must fall back to clone+build when ``None`` is returned.
+    """
+    # Gate 1: Check 'build-artifacts' label.
+    if not _gate_check_build_artifacts_label(pr, repo):
+        return None
+
+    # 1. Fetch PR metadata.
+    try:
+        pr_data = fetch_pr_metadata(pr, repo)
+    except Exception as e:
+        _log(f"[artifact-first] gh pr view failed ({e}); falling back to local build")
+        return None
+
+    # 2. Resolve PR head SHA + committed date.
+    commits = pr_data.get("commits", [])
+    if not commits:
+        _log("[artifact-first] no commits in PR metadata; falling back")
+        return None
+    head_commit = commits[-1]
+    head_sha: str = head_commit.get("oid", "")
+    head_date: str = head_commit.get("committedDate", "")
+    if not head_sha or not head_date:
+        _log("[artifact-first] missing oid/committedDate in commits; falling back")
+        return None
+
+    # Gate 2: Check if latest CI build succeeded for current HEAD.
+    # We need the head ref name, so fetch it.
+    try:
+        head_ref = gh_pr_head_ref(pr, repo)
+    except Exception as e:
+        _log(f"[artifact-first] could not get PR head ref ({e}); falling back")
+        return None
+
+    if not _gate_check_ci_build_success(pr, repo, head_sha, head_ref):
+        return None
+
+    # 3. Check cache — skip download if same SHA already present.
+    cache_dir = _artifact_cache_dir(pr)
+    # Look for any .deb in the cache dir with a matching .sha sidecar.
+    if cache_dir.is_dir():
+        for existing in cache_dir.glob(f"*{target_ext}"):
+            sidecar = _sha_sidecar(existing)
+            if sidecar.exists() and sidecar.read_text().strip() == head_sha:
+                _log(f"[artifact-first] cache hit — {existing} (SHA {head_sha[:12]})")
+                return existing
+
+    # 4. Scan comments for the S3 URL.
+    url, comment_ts = pick_artifact_url(pr_data, target_ext)
+    if url is None:
+        _log("[artifact-first] no matching S3 URL found in PR comments; falling back")
+        return None
+
+    # 5. Freshness gate (comment-timestamp heuristic as third line of defense).
+    if not artifact_is_fresh(comment_ts, head_date):
+        _log(
+            f"[artifact-first] artifact stale — comment at {comment_ts}, "
+            f"head commit at {head_date}; falling back to local clone+build"
+        )
+        return None
+
+    # 6. Dry-run — just report what would happen.
+    filename = url.split("/")[-1]
+    dest = cache_dir / filename
+    if dry_run:
+        _log(f"[dry-run] would fetch artifact: {url}")
+        _log(f"[dry-run] would save to: {dest}")
+        return dest  # Return a path so deploy dry-run can proceed.
+
+    # 7. Download.
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _log(f"[artifact-first] downloading {url}")
+    if shutil.which("aria2c"):
+        dl_cmd = ["aria2c", "-x4", "-s4", "-d", str(cache_dir), "-o", filename, url]
+    else:
+        dl_cmd = ["curl", "-L", "--fail", "-o", str(dest), url]
+    rc = _run(dl_cmd, timeout=300)
+    if rc != 0 or not dest.exists() or dest.stat().st_size == 0:
+        _log(f"[artifact-first] download failed (rc={rc}); falling back")
+        return None
+
+    # 8. Verify download integrity.
+    if shutil.which("dpkg-deb"):
+        vrc, _, verr = _capture(["dpkg-deb", "-I", str(dest)], timeout=30)
+        if vrc != 0:
+            _log(f"[artifact-first] dpkg-deb -I failed: {verr.strip()}; falling back")
+            dest.unlink(missing_ok=True)
+            return None
+    else:
+        vrc, vout, _ = _capture(["file", str(dest)], timeout=15)
+        if vrc != 0 or "Debian binary package" not in vout:
+            _log(
+                f"[artifact-first] file check failed (expected 'Debian binary package'): "
+                f"{vout.strip()}; falling back"
+            )
+            dest.unlink(missing_ok=True)
+            return None
+
+    # 9. Write SHA sidecar so next run hits the cache.
+    _sha_sidecar(dest).write_text(head_sha)
+    _log(f"[artifact-first] ready — {dest} ({dest.stat().st_size // 1024} KiB)")
+    return dest
 
 
 # ---------------------------------------------------------------------------
@@ -425,37 +773,51 @@ def run_build(args: argparse.Namespace) -> int:
     deploy_vms = [v.strip() for v in (args.deploy or "").split(",") if v.strip()]
     dry_run = bool(getattr(args, "dry_run", False))
 
+    artifact_first = bool(getattr(args, "artifact_first", True))
+
     _log(f"PR #{pr} from {repo}")
     _log(f"clone-dir: {clone_dir}")
     _log(f"target: {target.name} (dist glob: {target.dist_glob})")
     _log(f"deploy VMs: {deploy_vms or '(none)'}")
     _log(f"verify symbols: {verify_symbols or '(none)'}")
+    _log(f"artifact-first: {'ON' if artifact_first else 'OFF'}")
     if dry_run:
         _log("DRY-RUN — no commands will actually mutate state.")
 
-    # Phase 1: clone/update
-    rc = clone_or_update(pr, repo, clone_dir, dry_run=dry_run)
-    if rc != 0:
-        _log(f"clone/fetch failed (rc={rc})")
-        return 4
+    artifact: Optional[Path] = None
 
-    # Phase 2: build
-    rc, log_path = build(clone_dir, target, pr, dry_run=dry_run)
-    if rc != 0:
-        _log(f"build failed (rc={rc}); see {log_path}")
-        return 2
+    # Phase 1a: try prebuilt artifact from S3 (if --artifact-first)
+    if artifact_first and target.name == "deb":
+        artifact = resolve_artifact(pr, repo, ".deb", dry_run=dry_run)
+        if artifact is not None:
+            _log(f"[artifact-first] using prebuilt artifact — skipping clone+build")
 
-    # Phase 3: locate artifact
-    dist_dir = clone_dir / "dist"
-    if dry_run:
-        artifact = dist_dir / f"placeholder{target.dist_glob.lstrip('*')}"
-        _log(f"[dry-run] would locate artifact matching {dist_dir}/{target.dist_glob}")
-    else:
-        artifact = match_artifact(dist_dir, target.dist_glob)
-        if not artifact:
-            _log(f"no artifact matching {dist_dir}/{target.dist_glob}")
+    # Phase 1b: fall back to clone+build
+    if artifact is None:
+        if artifact_first and target.name == "deb":
+            _log("[artifact-first] falling back to local clone+build")
+        rc = clone_or_update(pr, repo, clone_dir, dry_run=dry_run)
+        if rc != 0:
+            _log(f"clone/fetch failed (rc={rc})")
+            return 4
+
+        # Phase 2: build
+        rc, log_path = build(clone_dir, target, pr, dry_run=dry_run)
+        if rc != 0:
+            _log(f"build failed (rc={rc}); see {log_path}")
             return 2
-        _log(f"artifact: {artifact} ({artifact.stat().st_size // 1024} KiB)")
+
+        # Phase 3: locate artifact
+        dist_dir = clone_dir / "dist"
+        if dry_run:
+            artifact = dist_dir / f"placeholder{target.dist_glob.lstrip('*')}"
+            _log(f"[dry-run] would locate artifact matching {dist_dir}/{target.dist_glob}")
+        else:
+            artifact = match_artifact(dist_dir, target.dist_glob)
+            if not artifact:
+                _log(f"no artifact matching {dist_dir}/{target.dist_glob}")
+                return 2
+            _log(f"artifact: {artifact} ({artifact.stat().st_size // 1024} KiB)")
 
     # Phase 4: load VM IPs from config if provided; else assume <name>=<name>
     vm_lookup: dict[str, tuple[str, str]] = {}
@@ -552,4 +914,17 @@ def add_build_subparser(sub) -> None:
     p.add_argument(
         "--dry-run", action="store_true", dest="dry_run",
         help="Print the planned steps without cloning, building, or deploying",
+    )
+    p.add_argument(
+        "--artifact-first", action="store_true", default=True,
+        dest="artifact_first",
+        help=(
+            "Fetch the prebuilt artifact from the PR's S3 comment before falling "
+            "back to local clone+build (default: ON). Requires gh and aria2c (or "
+            "curl) on PATH."
+        ),
+    )
+    p.add_argument(
+        "--no-artifact-first", action="store_false", dest="artifact_first",
+        help="Skip the S3 artifact lookup and always clone+build locally.",
     )
