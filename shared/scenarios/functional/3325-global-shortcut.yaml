@@ -1,21 +1,37 @@
-name: "Rocket.Chat Desktop — Global Telephony Shortcut (pre-staged Redux)"
+name: "Rocket.Chat Desktop — Global Telephony Shortcut (PR #3325 §F5)"
 # Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 §F5:
 #   globalShortcut.register(accelerator) fires when
 #   telephonyGlobalShortcutConfig.enabled && accelerator != null && isTelephonyEnabled.
 #
-# Strategy: pre-stage all Redux telephony state in config.json. No Settings UI.
-# Each phase rewrites config.json + relaunches RC to apply the new state.
+# Strategy: use launch-rocketchat per phase with explicit shortcut_accelerator input.
+#   The routine writes overridden-settings.json with isTelephonyEnabled,
+#   telephonyGlobalShortcutConfig.{enabled,accelerator}, and telephonyPreferredServer.
+#   No inline printf > config.json — that path is silently ignored by RC's Redux-persist.
 #
 # PHASES:
-#   1. enabled=true, accelerator="Ctrl+Shift+P", clipboard=phone → dial pad pre-filled.
-#   2. clipboard=non-phone "hello" → dial pad opens empty, no error.
-#   3. isTelephonyEnabled=false → shortcut unregistered, key combo does nothing.
+#   1. telephony ON, accelerator=Ctrl+Shift+P, clipboard=phone → dial pad pre-filled.
+#   2. (same RC session) clipboard=non-phone "hello" → dial pad opens empty, no error.
+#   3. telephony OFF (no accelerator) → shortcut unregistered, key combo does nothing.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+
+phases:
+  - id: "1"
+    name: "shortcut enabled + phone clipboard"
+    from_step: 2
+  - id: "2"
+    name: "non-phone clipboard"
+    from_step: 7
+  - id: "3"
+    name: "telephony OFF — shortcut unregistered"
+    from_step: 12
 
 steps:
   # ════════════════════════════════════════════════════════════════════════════
   # PRE-FLIGHT — tool deps
   # ════════════════════════════════════════════════════════════════════════════
-  - shell: |
+  - shell: |                                                                    # step 1
       set -e
       if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
         if command -v apt-get >/dev/null 2>&1; then
@@ -39,85 +55,19 @@ steps:
   # PHASE 1 — shortcut enabled + phone clipboard → dial pad pre-filled
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── P1a: Kill RC + wipe userData ─────────────────────────────────────────
-  - shell: |
-      set -u
-      export DISPLAY=:0
-      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
-      for attempt in 1 2 3 4 5 6 7 8; do
-        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
-        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
-        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
-        sleep 1
-        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
-      done
-      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"; mkdir -p "$d"
-      done
-      echo P1_CLEAN
+  # ── P1.1: clean state + launch with telephony ON, shortcut Ctrl+Shift+P ───
+  - routine: cleanup-rocketchat                                                # step 2
+  - routine:                                                                   # step 3
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "{{ workspace_url }}" }
+        telephony_enabled: true
+        preferred_server_url: "{{ workspace_url }}/"
+        shortcut_accelerator: "Ctrl+Shift+P"
 
-  # ── P1b: Pre-stage config: telephony ON, shortcut Ctrl+Shift+P enabled ───
-  - shell: |
-      set -u
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        printf '%s\n' \
-          '{' \
-          '  "Workspace": "https://rocketchat.jeanbrito.com",' \
-          '  "Mobile RC": "https://mobile.rocket.chat"' \
-          '}' > "$d/servers.json"
-        printf '%s\n' \
-          '{' \
-          '  "servers": [' \
-          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
-          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
-          '  ],' \
-          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
-          '  "isTelephonyEnabled": true,' \
-          '  "telephonyPreferredServer": "https://rocketchat.jeanbrito.com/",' \
-          '  "telephonyGlobalShortcutConfig": { "enabled": true, "accelerator": "Ctrl+Shift+P" },' \
-          '  "isMenuBarEnabled": true,' \
-          '  "isSideBarEnabled": true,' \
-          '  "isTrayIconEnabled": false,' \
-          '  "isMinimizeOnCloseEnabled": false,' \
-          '  "doCheckForUpdatesOnStartup": false,' \
-          '  "isUpdatingEnabled": false,' \
-          '  "rootWindowState": {' \
-          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
-          '    "fullscreen": false, "normal": true,' \
-          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  },' \
-          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
-          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
-          '}' > "$d/config.json"
-      done
-      echo P1_CONFIG_WRITTEN
-
-  # ── P1c: Launch RC ───────────────────────────────────────────────────────
-  - shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      export DISPLAY=:0 XAUTHORITY="$XAUTH"
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo P1_APP_LAUNCHED
-
-  - wait: 18
-
-  # ── P1d: Verify Workspace login page ─────────────────────────────────────
-  - verify: |
-      The Rocket.Chat application window shows the Workspace server login or
-      authentication page, or a connected Workspace page. It must NOT be an
-      'Add a server' screen and must NOT be a crash dialog.
-    verify_timeout: 30
-    retries: 3
-
-  # ── P1e: Set clipboard to phone number, focus xterm, fire shortcut ───────
-  - shell: |
+  # ── P1.2: Set clipboard to phone number, focus xterm, fire shortcut ───────
+  - shell: |                                                                    # step 4
       set -u
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
@@ -138,10 +88,10 @@ steps:
       xdotool key ctrl+shift+p
       echo P1_SHORTCUT_FIRED_PHONE
 
-  - wait: 6
+  - wait: 6                                                                    # step 5
 
-  # ── P1f: Verify dial pad shows the parsed phone number ──────────────────
-  - verify: |
+  # ── P1.3: Verify dial pad shows the parsed phone number ──────────────────
+  - verify: |                                                                   # step 6
       The Rocket.Chat application window is focused and in the foreground.
       A dial pad or telephony dialer panel is visible. The number input field
       is pre-filled with the phone number from the clipboard — expect to see
@@ -154,13 +104,14 @@ steps:
 
   # ════════════════════════════════════════════════════════════════════════════
   # PHASE 2 — non-phone clipboard → dial pad opens empty, no error
+  # (RC still running from Phase 1 — shortcut is still registered)
   # ════════════════════════════════════════════════════════════════════════════
 
   # Close dial pad
-  - key: Escape
-  - wait: 2
+  - key: Escape                                                                # step 7
+  - wait: 2                                                                    # step 8
 
-  - shell: |
+  - shell: |                                                                    # step 9
       set -u
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
@@ -175,9 +126,9 @@ steps:
       xdotool key ctrl+shift+p
       echo P2_SHORTCUT_FIRED_NONPHONE
 
-  - wait: 6
+  - wait: 6                                                                    # step 10
 
-  - accept_any:
+  - accept_any:                                                                # step 11
       - "A dial pad or telephony dialer panel is visible with an empty number input field — no pre-filled number"
       - "The Rocket.Chat main UI (login page or workspace content) is visible and unchanged — no dial pad, no error dialog"
     verify_timeout: 15
@@ -187,71 +138,22 @@ steps:
   # PHASE 3 — telephony OFF → shortcut unregistered, key combo does nothing
   # ════════════════════════════════════════════════════════════════════════════
 
-  - key: Escape
-  - wait: 2
+  - key: Escape                                                                # step 12
+  - wait: 2                                                                    # step 13
 
-  # ── P3a: Kill RC ─────────────────────────────────────────────────────────
-  - shell: |
-      export DISPLAY=:0
-      for attempt in 1 2 3 4 5 6; do
-        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
-        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
-        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
-        sleep 1
-        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
-      done
-      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo P3_KILLED
+  # ── P3.1: clean state + launch with telephony OFF (no shortcut) ──────────
+  - routine: cleanup-rocketchat                                                # step 14
+  - routine:                                                                   # step 15
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "{{ workspace_url }}" }
+        telephony_enabled: false
+        preferred_server_url: null
+        shortcut_accelerator: null
 
-  # ── P3b: Rewrite config: isTelephonyEnabled=false ────────────────────────
-  - shell: |
-      set -u
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        printf '%s\n' \
-          '{' \
-          '  "servers": [' \
-          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
-          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
-          '  ],' \
-          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
-          '  "isTelephonyEnabled": false,' \
-          '  "telephonyPreferredServer": null,' \
-          '  "telephonyGlobalShortcutConfig": { "enabled": true, "accelerator": "Ctrl+Shift+P" },' \
-          '  "isMenuBarEnabled": true,' \
-          '  "isSideBarEnabled": true,' \
-          '  "isTrayIconEnabled": false,' \
-          '  "isMinimizeOnCloseEnabled": false,' \
-          '  "doCheckForUpdatesOnStartup": false,' \
-          '  "isUpdatingEnabled": false,' \
-          '  "rootWindowState": {' \
-          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
-          '    "fullscreen": false, "normal": true,' \
-          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  },' \
-          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
-          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
-          '}' > "$d/config.json"
-      done
-      echo P3_CONFIG_TELEPHONY_OFF
-
-  # ── P3c: Launch RC ───────────────────────────────────────────────────────
-  - shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      export DISPLAY=:0 XAUTHORITY="$XAUTH"
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo P3_APP_LAUNCHED
-
-  - wait: 18
-
-  - verify: |
-      The Rocket.Chat application window shows the Workspace server login or
-      authentication page. It must NOT be a crash dialog.
-    verify_timeout: 30
-    retries: 3
-
-  # ── P3d: Focus xterm, fire shortcut, verify RC stays in background ────────
-  - shell: |
+  # ── P3.2: Focus xterm, fire shortcut, verify RC stays in background ───────
+  - shell: |                                                                    # step 16
       set -u
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
@@ -264,9 +166,9 @@ steps:
       xdotool key ctrl+shift+p
       echo P3_SHORTCUT_FIRED_TELEPHONY_OFF
 
-  - wait: 5
+  - wait: 5                                                                    # step 17
 
-  - verify: |
+  - verify: |                                                                   # step 18
       The xterm or terminal window is the active foreground window. The
       Rocket.Chat application window did NOT come to the foreground and NO
       dial pad opened — the global shortcut was never registered because
@@ -280,7 +182,7 @@ steps:
   # ════════════════════════════════════════════════════════════════════════════
   # FINAL CLEANUP
   # ════════════════════════════════════════════════════════════════════════════
-  - shell: |
+  - shell: |                                                                    # step 19
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
         pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true

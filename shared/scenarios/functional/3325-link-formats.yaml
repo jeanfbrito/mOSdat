@@ -2,10 +2,9 @@ name: "Rocket.Chat Desktop — PR #3325 link format parser (pre-staged Redux)"
 # Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 §F6:
 #   src/telephony/links.ts — Various Link Formats
 #
-# Strategy: pre-stage isTelephonyEnabled=true and telephonyPreferredServer set
-# to the single workspace. No modal, no Settings UI. Each format dispatch is a
-# nohup second-instance; assertion is "app alive after every variant" with a
-# best-effort dial-pad localize.
+# Strategy: via launch-rocketchat routine + overridden-settings.json. No modal,
+# no Settings UI. Each format dispatch is a nohup second-instance; assertion is
+# "app alive after every variant" with a best-effort dial-pad localize.
 #
 # Formats:
 #   F1 tel:+491234567890
@@ -17,82 +16,22 @@ name: "Rocket.Chat Desktop — PR #3325 link format parser (pre-staged Redux)"
 
 steps:
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 1 — cleanup + pre-stage single-server config with telephony ON
+  # PHASE 1 — cleanup + launch via launch-rocketchat with telephony ON
   # ════════════════════════════════════════════════════════════════════════════
 
-  - shell: |
-      set -u
-      if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip
-        fi
-      fi
-      export DISPLAY=:0
-      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
-      for attempt in 1 2 3 4 5 6 7 8; do
-        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
-        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
-        pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
-        sleep 1
-        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop|Rocket.Chat)' >/dev/null 2>&1 || break
-      done
-      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"; mkdir -p "$d"
-      done
-      echo P1_CLEAN
+  - routine: cleanup-rocketchat
 
-  - shell: |
-      set -u
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        printf '%s\n' \
-          '{' \
-          '  "Workspace": "https://rocketchat.jeanbrito.com"' \
-          '}' > "$d/servers.json"
-        printf '%s\n' \
-          '{' \
-          '  "servers": [' \
-          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" }' \
-          '  ],' \
-          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
-          '  "isTelephonyEnabled": true,' \
-          '  "telephonyPreferredServer": "https://rocketchat.jeanbrito.com/",' \
-          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
-          '  "isMenuBarEnabled": true,' \
-          '  "isSideBarEnabled": true,' \
-          '  "isTrayIconEnabled": false,' \
-          '  "isMinimizeOnCloseEnabled": false,' \
-          '  "doCheckForUpdatesOnStartup": false,' \
-          '  "isUpdatingEnabled": false,' \
-          '  "rootWindowState": {' \
-          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
-          '    "fullscreen": false, "normal": true,' \
-          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  },' \
-          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
-          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
-          '}' > "$d/config.json"
-      done
-      echo P1_CONFIG_WRITTEN
+  - routine:
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "https://rocketchat.jeanbrito.com" }
+        telephony_enabled: true
+        preferred_server_url: "https://rocketchat.jeanbrito.com/"
 
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 2 — launch + verify login page (no Settings step)
+  # PHASE 2 — verify login page (telephony pre-configured)
   # ════════════════════════════════════════════════════════════════════════════
-
-  - shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      export DISPLAY=:0 XAUTHORITY="$XAUTH"
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
-      echo P2_APP_LAUNCHED
-
-  - wait: 15
 
   - verify: |
       The Rocket.Chat application window shows the Workspace server login or

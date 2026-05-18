@@ -1,34 +1,49 @@
-name: "Rocket.Chat Desktop — Cold-start tel: deep link (pre-staged Redux)"
+name: "Rocket.Chat Desktop — Cold-start tel: deep link (G6)"
 # Covers PR https://github.com/RocketChat/Rocket.Chat.Electron/pull/3325 G6:
 #   App-closed cold start — fully quit RC, dispatch tel:, RC launches + queues.
 #
-# Strategy: pre-stage isTelephonyEnabled directly in config.json. No Settings
-# panel needed. The cold-start launch passes the URL as argv to a binary that
-# already reads isTelephonyEnabled from PersistableValues on boot.
+# Strategy: pre-stage isTelephonyEnabled via overridden-settings.json using the
+# launch-rocketchat routine. For the mid-scenario telephony-OFF flip, RC is killed
+# and overridden-settings.json is rewritten directly (userData not wiped, so the
+# 2-server config from Phase 1 remains). RC then cold-launches with the tel: argv
+# but telephony is dormant — no dial pad, no modal.
 #
 # PHASES:
-#   1. Pre-stage isTelephonyEnabled=true + 2 servers + preferred=workspace.
+#   1. Pre-stage telephony ON via launch-rocketchat routine (writes overridden-settings.json
+#      + config.json + servers.json); kill RC to achieve cold-start precondition.
 #   2. Positive cold start: nohup binary "tel:+..." → wait 25 s → dial pad OK
-#      OR queued (workspace page is also acceptable evidence of launch).
-#   3. Kill RC, rewrite config with isTelephonyEnabled=false, dispatch tel:
-#      cold → RC launches but ignores telephony (no dial pad, no modal).
+#      OR login page (number queued until UI ready).
+#   3. Kill RC, rewrite overridden-settings.json with isTelephonyEnabled=false,
+#      dispatch tel: cold → RC launches but ignores telephony (no dial pad, no modal).
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
 
 steps:
   # ════════════════════════════════════════════════════════════════════════════
-  # PHASE 1 — pre-stage telephony ON + ensure RC fully killed
+  # PHASE 1 — pre-stage telephony ON + write overridden-settings.json
   # ════════════════════════════════════════════════════════════════════════════
 
+  # ── P1a: clean slate ──────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── P1b: write config.json + servers.json + overridden-settings.json ─────
+  # telephony_enabled=true and preferred_server_url set so cold-start routes
+  # directly to the workspace dial pad without showing the server-select modal.
+  - routine:
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "{{ workspace_url }}" }
+          - { title: "Mobile RC", url: "{{ mobile_url }}" }
+        telephony_enabled: true
+        preferred_server_url: "{{ workspace_url }}/"
+
+  # ── P1c: Kill the RC process launched by the routine — cold precondition ──
   - shell: |
-      set -u
-      if ! command -v wmctrl >/dev/null 2>&1 || ! command -v xclip >/dev/null 2>&1; then
-        if command -v apt-get >/dev/null 2>&1; then
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y wmctrl xclip
-        fi
-      fi
       export DISPLAY=:0
-      export XAUTHORITY="${XAUTHORITY:-$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)}"
-      for attempt in 1 2 3 4 5 6 7 8; do
+      for attempt in 1 2 3 4 5 6; do
         pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
         pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
         pkill -TERM -f 'Rocket.Chat' 2>/dev/null || true
@@ -37,56 +52,6 @@ steps:
       done
       pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
-      pkill -KILL -f 'Rocket.Chat' 2>/dev/null || true
-      pkill -KILL -x apport-gtk 2>/dev/null || true
-      wmctrl -l 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /Rocket.Chat|rocketchat|Problem in|apport|System program problem/ {print $1}' | while read -r wid; do
-        wmctrl -i -c "$wid" 2>/dev/null || xdotool windowkill "$wid" 2>/dev/null || true
-      done
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        rm -rf "$d"; mkdir -p "$d"
-      done
-      echo P1_CLEAN
-
-  # ── P1b: Pre-stage telephony ON config with preferred=workspace ───────────
-  # Setting telephonyPreferredServer skips the modal so the cold-start path
-  # routes directly to the workspace dial pad.
-  - shell: |
-      set -u
-      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        printf '%s\n' \
-          '{' \
-          '  "Workspace": "https://rocketchat.jeanbrito.com",' \
-          '  "Mobile RC": "https://mobile.rocket.chat"' \
-          '}' > "$d/servers.json"
-        printf '%s\n' \
-          '{' \
-          '  "servers": [' \
-          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
-          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
-          '  ],' \
-          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
-          '  "isTelephonyEnabled": true,' \
-          '  "telephonyPreferredServer": "https://rocketchat.jeanbrito.com/",' \
-          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
-          '  "isMenuBarEnabled": true,' \
-          '  "isSideBarEnabled": true,' \
-          '  "isTrayIconEnabled": false,' \
-          '  "isMinimizeOnCloseEnabled": false,' \
-          '  "doCheckForUpdatesOnStartup": false,' \
-          '  "isUpdatingEnabled": false,' \
-          '  "rootWindowState": {' \
-          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
-          '    "fullscreen": false, "normal": true,' \
-          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  },' \
-          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
-          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
-          '}' > "$d/config.json"
-      done
-      echo P1_CONFIG_WRITTEN
-
-  # ── P1c: Hard guard — zero RC processes before cold start ─────────────────
-  - shell: |
       pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && { echo "RC STILL RUNNING — ABORT"; exit 1; } || echo P1_COLD_PRECONDITION_OK
 
   # ════════════════════════════════════════════════════════════════════════════
@@ -126,7 +91,7 @@ steps:
   # PHASE 3 — negative cold start: telephony OFF → tel: arg ignored
   # ════════════════════════════════════════════════════════════════════════════
 
-  # ── P3a: Kill RC ─────────────────────────────────────────────────────────
+  # ── P3a: Kill RC ──────────────────────────────────────────────────────────
   - shell: |
       export DISPLAY=:0
       for attempt in 1 2 3 4 5 6; do
@@ -140,38 +105,25 @@ steps:
       pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true
       pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' && exit 1 || echo P3_KILLED
 
-  # ── P3b: Rewrite config with isTelephonyEnabled=false ───────────────────
+  # ── P3b: Flip telephony OFF via overridden-settings.json ─────────────────
+  # Write directly while RC is dead. config.json + servers.json are left intact
+  # (2-server config preserved from Phase 1). Only the feature flags change.
+  # Using overridden-settings.json because RC Redux-persist silently ignores
+  # top-level config.json writes. See docs/runbooks/scenario-state-seeding.md.
   - shell: |
       set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
-        printf '%s\n' \
-          '{' \
-          '  "servers": [' \
-          '    { "url": "https://rocketchat.jeanbrito.com/", "title": "Workspace" },' \
-          '    { "url": "https://mobile.rocket.chat/", "title": "Mobile RC" }' \
-          '  ],' \
-          '  "currentView": { "url": "https://rocketchat.jeanbrito.com/" },' \
-          '  "isTelephonyEnabled": false,' \
-          '  "telephonyPreferredServer": null,' \
-          '  "telephonyGlobalShortcutConfig": { "enabled": false, "accelerator": null },' \
-          '  "isMenuBarEnabled": true,' \
-          '  "isSideBarEnabled": true,' \
-          '  "isTrayIconEnabled": false,' \
-          '  "isMinimizeOnCloseEnabled": false,' \
-          '  "doCheckForUpdatesOnStartup": false,' \
-          '  "isUpdatingEnabled": false,' \
-          '  "rootWindowState": {' \
-          '    "focused": true, "visible": true, "maximized": false, "minimized": false,' \
-          '    "fullscreen": false, "normal": true,' \
-          '    "bounds": { "x": 40, "y": 40, "width": 1280, "height": 820 }' \
-          '  },' \
-          '  "lastSelectedServerUrl": "https://rocketchat.jeanbrito.com/",' \
-          '  "__internal__": { "migrations": { "version": "4.14.1" } }' \
-          '}' > "$d/config.json"
+        cat > "$d/overridden-settings.json" <<'JSON'
+      { "isTelephonyEnabled": false, "telephonyPreferredServer": null,
+        "telephonyGlobalShortcutConfig": {"enabled": false, "accelerator": null},
+        "isMenuBarEnabled": true, "isSideBarEnabled": true,
+        "isTrayIconEnabled": false, "isMinimizeOnCloseEnabled": false,
+        "doCheckForUpdatesOnStartup": false, "isUpdatingEnabled": false }
+      JSON
       done
-      echo P3_CONFIG_TELEPHONY_OFF
+      echo P3_OVERRIDES_TELEPHONY_OFF
 
-  # ── P3c: Dispatch tel: cold while toggle is OFF ───────────────────────────
+  # ── P3c: Dispatch tel: cold while telephony is OFF ────────────────────────
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
@@ -187,7 +139,7 @@ steps:
       field, password field, login button). There is NO dial pad, NO phone
       dialer interface, NO telephony server selection modal, and NO crash
       dialog. The app launched but ignored the tel: argument because
-      isTelephonyEnabled is false in the persisted config.
+      isTelephonyEnabled is false in overridden-settings.json.
     verify_not: |
       A telephony server selection modal listing 'Workspace' and 'Mobile RC'
       with a 'Remember this choice' checkbox is visible overlaying the
