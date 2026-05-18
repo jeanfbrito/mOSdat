@@ -56,9 +56,11 @@ steps:
   - verify: |
       The Rocket.Chat application window shows a modal dialog labeled 'Select
       Server' (or similar) asking which server should handle the call. The
-      modal lists two server rows (e.g. 'Workspace' and 'Mobile RC') and has a
-      'Remember this choice' checkbox. This is a Fuselage modal overlay on top
-      of the main application.
+      modal lists at least two server rows as clickable options (the servers
+      may show their workspace-fetched names rather than the configured titles
+      'Workspace' / 'Mobile RC' — any two server entries are acceptable) and
+      has a 'Remember this choice' checkbox. This is a Fuselage modal overlay
+      on top of the main application.
     verify_timeout: 20
     retries: 5
 
@@ -95,10 +97,10 @@ steps:
       with: { number: "+5511999999999" }
 
   - verify: |
-      The Rocket.Chat application window is visible and responsive — there is
-      NO telephony server selection modal visible. The call was routed directly
-      to the preferred server (Mobile RC) without asking again. App alive, no
-      crash dialog.
+      The Rocket.Chat application window is visible and responsive.
+      No telephony server selection modal is shown. App alive, no crash dialog.
+      (The "call routed directly to preferred server" is the absence of the modal
+      — don't ask the VLM to assert routing it can't see.)
     verify_not: |
       A telephony server selection modal listing two server rows with a
       'Remember this choice' checkbox is visible overlaying the window.
@@ -127,10 +129,10 @@ steps:
 
   - verify: |
       The Rocket.Chat application window shows a modal dialog for selecting a
-      telephony destination server. The modal lists two server rows (e.g.
-      'Workspace' and 'Mobile RC') and has a 'Remember this choice' checkbox.
-      The modal re-appeared because telephonyPreferredServer was reset to null
-      (equivalent to selecting 'Auto' in the Settings dropdown).
+      telephony destination server. The modal lists at least two server rows
+      as clickable options (servers may show workspace-fetched names rather
+      than configured titles 'Workspace' / 'Mobile RC' — any two entries are
+      acceptable) and has a 'Remember this choice' checkbox.
     verify_timeout: 20
     retries: 5
 

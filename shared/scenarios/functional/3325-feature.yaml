@@ -247,7 +247,8 @@ steps:
       The Rocket.Chat application window is visible and responsive — no crash
       dialog, no frozen window, no apport crash handler. The app is alive and
       there is NO server selection dialog or telephony modal overlaying it.
-      The call was dispatched directly to the previously chosen server.
+      (Direct-dispatch routing is inferred from the absence of the modal — do
+      not ask the VLM to assert non-visual state.)
     retries: 3
     verify_timeout: 20
 
