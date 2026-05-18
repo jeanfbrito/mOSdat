@@ -61,3 +61,17 @@ The timing dimension was separate: even with correct frames, actions completing 
 - `docs/KNOWN_ISSUES.md` — "RFB capture used pixel-count completion gate (fixed)" RESOLVED entry.
 - Memory: `feedback_routine_localize_prompts.md` — still valid for popup prompt authoring; not the proximate cause here.
 - Commits: `0436e51`, `5b24a5a`, `97f64b5`.
+
+## Postscript: the sister incident (same day)
+
+After the VNC capture fix landed, `3325-master-toggle` kept failing at the modal-verify step. Three more commits attributed the failure to three wrong causes in sequence:
+
+1. **PR3325 PersistableValues SIGTRAP** — a builder claimed `isTelephonyEnabled` was missing from RC's Redux-persist allowlist, that pre-staging the field caused a SIGTRAP. Commit `7bd9b52` shipped with that claim asserted in the message.
+2. **config.json vs `overridden-settings.json`** — a follow-up corrected the previous diagnosis: "top-level config.json writes are silently ignored by Redux-persist; the canonical mechanism is `overridden-settings.json`". Routine rewritten; UI workaround removed. Still failed.
+3. **Bool serialization in mosdat's jinja layer** — the actual cause. `automation/runners/var_subst.py:85` coerced Python bool inputs via `str(v)` → `'True'` (capital T) → jinja `tojson` → `'"True"'` (JSON-quoted) → downstream `sys.argv[1] == 'true'` always returned False. Every scenario passing `telephony_enabled: true` had been writing `isTelephonyEnabled: false`. One-line carve-out in the `isinstance` filter fixed it. `3325-master-toggle` now passes 32/32.
+
+Verification of (1): PR3325 source DOES include `isTelephonyEnabled` in `PersistableValues_4_14_0` with a proper migration. RC logs show no SIGTRAP. Crashpad dumps empty. The diagnosis was fabricated.
+
+Lesson — captured as `feedback_verify_diagnosis_before_commit.md` in project memory: subagent root-cause reports are hypotheses, not findings. Before writing a commit message that asserts a specific upstream symbol / crash / protocol behavior, grep the actual source. The orchestrator's job is to verify, not relay. Two wrong diagnostic layers stacked on top of each other; both shipped before the truth surfaced.
+
+Sister-incident commits: `7bd9b52` (wrong diagnosis), the overridden-settings.json rewrite (right pattern, didn't unblock), `58e802d` (actual fix).
