@@ -183,8 +183,8 @@ class ReportConfig:
 
 class CursorConfig(BaseModel):
     profile: Literal["instant", "linear", "bezier"] = "bezier"
-    duration_ms: int = 150
-    hover_dwell_ms: int = 0
+    duration_ms: int = 1000
+    hover_dwell_ms: int = 250
     seed: str = "auto"
 
     @field_validator("duration_ms")

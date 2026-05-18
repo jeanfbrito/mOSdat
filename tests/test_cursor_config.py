@@ -43,8 +43,8 @@ title = "Test"
 def test_cursor_config_defaults() -> None:
     cfg = CursorConfig()
     assert cfg.profile == "bezier"
-    assert cfg.duration_ms == 150
-    assert cfg.hover_dwell_ms == 0
+    assert cfg.duration_ms == 1000
+    assert cfg.hover_dwell_ms == 250
     assert cfg.seed == "auto"
 
 

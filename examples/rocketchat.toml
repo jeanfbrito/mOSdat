@@ -246,6 +246,6 @@ critical_description = "The wayland-fake test validates the Wayland crash fix (G
 
 [cursor]
 profile = "bezier"
-duration_ms = 150
-hover_dwell_ms = 0
+duration_ms = 1000
+hover_dwell_ms = 250
 seed = "auto"
