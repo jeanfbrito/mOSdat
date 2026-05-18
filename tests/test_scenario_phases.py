@@ -279,9 +279,9 @@ class TestDemoScenario:
         assert len(phases) == 2
         ids = [p["id"] for p in phases]
         assert ids == ["A", "B"]
-        # Phase A starts at step 1, Phase B at step 7 (routine-based numbering)
+        # Phase A starts at step 1, Phase B at step 5 (routine-based numbering)
         assert phases[0]["from_step"] == 1
-        assert phases[1]["from_step"] == 7
+        assert phases[1]["from_step"] == 5
         # Confirm routine expansion succeeds and produces a non-trivial step list
         from automation.runners.scenario_loader import load_test_yaml
         _, steps, _, _ = load_test_yaml(path)

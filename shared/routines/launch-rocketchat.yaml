@@ -1,7 +1,21 @@
 name: launch-rocketchat
-description: Write servers.json + config.json to both userData dirs, then launch RC on X11 and wait for first paint
+description: Write servers.json + config.json + overridden-settings.json to both userData dirs, then launch RC on X11 and wait for first paint
 schema_version: v1
 tags: [setup, launch, rocketchat]
+# Why two files?
+#   - config.json: state RC will read AND overwrite over its lifetime
+#     (servers list, last view, window bounds). We seed it once; RC owns it after.
+#   - overridden-settings.json: read-only force-overrides RC reads on every startup.
+#     Use this for any boolean/string we need to GUARANTEE — toggles, feature flags,
+#     update behavior. Documented in upstream README + src/app/main/data.ts.
+#
+#   The previous version of this routine tried to force-set isTelephonyEnabled
+#   in config.json. That field is part of Redux-persist; on RC startup Redux
+#   rehydrates from its own namespace and the top-level write is ignored.
+#   Worse: if RC is not fully quit when we write, it overwrites the file on
+#   the next state-save tick.
+#
+#   overridden-settings.json bypasses both problems.
 
 inputs:
   servers:
@@ -73,28 +87,15 @@ steps:
       import json, sys
       servers_arr = json.loads(sys.argv[1])
       first_url = sys.argv[2]
-      tel_enabled = sys.argv[3] == 'true'
-      pref_server = None if sys.argv[4] == 'null' else sys.argv[4].strip('\"')
-      accel_raw = sys.argv[5]
-      accel = None if accel_raw == 'null' else accel_raw.strip('\"')
-      mig_ver = sys.argv[6]
+      mig_ver = sys.argv[3]
 
+      # config.json: only state RC owns and may overwrite.
+      # Do NOT put boolean feature flags here — RC Redux-persist rehydrates from
+      # its own namespace and silently ignores top-level writes on every startup.
+      # Use overridden-settings.json for any value we need to GUARANTEE.
       config = {
           'servers': servers_arr,
           'currentView': {'url': first_url},
-          # NOTE: isTelephonyEnabled intentionally omitted.
-          # Pre-staging this field in config.json causes a SIGTRAP crash in the
-          # PR3325 branch (src/app/PersistableValues.ts does not include it).
-          # The app wipes config.json on crash. Use the UI toggle (enable-telephony-toggle
-          # routine) to set this state after launch. See docs/KNOWN_ISSUES.md.
-          'telephonyPreferredServer': pref_server,
-          'telephonyGlobalShortcutConfig': {'enabled': accel is not None, 'accelerator': accel},
-          'isMenuBarEnabled': True,
-          'isSideBarEnabled': True,
-          'isTrayIconEnabled': False,
-          'isMinimizeOnCloseEnabled': False,
-          'doCheckForUpdatesOnStartup': False,
-          'isUpdatingEnabled': False,
           'rootWindowState': {
               'focused': True, 'visible': True, 'maximized': False,
               'minimized': False, 'fullscreen': False, 'normal': True,
@@ -104,7 +105,31 @@ steps:
           '__internal__': {'migrations': {'version': mig_ver}}
       }
       print(json.dumps(config, indent=2))
-      " "$SERVERS_ARR" "$FIRST_NORM" "$TEL_ENABLED" "$PREF_SERVER" "$ACCEL" "$MIG_VER" > "$d/config.json"
+      " "$SERVERS_ARR" "$FIRST_NORM" "$MIG_VER" > "$d/config.json"
+
+        python3 -c "
+      import json, sys
+      tel_enabled = sys.argv[1] == 'true'
+      pref_server = None if sys.argv[2] == 'null' else sys.argv[2].strip('\"')
+      accel_raw = sys.argv[3]
+      accel = None if accel_raw == 'null' else accel_raw.strip('\"')
+
+      # overridden-settings.json: RC merges this on top of Redux state on every startup.
+      # Use this for any value we need to GUARANTEE regardless of prior Redux state.
+      # Documented in upstream README + src/app/main/data.ts.
+      overrides = {
+          'isTelephonyEnabled': tel_enabled,
+          'telephonyPreferredServer': pref_server,
+          'telephonyGlobalShortcutConfig': {'enabled': accel is not None, 'accelerator': accel},
+          'isMenuBarEnabled': True,
+          'isSideBarEnabled': True,
+          'isTrayIconEnabled': False,
+          'isMinimizeOnCloseEnabled': False,
+          'doCheckForUpdatesOnStartup': False,
+          'isUpdatingEnabled': False,
+      }
+      print(json.dumps(overrides, indent=2))
+      " "$TEL_ENABLED" "$PREF_SERVER" "$ACCEL" > "$d/overridden-settings.json"
       done
       echo LAUNCH_RC_CONFIG_WRITTEN
 

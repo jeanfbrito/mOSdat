@@ -182,37 +182,31 @@
 
 ---
 
-## Rocket.Chat.Electron PR #3325 (HEAD) — app crashes when isTelephonyEnabled is pre-staged in config.json
+## Rocket.Chat.Electron PR #3325 — isTelephonyEnabled in config.json is silently ignored (Redux-persist)
 
-- **Status**: Upstream regression in the PR3325 branch; mosdat side is correct.
-- **Issue**: When mosdat pre-stages `"isTelephonyEnabled": true` (or `false`) in
-  `~/.config/Rocket.Chat*/config.json` and launches the app, the main process
-  crashes during init with `SIGTRAP` (V8 uncaught exception). Apport raises
-  "The application Rocket.Chat has closed unexpectedly". The app wipes both
-  `config.json` files to 0 bytes on the way out.
-- **Root cause** (per finder investigation against
-  `linux-testing/Rocket.Chat.Electron` on the `pr-3325` branch):
-  1. `src/app/PersistableValues.ts` does NOT include `isTelephonyEnabled` in
-     the persisted-values type, so the field is silently dropped at hydration
-     and the persistence/migration code throws.
-  2. `src/telephony/main.ts` is MISSING from `pr-3325` HEAD; it exists on
-     `pr-3325-latest` and contains the reactive watcher + handler gating.
-  3. `src/deepLinks/main.ts:98-110` `performTelephonyCall` has no
-     `isTelephonyEnabled` gate.
-- **Reproducer**: `mosdat functional examples/rocketchat.toml --vms ubuntu2204
-  --test 3325-master-toggle --popup-sweep` — fails at Phase A step 7 with
-  `app_crashed` (apport_dialog_detected). Crash dump:
-  `/var/crash/_opt_Rocket.Chat_rocketchat-desktop.bin.1000.crash`, signal 5.
-- **mOSdat side**: As of 2026-05-17 the runner detects this via apport-probe
-  in popup-sweep + verify-failure paths and emits `app_crashed` event with
-  `AppCrashedError` halting the scenario (saves ~70s vs blind retry loops).
-- **Fix upstream**: Merge `src/telephony/main.ts` from `pr-3325-latest` and
-  add `isTelephonyEnabled` to `PersistableValues`. Until then,
-  3325-master-toggle and any scenario that pre-stages `isTelephonyEnabled`
-  will fail on this branch — and that failure is correct signal, not a
-  mosdat bug.
-- **Ref**: Observed 2026-05-17 during V3 master-toggle validation with greg
-  via crof.ai; finder agent verdict + live VM crash inspection.
+- **Status**: Resolved — mosdat now uses overridden-settings.json instead.
+- **Issue**: Writing `"isTelephonyEnabled": true` (or `false`) as a top-level key in
+  `~/.config/Rocket.Chat*/config.json` has no effect at runtime. RC's Redux-persist
+  rehydrates feature flags from its own internal namespace (`__internal__`) on startup
+  and silently ignores top-level writes. Additionally, if RC is not fully quit when
+  the file is written, RC's state-save tick overwrites the file within seconds.
+  A prior incorrect diagnosis (commit d510f4b) attributed this to a SIGTRAP crash
+  caused by `isTelephonyEnabled` appearing in config.json; that was wrong — the crash
+  was a separate upstream issue in the PR3325 branch (missing `src/telephony/main.ts`),
+  not caused by the field itself. PR3325 source includes `isTelephonyEnabled` in
+  `PersistableValues_4_14_0` with a proper migration; RC logs show no SIGTRAP from
+  the field; crashpad dumps were empty.
+- **Fix**: Use `overridden-settings.json`. RC's `src/app/main/data.ts` merges this
+  file on top of Redux state on every startup, guaranteeing the value regardless of
+  prior Redux state. The `launch-rocketchat` routine now writes both files: `config.json`
+  contains only state RC owns (servers, window bounds, last URL); `overridden-settings.json`
+  contains all boolean flags and feature toggles.
+- **Rule**: Always use `overridden-settings.json` for any boolean or string you need
+  to guarantee. Never rely on top-level config.json writes for Redux-managed keys.
+- **Affects**: `shared/routines/launch-rocketchat.yaml`. Any scenario that pre-stages
+  feature flags must use the `launch-rocketchat` routine's inputs, not manual config.json writes.
+- **Ref**: Corrected 2026-05-18; see `docs/runbooks/scenario-state-seeding.md`,
+  commit d510f4b (the incorrect diagnosis that was reverted by this fix).
 
 ## RFB capture used pixel-count completion gate (fixed)
 

@@ -313,6 +313,8 @@ Decision heuristic: if you would have to copy-paste this block into the next sce
 
 **Settings nav for persisted state** — Do not click through Settings to set a value that lives in `config.json`. Use `--inject-config` (I1) or the `launch-rocketchat` routine's input parameters. Settings nav on Linux Electron is a known failure surface: `Ctrl+,` has no accelerator, sidebar kebab is transient, `alt+w` is swallowed by the webview. See `docs/skills/state-first-testing.md` §3.
 
+**config.json for feature flags** — Do not write boolean feature flags (`isTelephonyEnabled`, `isMenuBarEnabled`, etc.) into `config.json`. RC's Redux-persist rehydrates from its own namespace and silently ignores those top-level keys. Use `overridden-settings.json` instead — the `launch-rocketchat` routine handles this split automatically via the `telephony_enabled` and related inputs. See `docs/runbooks/scenario-state-seeding.md`.
+
 **Skipping routine isolation tests** — Running the full scenario first and debugging composite failures wastes cycles. Test each new routine independently via `mosdat routines test` before composing.
 
 **VLM prompts naming exact values** — `verify: "version number v6.8.0 visible"` will break on the next release. Describe the state type: `verify: "version information shown in the status area"`.

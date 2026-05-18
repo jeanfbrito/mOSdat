@@ -78,11 +78,13 @@ def render_steps(steps: list[dict], vars: dict[str, Any]) -> list[dict]:
         return _render_steps_regex(steps, vars)
 
     # Cast scalar var values to str so {{ foo }} prints cleanly. Keep
-    # lists/dicts as native types so jinja filters like `tojson` receive
-    # the original structure rather than its Python repr (which would
-    # double-encode with single quotes and break shell parsers downstream).
+    # lists/dicts/bools/None as native types so jinja filters like `tojson`
+    # receive the original structure rather than its Python repr.
+    # Bool carve-out matters: str(True) == 'True', then `| tojson` produces
+    # '"True"' (JSON string of capital-T), which downstream shell+python
+    # comparisons against the JSON literal 'true' silently fail.
     str_vars = {
-        k: v if isinstance(v, (list, dict)) else str(v)
+        k: v if isinstance(v, (list, dict, bool)) or v is None else str(v)
         for k, v in vars.items()
     }
 
