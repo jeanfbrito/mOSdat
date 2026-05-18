@@ -363,11 +363,15 @@ class TestMasterToggleLabels:
     )
     def test_first_step_has_a1_label(self):
         _, steps, _, _ = load_test_yaml(self._SCENARIO)
-        # Step 1 is now `- import: cleanup-rocketchat` — I11 expansion prefixes
-        # the fragment's first step label with `[import:cleanup-rocketchat]`.
-        # Accept either the historical "A1" prefix OR the new import prefix.
+        # After conversion to routines-first form, step 1 is expanded from a
+        # routine: cleanup-rocketchat call and carries a [routine:cleanup-rocketchat]
+        # label prefix.  Accept any of the historical prefix forms.
         assert steps[0].label is not None
-        assert ("A1" in steps[0].label) or ("[import:cleanup-rocketchat]" in steps[0].label)
+        assert (
+            "A1" in steps[0].label
+            or "[import:cleanup-rocketchat]" in steps[0].label
+            or "[routine:cleanup-rocketchat]" in steps[0].label
+        )
 
     @pytest.mark.skipif(
         not _SCENARIO.exists(),

@@ -552,18 +552,30 @@ class TestDemoExpansion:
 
 class TestMasterToggleConversion:
     def test_master_toggle_has_import_step(self):
-        """3325-master-toggle.yaml contains at least one !import reference."""
+        """3325-master-toggle.yaml references cleanup-rocketchat (as routine: or !import)."""
         p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
         assert p.exists()
         content = p.read_text()
-        assert "!import cleanup-rocketchat" in content or "import: cleanup-rocketchat" in content
+        # After conversion to routines-first form, cleanup-rocketchat is called
+        # as a routine: step rather than an !import/import: step.
+        assert (
+            "!import cleanup-rocketchat" in content
+            or "import: cleanup-rocketchat" in content
+            or "routine: cleanup-rocketchat" in content
+        )
 
     def test_master_toggle_imports_manifest(self):
-        """3325-master-toggle.yaml has cleanup-rocketchat in imports: manifest."""
+        """3325-master-toggle.yaml references cleanup-rocketchat via routine: or imports:."""
         p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
         doc = yaml.safe_load(p.read_text())
-        assert "imports" in doc
-        assert "cleanup-rocketchat" in doc["imports"]
+        content = p.read_text()
+        # After conversion to routines-first form the scenario uses routine: calls
+        # instead of an imports: manifest.  Accept either form.
+        has_imports_manifest = "imports" in doc and "cleanup-rocketchat" in doc.get("imports", [])
+        has_routine_call = "routine: cleanup-rocketchat" in content
+        assert has_imports_manifest or has_routine_call, (
+            "Expected cleanup-rocketchat referenced via imports: manifest or routine: call"
+        )
 
     def test_master_toggle_loads_without_error(self):
         """3325-master-toggle.yaml loads via load_test_yaml without error."""
@@ -580,10 +592,14 @@ class TestMasterToggleConversion:
         assert steps[0].shell is not None
 
     def test_master_toggle_cleanup_step_has_prefixed_label(self):
-        """Expanded cleanup-rocketchat step has [import:cleanup-rocketchat] label prefix."""
+        """Expanded cleanup-rocketchat step carries a routine/import prefix label."""
         p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
         _, steps, _, _ = load_test_yaml(p)
-        # First step should carry the prefixed label from the fragment comment
+        # After conversion to routines-first form, the first step is expanded from
+        # a routine: cleanup-rocketchat call and carries a [routine:cleanup-rocketchat]
+        # label prefix.  Accept either the old import prefix or the new routine prefix.
         label = steps[0].label
         if label is not None:
-            assert label.startswith("[import:cleanup-rocketchat]")
+            assert label.startswith("[import:cleanup-rocketchat]") or label.startswith(
+                "[routine:cleanup-rocketchat]"
+            )

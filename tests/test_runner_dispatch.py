@@ -144,19 +144,19 @@ class TestLocalizeStep:
         runner, vlm, _, inj = _make_runner()
         runner.run_step(FunctionalStep(localize="the Submit button", retries=1), 1)
         vlm.localize.assert_called_once()
-        inj.click.assert_called_once_with(200, 300, button=1)
+        inj.click.assert_called_once_with(200, 300, button=1, motion=None, dwell_ms=None)
 
     def test_localize_issues_right_click(self):
         runner, vlm, _, inj = _make_runner()
         runner.run_step(FunctionalStep(localize="the Submit button", click="right", retries=1), 1)
         vlm.localize.assert_called_once()
-        inj.click.assert_called_once_with(200, 300, button=3)
+        inj.click.assert_called_once_with(200, 300, button=3, motion=None, dwell_ms=None)
 
     def test_localize_issues_hover_without_click(self):
         runner, vlm, _, inj = _make_runner()
         runner.run_step(FunctionalStep(localize="help icon", hover=True, retries=1), 1)
         vlm.localize.assert_called_once()
-        inj.move.assert_called_once_with(200, 300)
+        inj.hover.assert_called_once_with(200, 300, motion=None, dwell_ms=None)
         inj.click.assert_not_called()
 
     def test_localize_then_type_then_key(self):
