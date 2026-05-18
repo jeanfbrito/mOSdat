@@ -51,28 +51,38 @@ def _solid_png(path: Path, color: int) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# _mean_abs_diff
+# _max_abs_diff
 # ---------------------------------------------------------------------------
 
 
-def test_mean_abs_diff_identical(tmp_path):
+def test_max_abs_diff_identical(tmp_path):
     img_a = Image.new("L", (64, 64), color=128)
     img_b = Image.new("L", (64, 64), color=128)
-    result = SessionRecorder._mean_abs_diff(img_a, img_b)
+    result = SessionRecorder._max_abs_diff(img_a, img_b)
     assert result == 0.0
 
 
-def test_mean_abs_diff_max_contrast(tmp_path):
+def test_max_abs_diff_max_contrast(tmp_path):
     img_black = Image.new("L", (64, 64), color=0)
     img_white = Image.new("L", (64, 64), color=255)
-    result = SessionRecorder._mean_abs_diff(img_black, img_white)
-    assert result > 250.0
+    result = SessionRecorder._max_abs_diff(img_black, img_white)
+    assert result == 255.0
 
 
-def test_mean_abs_diff_size_mismatch(tmp_path):
+def test_max_abs_diff_sparse_change_kept(tmp_path):
+    # A single high-contrast pixel (simulating cursor on a 64x64 thumb) must
+    # register as a meaningful diff. Mean would round this to ~0.06.
+    img_a = Image.new("L", (64, 64), color=0)
+    img_b = Image.new("L", (64, 64), color=0)
+    img_b.putpixel((10, 10), 255)
+    result = SessionRecorder._max_abs_diff(img_a, img_b)
+    assert result == 255.0
+
+
+def test_max_abs_diff_size_mismatch(tmp_path):
     img_a = Image.new("L", (64, 64), color=0)
     img_b = Image.new("L", (32, 32), color=0)
-    result = SessionRecorder._mean_abs_diff(img_a, img_b)
+    result = SessionRecorder._max_abs_diff(img_a, img_b)
     assert result == 255.0
 
 

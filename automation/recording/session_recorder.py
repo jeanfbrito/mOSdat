@@ -35,7 +35,7 @@ class SessionRecorder:
         screenshotter,
         recording_dir: Path,
         fps: float = 10.0,
-        diff_threshold: float = 3.0,
+        diff_threshold: float = 1.0,
         keep_raw: bool = False,
         log_fn: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -169,17 +169,31 @@ class SessionRecorder:
         with self.index_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
+    # Thumbnail size for diff comparison. 64x64 was too aggressive — a 1-2 px
+    # cursor motion on a 1280x720 frame blurs to sub-1-intensity max-diff under
+    # bilinear downsample and gets dropped as "no change". 256x256 preserves
+    # enough detail that any cursor move registers, while keeping per-frame
+    # diff cheap (~65k pixels vs ~4k).
+    _THUMB_SIZE = (256, 256)
+
     @staticmethod
     def _thumb(image_path: Path) -> Image.Image:
         with Image.open(image_path) as img:
-            return img.convert("L").resize((64, 64), Image.Resampling.BILINEAR)
+            return img.convert("L").resize(
+                SessionRecorder._THUMB_SIZE, Image.Resampling.BILINEAR
+            )
 
     @staticmethod
-    def _mean_abs_diff(a: Image.Image, b: Image.Image) -> float:
+    def _max_abs_diff(a: Image.Image, b: Image.Image) -> float:
+        # Max absolute per-pixel intensity diff on a 64x64 grayscale thumbnail.
+        # Mean would average a moving cursor (a handful of pixels out of 4096)
+        # down into the JPEG/compression noise floor, dropping motion-only
+        # frames. Max keeps any frame where at least one pixel differs
+        # meaningfully — exactly what "frame has visible change" means.
         if a.size != b.size or a.mode != b.mode:
             return 255.0
         diff = ImageChops.difference(a, b)
-        return float(ImageStat.Stat(diff).mean[0])
+        return float(ImageStat.Stat(diff).extrema[0][1])
 
     def _filter_and_copy(self, raw_frames: list[Path]) -> list[Path]:
         if self.filtered_dir.exists():
@@ -203,8 +217,8 @@ class SessionRecorder:
 
         for idx in range(1, len(raw_frames) - 1):
             curr_thumb = self._thumb(raw_frames[idx])
-            mean_diff = self._mean_abs_diff(last_kept_thumb, curr_thumb)
-            if mean_diff >= self.diff_threshold:
+            max_diff = self._max_abs_diff(last_kept_thumb, curr_thumb)
+            if max_diff >= self.diff_threshold:
                 keep_indices.add(idx)
                 last_kept_thumb = curr_thumb
 

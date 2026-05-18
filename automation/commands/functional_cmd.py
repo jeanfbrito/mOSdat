@@ -250,7 +250,7 @@ def cmd_functional(args) -> int:
                             screenshotter=screenshotter,
                             recording_dir=screenshot_dir / "recording",
                             fps=float(getattr(args, "record_fps", 10.0)),
-                            diff_threshold=float(getattr(args, "record_diff_threshold", 3.0)),
+                            diff_threshold=float(getattr(args, "record_diff_threshold", 1.0)),
                             keep_raw=bool(getattr(args, "record_keep_raw", False)),
                             log_fn=lambda msg: print(f"[mOSdat] {msg}"),
                         )

@@ -157,8 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
                       help=argparse.SUPPRESS)
     fn_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
                       help="Recorder capture rate (default: 10.0)")
-    fn_p.add_argument("--record-diff-threshold", type=float, default=3.0, metavar="VALUE",
-                      help="Mean grayscale diff threshold for frame retention (default: 3.0)")
+    fn_p.add_argument("--record-diff-threshold", type=float, default=1.0, metavar="VALUE",
+                      help="Max-pixel grayscale diff threshold (0-255) for frame retention. "
+                           "Any frame whose max-pixel diff vs the last kept frame meets this is "
+                           "kept. Default 1.0 = drop only pixel-identical frames; raise to "
+                           "skip near-duplicates. (default: 1.0)")
     fn_p.add_argument("--record-gif", action="store_true",
                       help="Also export recording/session.gif (MP4 is always attempted)")
     fn_p.add_argument("--record-keep-raw", action="store_true",
@@ -241,8 +244,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help=argparse.SUPPRESS)
     confirm_p.add_argument("--record-fps", type=float, default=10.0, metavar="FPS",
                            help="Recorder capture rate (default: 10.0)")
-    confirm_p.add_argument("--record-diff-threshold", type=float, default=3.0, metavar="VALUE",
-                           help="Mean grayscale diff threshold for frame retention (default: 3.0)")
+    confirm_p.add_argument("--record-diff-threshold", type=float, default=1.0, metavar="VALUE",
+                           help="Max-pixel grayscale diff threshold (0-255) for frame retention. "
+                                "Default 1.0 = drop only pixel-identical frames. (default: 1.0)")
     confirm_p.add_argument("--record-gif", action="store_true",
                            help="Also export recording/session.gif (MP4 is always attempted)")
     confirm_p.add_argument("--record-keep-raw", action="store_true",
