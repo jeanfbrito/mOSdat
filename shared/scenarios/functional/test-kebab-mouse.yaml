@@ -1,0 +1,35 @@
+name: "Test — open Settings via sidebar kebab (mouse-only, recorded)"
+# Force the kebab-fallback path: no alt+w, only mouse motion.
+# Visual proof of M1-M8 Bezier cursor motion + dwell_ms on a transient popup.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+
+steps:
+  - routine: cleanup-rocketchat
+  - routine:
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "{{ workspace_url }}" }
+
+  - verify: "Rocket.Chat login page or workspace content is visible"
+    verify_timeout: 30
+    retries: 3
+
+  - localize: "the kebab or three-dot menu button at the bottom of the Rocket.Chat sidebar (left column) — a settings/customize gear-or-dots icon"
+    click: left
+    dwell_ms: 250
+
+  - wait: 2
+
+  - localize: "the 'Settings' or 'Desktop Settings' menu item in the popup menu that just opened from the sidebar kebab button"
+    click: left
+
+  - wait: 4
+
+  - verify: "Rocket.Chat Settings or Preferences panel is visible inside the main application window — General/About/etc. tabs visible. Not a crash dialog, not a blank screen."
+    verify_timeout: 15
+    retries: 3
+
+  - routine: cleanup-rocketchat

@@ -1,0 +1,30 @@
+name: "Test — raw localize+click cursor motion (M1-M8 verification)"
+# Minimal exercise of Bezier human_move + dwell_ms on a known-visible target.
+# Targets the Email/username field on the RC login page after a fresh launch.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+
+steps:
+  - routine: cleanup-rocketchat
+  - routine:
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "{{ workspace_url }}" }
+
+  - verify: "Rocket.Chat login page is visible — workspace login form with email/username field and password field"
+    verify_timeout: 30
+    retries: 3
+
+  - localize: "the 'Email or username' text input field on the Rocket.Chat login form (the topmost input above the Password field)"
+    click: left
+    dwell_ms: 250
+
+  - wait: 2
+
+  - verify: "The Email/username input field on the Rocket.Chat login form is focused — caret is visible inside the field or the field has a focus highlight/border"
+    verify_timeout: 10
+    retries: 2
+
+  - routine: cleanup-rocketchat

@@ -1,0 +1,19 @@
+name: "Test — open-settings routine cursor motion (M1-M8 verification)"
+# Standalone exercise of shared/routines/open-settings.yaml — focus
+# is the sidebar-kebab fallback path: cursor must Bezier-move (M1-M8)
+# and dwell 250ms before the popup menu localize fires.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+
+steps:
+  - routine: cleanup-rocketchat
+  - routine:
+      name: launch-rocketchat
+      with:
+        servers:
+          - { title: "Workspace", url: "{{ workspace_url }}" }
+
+  - routine: open-settings
+
+  - routine: cleanup-rocketchat
