@@ -1,0 +1,272 @@
+# qa_flow: TEL-QA-004
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/04-diagnostics-panel.md
+# Status: AT-SPI-first authoring. Updated 2026-05-22 after clean redeploy of
+# PR3325 head e42cad2c — diagnostics panel is now present in the binary.
+#
+# Live-discovered widget names (ubuntu2204@192.168.13.81, RC.Electron 4.14.1
+# from PR3325 ubuntu-latest build e42cad2c, app.asar sha256
+# c8fcac7561039957f0dc7de4f34aa9585f058c0f9d5c71d3f416fb5d71bbf247):
+#
+#   - Settings tabs: General | Certificates | Voice & Video
+#   - The "Voice & Video" tab is where the Telephony + Video calls accordions live.
+#   - The Telephony checkbox (master toggle) sits inside the Telephony accordion.
+#   - Enabling Telephony triggers a one-shot "Rocket.Chat now opens phone links"
+#     modal that must be dismissed via "Got it" before the diagnostics panel
+#     becomes visible.
+#   - Diagnostics is rendered as a collapsed `push button` accordion header
+#     named "Phone-link handler diagnostics ..." (full a11y name embeds the
+#     subtitle + "N issues" — we match by substring).
+#   - When expanded, the panel exposes "Refresh" and "Copy diagnostics" push
+#     buttons plus per-check rows (statics) with Pass/Fail status labels.
+#
+# What this scenario verifies:
+#   1. Kebab -> Settings -> Voice & Video tab opens.
+#   2. Telephony checkbox is reachable and can be toggled ON.
+#   3. The "Rocket.Chat now opens phone links" prompt appears and is dismissed.
+#   4. The Diagnostics accordion is exposed and expands.
+#   5. Refresh + Copy diagnostics buttons are clickable.
+#   6. Clipboard contains a JSON payload with the diagnostics keys
+#      (`isDefault.tel`, `isDefault.callto`, `platform`, `checks`).
+#
+# Uses the launch-rocketchat routine to pre-stage a workspace (otherwise RC
+# starts on the "Connect to workspace" landing page and the kebab doesn't
+# exist). telephony_enabled is left OFF so the test exercises the OFF->ON
+# transition that triggers the one-shot default-handler prompt.
+
+name: "3325-diagnostics-panel"
+description: |
+  TEL-QA-004 — Telephony diagnostics panel.
+
+  AT-SPI-first scenario. Pre-stages a workspace via launch-rocketchat
+  (telephony OFF), navigates kebab -> Settings -> Voice & Video, enables
+  Telephony, dismisses the default-handler prompt, expands the Phone-link
+  handler diagnostics accordion, clicks Refresh + Copy diagnostics, and
+  asserts the clipboard JSON contains the expected keys.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings with telephony OFF) ─
+  # Inlined from launch-rocketchat to keep the scenario self-contained on Xorg
+  # VMs while the routine's XAUTH path is being repaired in parallel. See
+  # `docs/KNOWN_ISSUES.md` "launch-rocketchat: Wayland-only XAUTH".
+  - shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": False,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED
+
+  # ── Launch RC inline with XAUTH fallback chain (mutter → gdm → $HOME) ────
+  # Pattern mirrors `_smoke-atspi.yaml`; works on both Xorg (gdm Xauthority)
+  # and Wayland (mutter-Xwaylandauth) hosts.
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  # ── Wait for frame ───────────────────────────────────────────────────────
+  # After config staging the frame title reflects the server (e.g. "Login -
+  # <workspace>", "Welcome - <workspace>"), NOT "Rocket.Chat". The reliable
+  # signal is "any frame role under the rocketchat-desktop AT-SPI app".
+  - label: "wait_for RC frame to appear"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # ── Open the kebab menu (Customize and control app) ──────────────────────
+  - label: "wait_for kebab button (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 20}
+    retries: 1
+
+  - label: "click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  # ── Wait for kebab popup, then click Settings ────────────────────────────
+  - label: "wait_for Settings menu item"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 10}
+    retries: 1
+
+  - label: "click Settings menu item"
+    atspi: {role: "menu item", name: "Settings"}
+    retries: 1
+
+  # ── Wait for Settings panel (General + Certificates + Voice & Video) ─────
+  - label: "wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "verify Voice & Video tab present (PR3325 diagnostics build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "wait_for Telephony checkbox on Voice & Video tab"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  # Give the V&V panel one second to fully hydrate after the wait_for fires
+  # (the wait_for returns the instant the node enters the AT-SPI tree, but
+  # the Fuselage ToggleSwitch onChange handler may not be wired yet).
+  - wait: 1
+
+  # ── Toggle Telephony ON (unlocks the Diagnostics panel render) ────────────
+  # WORKAROUND: Fuselage ToggleSwitch's AT-SPI action_name is decoupled from
+  # the React `checked` prop — invoking action[0] toggles the underlying state
+  # but we cannot tell from the action name whether the result is ON or OFF.
+  # Strategy: behavioural verification. Clicking OFF→ON fires the one-shot
+  # "Rocket.Chat now opens phone links" modal; clicking ON→OFF does not. So
+  # we drive the worker directly: click, poll for "Got it" with short
+  # timeout, click again on miss (idempotent: a no-modal click means we
+  # toggled the wrong way), poll again with longer timeout.
+  # See `docs/KNOWN_ISSUES.md` "Fuselage ToggleSwitch AT-SPI action drift".
+  - label: "drive Telephony ON via worker (probe-by-modal)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"check box","name":"Telephony","app_filter":"rocket"},
+          {"id":"a","op":"do_action","from_id":"f","action_idx":0,"app_filter":"rocket"},
+          {"id":"w","op":"wait_for","any":[{"role":"push button","name":"Got it"}],"timeout_ms":5000,"interval_ms":500,"app_filter":"rocket"}
+        ]
+      }'
+      RES1=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES1" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("OK" if d["results"]["w"]["ok"] else "MISS")' 2>/dev/null | grep -q OK; then
+        echo "TELEPHONY_TOGGLED_ON_FIRST_CLICK"
+        exit 0
+      fi
+      echo "first click did not surface Got it modal — retrying (toggle was already ON, second click goes OFF→ON)"
+      PROBE2='{
+        "ops": [
+          {"id":"f","op":"find","role":"check box","name":"Telephony","app_filter":"rocket"},
+          {"id":"a","op":"do_action","from_id":"f","action_idx":0,"app_filter":"rocket"},
+          {"id":"w","op":"wait_for","any":[{"role":"push button","name":"Got it"}],"timeout_ms":10000,"interval_ms":500,"app_filter":"rocket"}
+        ]
+      }'
+      RES2=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE2" 2>&1)
+      if echo "$RES2" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("OK" if d["results"]["w"]["ok"] else "MISS")' 2>/dev/null | grep -q OK; then
+        echo "TELEPHONY_TOGGLED_ON_SECOND_CLICK"
+        exit 0
+      fi
+      echo "FAILED — neither click surfaced Got it modal" >&2
+      echo "$RES2" >&2
+      exit 1
+
+  # ── Dismiss the one-shot "Rocket.Chat now opens phone links" prompt ──────
+  - label: "wait_for Got it button on default-handler prompt"
+    wait_for: {any: [{role: "push button", name: "Got it"}], timeout: 10}
+    retries: 1
+
+  - label: "click Got it (dismiss default-handler prompt)"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  # ── Diagnostics accordion (collapsed by default) ─────────────────────────
+  - label: "wait_for Phone-link handler diagnostics accordion"
+    wait_for: {any: [{role: "push button", name: "Phone-link handler diagnostics", name_substr: true}], timeout: 10}
+    retries: 1
+
+  - label: "expand Phone-link handler diagnostics accordion"
+    atspi: {role: "push button", name: "Phone-link handler diagnostics", name_substr: true}
+    retries: 1
+
+  # ── Refresh + Copy diagnostics ───────────────────────────────────────────
+  - label: "wait_for Refresh button (panel expanded)"
+    wait_for: {any: [{role: "push button", name: "Refresh"}], timeout: 10}
+    retries: 1
+
+  - label: "click Refresh in Diagnostics"
+    atspi: {role: "push button", name: "Refresh"}
+    retries: 1
+
+  - wait: 2
+
+  - label: "click Copy diagnostics (writes JSON to clipboard)"
+    atspi: {role: "push button", name: "Copy diagnostics"}
+    retries: 1
+
+  - wait: 1
+
+  # ── Assert clipboard JSON contains the diagnostics keys ──────────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      CLIP=$(xclip -o -selection clipboard 2>/dev/null)
+      echo "$CLIP" | head -c 200
+      echo
+      echo "$CLIP" | grep -q 'isDefault.tel'    || { echo "NO_ISDEFAULT_TEL_KEY"; exit 1; }
+      echo "$CLIP" | grep -q 'isDefault.callto' || { echo "NO_ISDEFAULT_CALLTO_KEY"; exit 1; }
+      echo "$CLIP" | grep -q '"platform"'       || { echo "NO_PLATFORM_KEY"; exit 1; }
+      echo "$CLIP" | grep -q '"checks"'         || { echo "NO_CHECKS_KEY"; exit 1; }
+      echo "DIAGNOSTICS_JSON_OK"
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

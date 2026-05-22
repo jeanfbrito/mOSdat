@@ -134,8 +134,15 @@ steps:
       echo LAUNCH_RC_CONFIG_WRITTEN
 
   - shell: |
+      # XAUTH fallback chain — Wayland (mutter Xwayland) → Xorg (gdm) → $HOME/.Xauthority.
+      # Original code assumed mutter-Xwaylandauth.* always exists; that breaks on
+      # Xorg-only VMs (e.g. ubuntu2204 in CI) where the file is absent and the
+      # launch silently fails with "cannot open display". See KNOWN_ISSUES.
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 --force-renderer-accessibility >/dev/null 2>&1 &
       echo LAUNCH_RC_DONE
 

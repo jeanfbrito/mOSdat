@@ -312,3 +312,47 @@
   runs, simply omit `--record-window-state` (default OFF).
 - **Affects**: `automation/recording/session_recorder.py:_collect_window_state`.
 - **Ref**: Discovered during Stage 3a live verify, 2026-05-22.
+
+## launch-rocketchat: Wayland-only XAUTH path silently failed on Xorg VMs
+- **Status**: Fixed (XAUTH fallback chain added)
+- **Issue**: `shared/routines/launch-rocketchat.yaml` (the launch shell step)
+  resolved `XAUTHORITY` ONLY via `ls /run/user/1000/.mutter-Xwaylandauth.*
+  | head -1`. On Xorg-only VMs (e.g. `ubuntu2204@192.168.13.81`) the mutter
+  Xwayland auth file does not exist; the lookup returned empty, RC was
+  launched with `XAUTHORITY=""`, the binary saw `cannot open display` and
+  silently failed to render. Downstream `wait_for {role: frame}` steps then
+  timed out at 30s.
+- **Workaround**: The shell step now tries mutter Xwayland auth → gdm
+  Xauthority (`/run/user/1000/gdm/Xauthority`) → `$HOME/.Xauthority`, and
+  only exports `XAUTHORITY` when the resolved file actually exists.
+  Scenarios that drove launch inline copied the same fallback chain.
+- **Affects**: `shared/routines/launch-rocketchat.yaml` line ~137;
+  `shared/scenarios/functional/3325-diagnostics-panel.yaml` inline launch.
+- **Ref**: Discovered while wiring `3325-diagnostics-panel` against the
+  PR3325 clean redeploy, 2026-05-22.
+
+## Fuselage ToggleSwitch: AT-SPI action_name decoupled from React `checked` state
+- **Status**: Workaround in place (probe-by-modal pattern)
+- **Issue**: The Telephony master toggle (Fuselage `<ToggleSwitch>`) is
+  exposed in the AT-SPI tree as `role: check box, name: "Telephony"`, but
+  its single action is always reported as `action_name: "uncheck"`
+  regardless of the underlying React `checked` prop. Invoking the action
+  toggles state, but neither `verify_atspi` (no state inspector) nor the
+  pre-action `action_name` reveals whether the click landed OFF→ON or
+  ON→OFF. Blind `atspi:` clicks therefore drift: if the toggle is
+  persisted ON from a prior session, the first click flips it OFF, the
+  diagnostics panel never renders, and the scenario stalls.
+- **Workaround**: Behavioural verification via the one-shot
+  "Rocket.Chat now opens phone links" modal, which fires ONLY on
+  OFF→ON. Drive the toggle directly from the worker: `find` →
+  `do_action` → `wait_for {role: push button, name: "Got it"}` with a
+  short timeout. If `Got it` does not appear within 5s, click again (the
+  prior click went ON→OFF; this one goes OFF→ON) and re-poll with a
+  longer timeout. Implemented in the `drive Telephony ON via worker
+  (probe-by-modal)` shell step of `3325-diagnostics-panel.yaml`.
+- **Affects**: any scenario that needs to GUARANTEE Telephony is ON via
+  AT-SPI (currently `3325-diagnostics-panel.yaml`). Same pattern applies
+  to other Fuselage ToggleSwitch instances if they ship one-shot side
+  effects.
+- **Ref**: Discovered during `3325-diagnostics-panel` live-run iteration,
+  2026-05-22.

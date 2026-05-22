@@ -140,7 +140,7 @@ For task-specific procedures, see `docs/runbooks/`:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mOSdat** (8409 symbols, 14560 relationships, 213 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mOSdat** (8885 symbols, 15351 relationships, 214 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
