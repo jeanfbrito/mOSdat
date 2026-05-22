@@ -245,6 +245,18 @@ class AtspiStep(_StepBase):
 
     Discriminated by presence of ``atspi`` key. Optional ``localize`` field
     enables VLM fallback when the AT-SPI tree lookup fails at runtime.
+
+    The ``atspi`` dict accepts:
+        role / name / name_substr — widget selectors (see authoring guide).
+        action_idx — AT-SPI action index for ``via='action'`` (default 0).
+        app_filter — top-level app substring filter (default ``"rocket"``).
+        via — click mode. ``"pointer"`` (DEFAULT) drives a real cursor +
+            real button click via the VNC injector and is visible in
+            session recordings. ``"action"`` invokes semantic
+            ``do_action(idx)`` with no cursor motion — fast but invisible
+            in recordings; use for smokes, validation, warm-up, or
+            widgets that lack Component extents.
+        motion / dwell_ms — pointer-mode only; overrides for cursor path.
     """
     atspi: dict[str, Any]
     localize: Optional[str] = None

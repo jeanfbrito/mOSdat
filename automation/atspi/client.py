@@ -228,6 +228,52 @@ class AtspiClient:
         action_idx: int = 0,
         app_filter: Optional[str] = None,
         timeout: Optional[int] = None,
+        via: str = "pointer",
+        input_injector: Any = None,
+        motion: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+    ) -> dict:
+        """Click an accessible widget.
+
+        via='pointer' (default): find widget → resolve bbox center → move
+            cursor via ``input_injector`` → verify with
+            ``get_accessible_at_point`` → real button click. Exercises the
+            real input event chain; cursor visible in recordings. Requires
+            ``input_injector`` and a widget with Component extents.
+        via='action': legacy semantic ``do_action`` invocation; no cursor
+            motion. Use for fast smokes, validation, warm-up, or off-screen
+            widgets that lack Component extents.
+        """
+        if via == "pointer":
+            if input_injector is None:
+                raise AtspiError(
+                    "pointer-mode click requires input_injector; pass "
+                    "input_injector=runner.injector or use via='action'"
+                )
+            return self._click_via_pointer(
+                role, name, name_substr=name_substr,
+                app_filter=app_filter, timeout=timeout,
+                input_injector=input_injector,
+                motion=motion, dwell_ms=dwell_ms,
+            )
+        if via == "action":
+            return self._click_via_action(
+                role, name, name_substr=name_substr,
+                action_idx=action_idx, app_filter=app_filter,
+                timeout=timeout, input_injector=input_injector,
+            )
+        raise AtspiError(f"unknown via={via!r}; expected 'pointer' or 'action'")
+
+    def _click_via_action(
+        self,
+        role: str,
+        name: Optional[str] = None,
+        *,
+        name_substr: bool = False,
+        action_idx: int = 0,
+        app_filter: Optional[str] = None,
+        timeout: Optional[int] = None,
+        input_injector: Any = None,  # accepted + ignored for caller symmetry
     ) -> dict:
         """Find + do_action in one round-trip. Returns the do_action result."""
         af = app_filter or self._app_filter
@@ -249,7 +295,108 @@ class AtspiClient:
                 f"click failed at do_action: role={role!r} name={name!r} "
                 f"idx={action_idx}",
                 result=result)
-        return act_res
+        # Tag the result so callers / tests can distinguish modes.
+        out = dict(act_res)
+        out["via"] = "action"
+        return out
+
+    def _click_via_pointer(
+        self,
+        role: str,
+        name: Optional[str] = None,
+        *,
+        name_substr: bool = False,
+        app_filter: Optional[str] = None,
+        timeout: Optional[int] = None,
+        input_injector: Any,
+        motion: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+    ) -> dict:
+        """Pointer-mode click: real cursor + verify + real button click.
+
+        Algorithm:
+            1. find widget → grab Component extents.
+            2. compute bbox center.
+            3. move cursor via input_injector._position_cursor.
+            4. verify cursor lands on (subtree of) the expected node via
+               get_accessible_at_point.
+            5. on mismatch, retry once (re-find, re-move, re-verify).
+            6. real button-1 click via input_injector.vnc.click.
+
+        Verify accepts exact-path match OR ancestor/descendant subtree
+        match (the top node under the cursor may be a child label/icon
+        of the clickable widget, or the widget container above a probe
+        target — both are still on the intended widget).
+        """
+        af = app_filter or self._app_filter
+        last_err: Optional[str] = None
+        for attempt in (1, 2):
+            find_res = self.find(
+                role, name, name_substr=name_substr,
+                app_filter=af, timeout=timeout,
+            )
+            extents = find_res.get("extents")
+            if not extents:
+                raise AtspiError(
+                    "widget has no Component extents — pointer-mode "
+                    f"unsupported; use via='action' for role={role!r} "
+                    f"name={name!r}",
+                    result={"find": find_res},
+                )
+            expected_path = find_res.get("path") or ""
+            cx = int(extents["x"] + extents["width"] / 2)
+            cy = int(extents["y"] + extents["height"] / 2)
+
+            input_injector._position_cursor(
+                cx, cy, motion=motion, dwell_ms=dwell_ms,
+            )
+
+            verify_batch = self.run_batch(
+                [{"id": "v", "op": "get_at_point",
+                  "x": cx, "y": cy, "app_filter": af}],
+                timeout=timeout,
+            )
+            v = verify_batch["results"].get("v", {})
+            actual_path = v.get("path") or ""
+            actual_role = v.get("role", "")
+            actual_name = v.get("name", "")
+            # Chromium ATK does not implement get_accessible_at_point — it
+            # returns None for every renderer-process coordinate. Distinguish
+            # "API unimplemented" (verify_skipped — proceed) from "API
+            # returned a different node" (mismatch — retry/fail).
+            verify_unsupported = (
+                not v.get("ok")
+                and v.get("error") == "no_node_at_point"
+            )
+            ok_match = False
+            if v.get("ok"):
+                if actual_path == expected_path:
+                    ok_match = True
+                elif expected_path and actual_path.startswith(expected_path):
+                    ok_match = True
+                elif actual_path and expected_path.startswith(actual_path):
+                    ok_match = True
+            if ok_match or verify_unsupported:
+                input_injector.vnc.click(cx, cy, button=1)
+                return {
+                    "ok": True, "via": "pointer", "x": cx, "y": cy,
+                    "verified": bool(ok_match),
+                    "verify_skipped": bool(verify_unsupported),
+                    "extents": extents,
+                    "find": find_res,
+                    "verify": {"role": actual_role, "name": actual_name,
+                               "path": actual_path},
+                }
+            last_err = (
+                f"cursor at ({cx},{cy}) reports "
+                f"{actual_role!r}/{actual_name!r} path={actual_path!r}, "
+                f"expected path={expected_path!r}"
+            )
+
+        raise AtspiError(
+            f"pointer-mode verify failed after retry: {last_err}",
+            result={"last_verify": v if 'v' in locals() else None},
+        )
 
     def verify(
         self,

@@ -239,7 +239,9 @@ class TestAtspiStep:
             retries=1,
         )
         runner.run_step(step, 1)
-        atspi.click.assert_called_once_with(role="push button", name="Connect")
+        atspi.click.assert_called_once_with(
+            role="push button", name="Connect", input_injector=inj,
+        )
         vlm.localize.assert_not_called()
         inj.click.assert_not_called()
 

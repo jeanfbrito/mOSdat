@@ -181,7 +181,9 @@ class _StepsMixin:
             self.log(f"  Step {step_num}: atspi {step.atspi}{retry_label}")
             t0_atspi = time.perf_counter()
             try:
-                act_res = self.atspi.click(**step.atspi)
+                act_res = self.atspi.click(
+                    **step.atspi, input_injector=self.injector,
+                )
                 latency_ms_atspi = round((time.perf_counter() - t0_atspi) * 1000)
                 self._emit("atspi_click", step_num=step_num, attempt=attempt,
                            target=step.atspi, latency_ms=latency_ms_atspi,

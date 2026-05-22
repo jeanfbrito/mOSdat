@@ -17,7 +17,8 @@ Op-batch shape (input):
         {"id": "4", "op": "tree_dump",  "max_depth": 30, "app_filter": "rocket"},
         {"id": "5", "op": "wait_for",
          "any": [{"role": "push button", "name": "Connect"}],
-         "timeout_ms": 15000, "interval_ms": 500}
+         "timeout_ms": 15000, "interval_ms": 500},
+        {"id": "6", "op": "get_at_point", "x": 100, "y": 200}
       ],
       "init": {"force_atspi_init": true, "settle_ms": 0}
     }
@@ -163,6 +164,17 @@ def _walk(node: Any, path: str, depth: int, max_depth: int,
     meta = _node_meta(node)
     meta["path"] = path
     meta["depth"] = depth
+    # Extents are read on the Component interface; widgets without one omit.
+    try:
+        from gi.repository import Atspi  # type: ignore
+
+        rect = node.get_extents(Atspi.CoordType.SCREEN)
+        meta["extents"] = {
+            "x": int(rect.x), "y": int(rect.y),
+            "width": int(rect.width), "height": int(rect.height),
+        }
+    except Exception:
+        pass
     out.append(meta)
     for i in range(meta["child_count"]):
         try:
@@ -172,6 +184,54 @@ def _walk(node: Any, path: str, depth: int, max_depth: int,
         if child is None:
             continue
         _walk(child, f"{path}/{i}", depth + 1, max_depth, out)
+
+
+def _walk_path_to_app(node: Any, app_filter: str) -> Optional[str]:
+    """Walk parents from `node` up to the matching app frame, return relative
+    path. Returns None if the node is not under a matching app.
+
+    Path format matches what `_walk` emits: e.g. "/0/3/1" relative to the app.
+    Returns "" for the app node itself.
+    """
+    needle = (app_filter or "").lower()
+    indices: list[int] = []
+    current = node
+    # Safety bound to avoid infinite walks on circular refs.
+    for _ in range(200):
+        try:
+            parent = current.get_parent()
+        except Exception:
+            return None
+        if parent is None:
+            return None
+        try:
+            parent_name = (parent.get_name() or "").lower()
+        except Exception:
+            parent_name = ""
+        # parent_name == "" + indices-from-app means current IS app's child;
+        # but app itself sits under desktop (desktop's name is unrelated).
+        # We detect "current is the app" by parent being the desktop frame.
+        try:
+            parent_role = parent.get_role_name()
+        except Exception:
+            parent_role = ""
+        if parent_role == "desktop frame":
+            # current is the app top-level. Verify app_filter matches.
+            try:
+                cur_name = (current.get_name() or "").lower()
+            except Exception:
+                cur_name = ""
+            if needle and needle not in cur_name:
+                return None
+            # indices were collected child-to-parent; reverse for path.
+            return "/" + "/".join(str(i) for i in reversed(indices)) if indices else ""
+        try:
+            idx = current.get_index_in_parent()
+        except Exception:
+            return None
+        indices.append(int(idx))
+        current = parent
+    return None
 
 
 def _get_node_by_path(root: Any, path: str) -> Optional[Any]:
@@ -297,6 +357,41 @@ def _op_do_action(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
             "action_name": action_name, "elapsed_ms": elapsed_ms}
 
 
+def _op_get_at_point(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
+    """Look up the AT-SPI node at a screen coordinate.
+
+    Used by pointer-mode click to verify the cursor lands on the intended
+    widget (or one of its descendants/ancestors) before issuing the click.
+    """
+    try:
+        x = int(op.get("x"))
+        y = int(op.get("y"))
+    except Exception:
+        return {"ok": False, "error": "get_at_point_needs_int_x_y"}
+    app_filter = op.get("app_filter", "rocket")
+    try:
+        from gi.repository import Atspi  # type: ignore
+
+        node = desktop.get_accessible_at_point(x, y, Atspi.CoordType.SCREEN)
+    except Exception as e:
+        return {"ok": False, "error": f"get_at_point failed: {e!r}"}
+    if node is None:
+        return {"ok": False, "error": "no_node_at_point", "x": x, "y": y}
+    try:
+        role = node.get_role_name()
+    except Exception:
+        role = "<unknown>"
+    try:
+        name = node.get_name() or ""
+    except Exception:
+        name = ""
+    path = _walk_path_to_app(node, app_filter)
+    return {"ok": True, "role": role, "name": name,
+            "path": path if path is not None else "",
+            "x": x, "y": y,
+            "under_app": path is not None}
+
+
 def _op_tree_dump(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
     app_filter = op.get("app_filter", "rocket")
     max_depth = int(op.get("max_depth", 30))
@@ -366,6 +461,7 @@ _OP_HANDLERS = {
     "do_action": _op_do_action,
     "tree_dump": _op_tree_dump,
     "wait_for": _op_wait_for,
+    "get_at_point": _op_get_at_point,
 }
 
 

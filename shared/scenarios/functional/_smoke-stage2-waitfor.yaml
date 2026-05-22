@@ -49,6 +49,14 @@ steps:
     wait_for: {any: [{role: "frame", name_substr: true}], timeout: 30}
     retries: 1
 
+  # ── Wait for Login button to mount before clicking ────────────────────────
+  # The frame-level wait_for above fires the instant the chrome window enters
+  # the AT-SPI tree, which can be ~100ms before React paints the welcome
+  # screen. Add a second wait_for that targets the actual click target.
+  - label: "wait_for Login button to mount"
+    wait_for: {any: [{role: "push button", name: "Login"}], timeout: 20}
+    retries: 1
+
   # ── Click Login button via AT-SPI ──────────────────────────────────────────
   - label: "click Login via AT-SPI"
     atspi: {role: "push button", name: "Login"}

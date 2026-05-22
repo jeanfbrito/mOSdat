@@ -109,9 +109,46 @@ Fields:
   else exact match. See KNOWN_ISSUES.md item #4 for the `name_substr` +
   missing-`name` edge case.
 - `action_idx` (int, default `0`) — which AT-SPI action to invoke (e.g. for
-  a push button, `0 = press`, `1 = showContextMenu`).
+  a push button, `0 = press`, `1 = showContextMenu`). Used in
+  `via: "action"` mode only.
 - `app_filter` (str, default `"rocket"`) — top-level app substring filter,
   case-insensitive. Override for non-RC apps.
+- `via` (str, default `"pointer"`) — click mode. See "Choosing a click
+  mode" below.
+- `motion` (str, optional) — cursor-motion profile override for
+  `via: "pointer"`; passed through to the VNC injector.
+- `dwell_ms` (int, optional) — dwell time at the target before click for
+  `via: "pointer"`; passed through to the VNC injector.
+
+#### Choosing a click mode
+
+- `pointer` (default): real cursor motion + pre-click verify via
+  `get_accessible_at_point` + real button click. Cursor visible in the
+  session recording; exercises the real input event chain. Use for final
+  test runs and PR-gating scenarios. Widget must expose Component
+  extents (most standard widgets do).
+- `action`: semantic `do_action(0)` invocation; no cursor motion.
+  Fast and reliable but the recording shows no interaction. Use for:
+    * smoke runs where speed matters more than the visual artifact
+    * pre-flight / validation scaffolding inside a larger scenario
+    * widgets that lack Component extents (rare — typically offscreen)
+    * widgets whose click handler isn't tied to pointer events
+
+Example pair:
+
+```yaml
+# Final-run style (default — real cursor, visible in recording)
+- atspi: {role: "push button", name: "Login"}
+
+# Smoke / validation style (semantic, no cursor)
+- atspi: {role: "push button", name: "Login", via: "action"}
+```
+
+The pointer-mode verify accepts exact-path match OR
+ancestor/descendant subtree match — the cursor landing on a child
+label or parent container of the intended widget is still "on" the
+widget. One retry fires on mismatch (re-find + re-move + re-verify)
+before raising `AtspiError`.
 
 ### `verify_atspi:` — semantic existence check
 
