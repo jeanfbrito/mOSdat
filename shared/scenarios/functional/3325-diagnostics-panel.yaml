@@ -176,49 +176,31 @@ steps:
   - wait: 1
 
   # ── Toggle Telephony ON (unlocks the Diagnostics panel render) ────────────
-  # WORKAROUND: Fuselage ToggleSwitch's AT-SPI action_name is decoupled from
-  # the React `checked` prop — invoking action[0] toggles the underlying state
-  # but we cannot tell from the action name whether the result is ON or OFF.
-  # Strategy: behavioural verification. Clicking OFF→ON fires the one-shot
-  # "Rocket.Chat now opens phone links" modal; clicking ON→OFF does not. So
-  # we drive the worker directly: click, poll for "Got it" with short
-  # timeout, click again on miss (idempotent: a no-modal click means we
-  # toggled the wrong way), poll again with longer timeout.
+  # Earlier step asserted toggle currently OFF, so a single OFF→ON click
+  # surfaces the one-shot "Rocket.Chat now opens phone links" modal.
+  #
+  # NOTE: this is the ONE click in the scenario that uses `via: hint`
+  # instead of pointer-mode. The Fuselage ToggleSwitch exposes a
+  # zero-extent AT-SPI check box (extents 1×1 — the hidden <input>) whose
+  # paint-side track widget has no accessible role. A pointer-mode click
+  # lands on a 1px point and the React onChange handler does not fire.
+  # Verified live 2026-05-22 against tel-qa-002 sibling scenario.
+  # `via: hint` moves the cursor to the clickable ancestor + dwells +
+  # invokes the semantic AT-SPI "check" action (which IS wired to React
+  # state). Recording shows cursor arriving and pausing on the toggle so
+  # a reviewer can SEE where activation happens, but the actual state
+  # change rides the action — combining visual context with reliability.
+  # Every other click in this scenario remains pointer-mode.
   # See `docs/KNOWN_ISSUES.md` "Fuselage ToggleSwitch AT-SPI action drift".
-  - label: "drive Telephony ON via worker (probe-by-modal)"
-    shell: |
-      set -u
-      PROBE='{
-        "ops": [
-          {"id":"f","op":"find","role":"check box","name":"Telephony","app_filter":"rocket"},
-          {"id":"a","op":"do_action","from_id":"f","action_idx":0,"app_filter":"rocket"},
-          {"id":"w","op":"wait_for","any":[{"role":"push button","name":"Got it"}],"timeout_ms":5000,"interval_ms":500,"app_filter":"rocket"}
-        ]
-      }'
-      RES1=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
-      if echo "$RES1" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("OK" if d["results"]["w"]["ok"] else "MISS")' 2>/dev/null | grep -q OK; then
-        echo "TELEPHONY_TOGGLED_ON_FIRST_CLICK"
-        exit 0
-      fi
-      echo "first click did not surface Got it modal — retrying (toggle was already ON, second click goes OFF→ON)"
-      PROBE2='{
-        "ops": [
-          {"id":"f","op":"find","role":"check box","name":"Telephony","app_filter":"rocket"},
-          {"id":"a","op":"do_action","from_id":"f","action_idx":0,"app_filter":"rocket"},
-          {"id":"w","op":"wait_for","any":[{"role":"push button","name":"Got it"}],"timeout_ms":10000,"interval_ms":500,"app_filter":"rocket"}
-        ]
-      }'
-      RES2=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE2" 2>&1)
-      if echo "$RES2" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("OK" if d["results"]["w"]["ok"] else "MISS")' 2>/dev/null | grep -q OK; then
-        echo "TELEPHONY_TOGGLED_ON_SECOND_CLICK"
-        exit 0
-      fi
-      echo "FAILED — neither click surfaced Got it modal" >&2
-      echo "$RES2" >&2
-      exit 1
+  - label: "invoke Telephony toggle ON (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  # Let the React modal portal fully mount + take focus before the Got it
+  # click. `via: hint` adds a ~300ms cursor dwell on top of the action.
+  - wait: 1
 
   # ── Dismiss the one-shot "Rocket.Chat now opens phone links" prompt ──────
-  - label: "wait_for Got it button on default-handler prompt"
+  - label: "wait_for Got it modal (confirms OFF→ON)"
     wait_for: {any: [{role: "push button", name: "Got it"}], timeout: 10}
     retries: 1
 

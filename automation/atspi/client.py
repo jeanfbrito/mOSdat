@@ -243,6 +243,16 @@ class AtspiClient:
         via='action': legacy semantic ``do_action`` invocation; no cursor
             motion. Use for fast smokes, validation, warm-up, or off-screen
             widgets that lack Component extents.
+        via='hint': hybrid — move cursor to widget area + dwell, THEN
+            invoke ``do_action``. No real button event is emitted (so the
+            click handler must be wired to the AT-SPI action, like
+            Fuselage ToggleSwitch), but the recording shows the cursor
+            arriving + pausing + state change. Combines ``action``'s
+            reliability with ``pointer``'s visual context. Uses
+            ``clickable_extents`` (an ancestor bbox computed by the worker)
+            when the target itself is zero-extent; otherwise falls back to
+            the target's own extents. Default dwell is 300 ms so the pause
+            is visible in the recording.
         """
         if via == "pointer":
             if input_injector is None:
@@ -262,7 +272,101 @@ class AtspiClient:
                 action_idx=action_idx, app_filter=app_filter,
                 timeout=timeout, input_injector=input_injector,
             )
-        raise AtspiError(f"unknown via={via!r}; expected 'pointer' or 'action'")
+        if via == "hint":
+            if input_injector is None:
+                raise AtspiError(
+                    "hint-mode click requires input_injector; pass "
+                    "input_injector=runner.injector or use via='action'"
+                )
+            return self._click_via_hint(
+                role, name, name_substr=name_substr,
+                action_idx=action_idx, app_filter=app_filter,
+                timeout=timeout, input_injector=input_injector,
+                motion=motion, dwell_ms=dwell_ms,
+            )
+        raise AtspiError(
+            f"unknown via={via!r}; expected 'pointer', 'action', or 'hint'"
+        )
+
+    def _click_via_hint(
+        self,
+        role: str,
+        name: Optional[str] = None,
+        *,
+        name_substr: bool = False,
+        action_idx: int = 0,
+        app_filter: Optional[str] = None,
+        timeout: Optional[int] = None,
+        input_injector: Any,
+        motion: Optional[str] = None,
+        dwell_ms: Optional[int] = None,
+    ) -> dict:
+        """Hint-mode click: visible cursor motion + dwell, then do_action.
+
+        Algorithm:
+            1. find widget → prefer ``clickable_extents`` (parent walk
+               computed by worker), else fall back to the target's own
+               ``extents``.
+            2. compute bbox center.
+            3. move cursor via input_injector._position_cursor with a
+               default 300 ms dwell so the reviewer SEES the cursor land.
+            4. invoke do_action on the original target — this is what
+               actually changes state. No VNC button event is emitted.
+
+        Used for zero-extent widgets (e.g. Fuselage ToggleSwitch) where
+        pointer-mode misses the 1×1 hidden input but action-mode would
+        leave the reviewer with no visual context for the activation.
+        """
+        af = app_filter or self._app_filter
+        find_res = self.find(
+            role, name, name_substr=name_substr,
+            app_filter=af, timeout=timeout,
+        )
+        bbox = find_res.get("clickable_extents") or find_res.get("extents")
+        if not bbox:
+            raise AtspiError(
+                "hint-mode: widget has no usable extents (neither target "
+                f"nor 5-deep ancestor); use via='action' for role={role!r} "
+                f"name={name!r}",
+                result={"find": find_res},
+            )
+        cx = int(bbox["x"] + bbox["width"] / 2)
+        cy = int(bbox["y"] + bbox["height"] / 2)
+        hint_dwell = dwell_ms if dwell_ms is not None else 300
+        # Move cursor + dwell — purely visual; no button event fires here.
+        input_injector._position_cursor(
+            cx, cy, motion=motion, dwell_ms=hint_dwell,
+        )
+        # Semantic action on the original target (the part that actually
+        # toggles state). Re-find inside the batch keeps the path resolution
+        # atomic with the action invocation.
+        ops = [
+            {"id": "f", "op": "find", "role": role, "name": name,
+             "name_substr": bool(name_substr), "app_filter": af},
+            {"id": "a", "op": "do_action", "from_id": "f",
+             "action_idx": int(action_idx), "app_filter": af},
+        ]
+        result = self.run_batch(ops, timeout=timeout)
+        find2 = result["results"].get("f", {})
+        act = result["results"].get("a", {})
+        if not find2.get("ok"):
+            raise AtspiError(
+                f"hint-mode action stage failed at find: role={role!r} "
+                f"name={name!r}", result=result)
+        if not act.get("ok"):
+            raise AtspiError(
+                f"hint-mode action stage failed at do_action: role={role!r} "
+                f"name={name!r} idx={action_idx}", result=result)
+        return {
+            "ok": True, "via": "hint",
+            "hint_x": cx, "hint_y": cy,
+            "dwell_ms": hint_dwell,
+            "clickable_extents_used": "clickable_extents" in find_res
+                and find_res["clickable_extents"] == bbox,
+            "bbox": bbox,
+            "find": find_res,
+            "action": act,
+        }
 
     def _click_via_action(
         self,

@@ -113,12 +113,13 @@ Fields:
   `via: "action"` mode only.
 - `app_filter` (str, default `"rocket"`) — top-level app substring filter,
   case-insensitive. Override for non-RC apps.
-- `via` (str, default `"pointer"`) — click mode. See "Choosing a click
-  mode" below.
+- `via` (str, default `"pointer"`) — click mode. One of `pointer`,
+  `action`, or `hint`. See "Choosing a click mode" below.
 - `motion` (str, optional) — cursor-motion profile override for
-  `via: "pointer"`; passed through to the VNC injector.
+  `via: "pointer"` and `via: "hint"`; passed through to the VNC injector.
 - `dwell_ms` (int, optional) — dwell time at the target before click for
-  `via: "pointer"`; passed through to the VNC injector.
+  `via: "pointer"` (default profile dwell) and `via: "hint"` (default
+  300 ms); passed through to the VNC injector.
 
 #### Choosing a click mode
 
@@ -133,15 +134,43 @@ Fields:
     * pre-flight / validation scaffolding inside a larger scenario
     * widgets that lack Component extents (rare — typically offscreen)
     * widgets whose click handler isn't tied to pointer events
+- `hint`: hybrid — cursor MOTION + dwell + semantic `do_action`. **For
+  zero-extent widgets where you want the reviewer to SEE where the
+  click happens.** No actual VNC button event is emitted (the activation
+  rides the AT-SPI action), but the recording shows the cursor arriving,
+  pausing, and then the state change. Combines `action`'s reliability
+  with `pointer`'s visual context. The worker auto-resolves a usable
+  ancestor bbox (`clickable_extents`) when the target itself is too
+  small — currently up to 5 parents deep, accepting any 8×8 px to
+  600×200 px region. Default dwell is 300 ms (override with `dwell_ms`).
 
-Example pair:
+Decision tree:
+
+* Widget has real extents (≥ 8×8) and pointer events fire its handler?
+  → `pointer` (default).
+* Widget zero-extent (e.g. Fuselage ToggleSwitch hidden `<input>`), and
+  the recording will be reviewed by a human? → `hint`.
+* Widget zero-extent and CI / smoke / no recording? → `action` (skip
+  the cursor-motion overhead).
+
+Example trio:
 
 ```yaml
-# Final-run style (default — real cursor, visible in recording)
+# Final-run style (default — real cursor + real click)
 - atspi: {role: "push button", name: "Login"}
 
-# Smoke / validation style (semantic, no cursor)
+# Smoke / validation style (semantic, no cursor at all)
 - atspi: {role: "push button", name: "Login", via: "action"}
+
+# Zero-extent toggle: cursor moves to the clickable ancestor, dwells,
+# then the AT-SPI "check" action toggles the React state. Reviewer
+# sees the cursor land on the Telephony toggle BEFORE the modal
+# appears, instead of the modal popping from nowhere.
+- atspi:
+    role: "check box"
+    name: "Telephony"
+    app_filter: "rocket"
+    via: "hint"
 ```
 
 The pointer-mode verify accepts exact-path match OR

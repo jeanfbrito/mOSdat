@@ -284,6 +284,66 @@ def _find_first(desktop: Any, role: Optional[str], name: Optional[str],
 # --------------------------- op handlers -------------------------------------
 
 
+def _resolve_clickable_extents(
+    app: Any, path: str, target_extents: Optional[dict],
+) -> Optional[dict]:
+    """Walk up the parent chain to find a useful clickable bbox.
+
+    Motivation: `via: "hint"` mode wants to move the cursor to a visible
+    point near the target widget so a recording reviewer can SEE where the
+    activation lands. Zero/tiny-extent widgets (e.g. Fuselage ToggleSwitch
+    exposes a 1x1 hidden <input>) have no usable bbox of their own.
+
+    Strategy:
+      * If the target's own extents already cover >= 8x8 px, return them.
+      * Otherwise walk up to 5 parents, return the first one whose bbox is
+        >= 8x8 px and at most 600x200 px (reject huge containers like the
+        frame itself — they'd put the cursor far from the actual control).
+      * If no ancestor qualifies, return None (caller must error out or
+        fall back to target extents).
+    """
+    MIN_AREA = 64       # 8 * 8 — anything smaller is effectively invisible
+    MAX_W = 600
+    MAX_H = 200
+    if target_extents:
+        try:
+            w = int(target_extents.get("width", 0))
+            h = int(target_extents.get("height", 0))
+            if w * h >= MIN_AREA:
+                return {"x": int(target_extents["x"]),
+                        "y": int(target_extents["y"]),
+                        "width": w, "height": h}
+        except Exception:
+            pass
+
+    # Resolve node from path so we can walk parents.
+    node = _get_node_by_path(app, path) if path else app
+    if node is None:
+        return None
+    try:
+        from gi.repository import Atspi  # type: ignore
+    except Exception:
+        return None
+    cur = node
+    for _ in range(5):
+        try:
+            cur = cur.get_parent()
+        except Exception:
+            return None
+        if cur is None:
+            return None
+        try:
+            r = cur.get_extents(Atspi.CoordType.SCREEN)
+            w = int(r.width)
+            h = int(r.height)
+            if w * h >= MIN_AREA and w <= MAX_W and h <= MAX_H:
+                return {"x": int(r.x), "y": int(r.y),
+                        "width": w, "height": h}
+        except Exception:
+            continue
+    return None
+
+
 def _op_find(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
     role = op.get("role")
     name = op.get("name")
@@ -295,6 +355,16 @@ def _op_find(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
         return {"ok": False, "error": "no_match",
                 "role": role, "name": name, "name_substr": name_substr,
                 "app_filter": app_filter}
+    # Resolve a usable bbox for `via: hint` callers. The target's own extents
+    # may be zero/tiny (Fuselage ToggleSwitch hides the real input behind a
+    # painted track widget); walk parents until we find a sensible ancestor.
+    app = _find_app(desktop, app_filter)
+    if app is not None:
+        clickable = _resolve_clickable_extents(
+            app, hit.get("path") or "", hit.get("extents"),
+        )
+        if clickable is not None:
+            hit = {**hit, "clickable_extents": clickable}
     return {"ok": True, **hit}
 
 
