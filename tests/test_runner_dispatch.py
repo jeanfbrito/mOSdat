@@ -210,3 +210,192 @@ class TestCheckpointStep:
         runner.run_step(FunctionalStep(checkpoint="snap-before-install"), 1)
         vlm.localize.assert_not_called()
         inj.click.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Stage 1D: atspi: + verify_atspi: dispatch
+# ---------------------------------------------------------------------------
+
+def _make_runner_with_atspi(verify_result=True, click_raises=None):
+    """Variant of _make_runner that wires a mocked AtspiClient."""
+    runner, vlm, ss, inj = _make_runner()
+    atspi = MagicMock()
+    if click_raises is not None:
+        atspi.click.side_effect = click_raises
+    else:
+        atspi.click.return_value = {"ok": True}
+    atspi.verify.return_value = verify_result
+    runner.atspi = atspi
+    return runner, vlm, ss, inj, atspi
+
+
+class TestAtspiStep:
+    """Stage 1D: AT-SPI dispatch replaces VLM-localize+injector.click."""
+
+    def test_atspi_step_skips_vlm_localize(self):
+        runner, vlm, _, inj, atspi = _make_runner_with_atspi()
+        step = FunctionalStep(
+            atspi={"role": "push button", "name": "Connect"},
+            retries=1,
+        )
+        runner.run_step(step, 1)
+        atspi.click.assert_called_once_with(role="push button", name="Connect")
+        vlm.localize.assert_not_called()
+        inj.click.assert_not_called()
+
+    def test_atspi_step_without_runner_raises_runtime_error(self):
+        # self.atspi is None → loud failure. The retry loop wraps the
+        # underlying RuntimeError in StepFailed, but the message still
+        # surfaces the AtspiClient wiring hint (no silent fallthrough).
+        runner, _, _, _ = _make_runner()
+        step = FunctionalStep(
+            atspi={"role": "push button", "name": "Connect"},
+            retries=1,
+        )
+        with pytest.raises(StepFailed, match="AtspiClient"):
+            runner.run_step(step, 1)
+
+    def test_atspi_failure_without_localize_propagates(self):
+        from automation.atspi import AtspiError
+        runner, vlm, _, inj, atspi = _make_runner_with_atspi(
+            click_raises=AtspiError("find failed")
+        )
+        step = FunctionalStep(
+            atspi={"role": "push button", "name": "Connect"},
+            retries=1,
+        )
+        with pytest.raises(StepFailed):
+            runner.run_step(step, 1)
+        # No VLM fallback — localize unused.
+        vlm.localize.assert_not_called()
+
+    def test_atspi_failure_with_localize_falls_back_to_vlm(self):
+        from automation.atspi import AtspiError
+        runner, vlm, _, inj, atspi = _make_runner_with_atspi(
+            click_raises=AtspiError("find failed")
+        )
+        # localize: provides the VLM fallback target.
+        step = FunctionalStep(
+            atspi={"role": "push button", "name": "Connect"},
+            localize="the Connect button",
+            retries=1,
+        )
+        runner.run_step(step, 1)
+        atspi.click.assert_called_once()
+        # VLM path engaged after atspi failure.
+        vlm.localize.assert_called_once()
+        inj.click.assert_called_once_with(200, 300, button=1, motion=None, dwell_ms=None)
+
+
+class TestVerifyAtspiStep:
+    """Stage 1D: verify_atspi: short-circuits the VLM verify path."""
+
+    def test_verify_atspi_true_passes_without_vlm(self):
+        runner, vlm, _, _, atspi = _make_runner_with_atspi(verify_result=True)
+        step = FunctionalStep(
+            verify_atspi={"role": "frame", "name": "Rocket.Chat"},
+            verify_timeout=1,
+            retries=1,
+        )
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+        atspi.verify.assert_called_once_with(role="frame", name="Rocket.Chat")
+        vlm.verify.assert_not_called()
+
+    def test_verify_atspi_false_raises_step_failed(self):
+        runner, vlm, _, _, atspi = _make_runner_with_atspi(verify_result=False)
+        step = FunctionalStep(
+            verify_atspi={"role": "frame", "name": "Nope"},
+            verify_timeout=1,
+            retries=1,
+        )
+        with patch("time.sleep"):
+            with pytest.raises(StepFailed):
+                runner.run_step(step, 1)
+        atspi.verify.assert_called()
+        vlm.verify.assert_not_called()
+
+    def test_verify_atspi_without_runner_raises_runtime_error(self):
+        # Same wrap-by-retry-loop semantic as TestAtspiStep above; the
+        # error message still names AtspiClient.
+        runner, _, _, _ = _make_runner()
+        step = FunctionalStep(
+            verify_atspi={"role": "frame", "name": "x"},
+            verify_timeout=1,
+            retries=1,
+        )
+        with pytest.raises(StepFailed, match="AtspiClient"):
+            runner.run_step(step, 1)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: wait_for: unified poll-on-VM condition wait
+# ---------------------------------------------------------------------------
+
+def _make_runner_with_wait_for(fire_result=None, raises=None):
+    """Variant of _make_runner that wires a mocked AtspiClient.wait_for."""
+    runner, vlm, ss, inj = _make_runner()
+    atspi = MagicMock()
+    if raises is not None:
+        atspi.wait_for.side_effect = raises
+    else:
+        atspi.wait_for.return_value = fire_result or {
+            "ok": True, "matched": "any",
+            "cond": {"role": "frame", "name": "Rocket.Chat"},
+            "polls": 2,
+        }
+    runner.atspi = atspi
+    return runner, vlm, ss, inj, atspi
+
+
+class TestWaitForStep:
+    """Stage 2: wait_for: short-circuits VLM verify poll loops.
+
+    Worker polls AT-SPI conditions ON the VM in a single SSH round-trip,
+    returning on first match (or all-match) or AtspiError on timeout.
+    """
+
+    def test_wait_for_fires_skips_pipeline(self):
+        # wait_for returns ok → step passes, no VLM/click pipeline runs.
+        runner, vlm, _, inj, atspi = _make_runner_with_wait_for()
+        step = FunctionalStep(
+            wait_for={"any": [{"role": "frame", "name": "Rocket.Chat"}],
+                      "timeout": 5},
+            retries=1,
+        )
+        runner.run_step(step, 1)
+        atspi.wait_for.assert_called_once_with(
+            any=[{"role": "frame", "name": "Rocket.Chat"}], timeout=5
+        )
+        vlm.localize.assert_not_called()
+        vlm.verify.assert_not_called()
+        inj.click.assert_not_called()
+
+    def test_wait_for_timeout_raises_step_failed(self):
+        # AtspiError from the client → StepFailed surfaces, no retry.
+        from automation.atspi import AtspiError
+        runner, vlm, _, _, atspi = _make_runner_with_wait_for(
+            raises=AtspiError("wait_for timed out or failed: wait_for_timeout"),
+        )
+        step = FunctionalStep(
+            wait_for={"any": [{"role": "push button", "name": "Connect"}],
+                      "timeout": 1},
+            retries=1,
+        )
+        with pytest.raises(StepFailed, match="wait_for"):
+            runner.run_step(step, 1)
+        atspi.wait_for.assert_called_once()
+        vlm.verify.assert_not_called()
+
+    def test_wait_for_without_runner_raises_runtime_error(self):
+        # self.atspi is None → loud RuntimeError naming AtspiClient.
+        # Early-return path: unlike atspi:/verify_atspi: which run inside
+        # the retry loop and get wrapped in StepFailed, wait_for fires
+        # BEFORE the retry loop, so RuntimeError propagates unwrapped.
+        runner, _, _, _ = _make_runner()
+        step = FunctionalStep(
+            wait_for={"any": [{"role": "frame", "name": "x"}], "timeout": 1},
+            retries=1,
+        )
+        with pytest.raises(RuntimeError, match="AtspiClient"):
+            runner.run_step(step, 1)

@@ -12,6 +12,12 @@ from PIL import Image, ImageDraw
 from automation.vlm.client import VLMClient
 from automation.vlm.input import InputInjector
 from automation.vlm.screenshot import Screenshotter
+# Stage 1D: type-only import; the actual instance is supplied by the
+# caller (functional_cmd, harness, mcp_tools, etc.). Kept inside TYPE_CHECKING
+# to avoid pulling SSHClient at import time for tests that stub modules.
+from typing import TYPE_CHECKING as _TC
+if _TC:
+    from automation.atspi import AtspiClient as _AtspiClient  # noqa: F401
 from automation.runners.scenario_loader import (
     FunctionalStep,
     load_test_yaml,
@@ -74,10 +80,14 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         canary_override: str = "auto",
         x11_mode: str = "off",
         app_process_name: str = "",
+        atspi: "Optional[_AtspiClient]" = None,
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
         self.injector = injector
+        # Stage 1D: coordinate-free dispatch driver. None = AT-SPI disabled;
+        # any step.atspi/step.verify_atspi will RuntimeError loudly.
+        self.atspi = atspi
         self._app_process_name = app_process_name
         self.screenshot_dir = screenshot_dir
         self.log = log_fn

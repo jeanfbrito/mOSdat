@@ -1,0 +1,63 @@
+name: "_smoke-stage2-waitfor"
+description: |
+  Stage 2 wait_for primitive — polls AT-SPI tree until condition fires or timeout.
+  Pre: clean userData. Launch RC.Electron with --force-renderer-accessibility.
+  Instead of fixed `wait: 8`, use `wait_for: {any: [{role: frame, name_substr: true}], timeout: 30}` to fire early.
+  Then click "Login" button via AT-SPI. Verify frame visible.
+
+steps:
+  # ── Pre-test cleanup ──────────────────────────────────────────────────────
+  - shell: |
+      # Kill ALL RC instances
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      
+      # Dismiss apport crash dialog if present
+      pkill -9 -x apport-gtk 2>/dev/null || true
+      
+      # Wipe config dirs so clean state
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+      done
+      sleep 2
+      echo "CLEANUP_DONE"
+
+  # ── Launch app with a11y flags ────────────────────────────────────────
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      # wait for window
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then echo "window up after ${i}s"; break; fi
+        sleep 1
+      done
+
+  # ── Wait for frame to appear via wait_for (replaces fixed wait: 8) ─────────
+  # Polls AT-SPI until a frame with "rocket" in the name appears OR 30s timeout.
+  # Should fire EARLY (< 8s) because the frame is ready long before the fixed sleep.
+  - label: "wait_for frame to appear"
+    wait_for: {any: [{role: "frame", name_substr: true}], timeout: 30}
+    retries: 1
+
+  # ── Click Login button via AT-SPI ──────────────────────────────────────────
+  - label: "click Login via AT-SPI"
+    atspi: {role: "push button", name: "Login"}
+    retries: 1
+
+  # ── Wait for frame transition ──────────────────────────────────────────────
+  - wait: 2
+
+  # ── Verify Email entry appears via AT-SPI ──────────────────────────────────
+  - label: "verify Email entry present via AT-SPI"
+    verify_atspi: {role: "entry", name: "Email or username"}
+    retries: 1

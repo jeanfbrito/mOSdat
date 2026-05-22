@@ -136,7 +136,7 @@ steps:
   - shell: |
       XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
       export DISPLAY=:0 XAUTHORITY="$XAUTH"
-      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 >/dev/null 2>&1 &
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox --disable-gpu --ozone-platform=x11 --force-renderer-accessibility >/dev/null 2>&1 &
       echo LAUNCH_RC_DONE
 
   - wait: 15

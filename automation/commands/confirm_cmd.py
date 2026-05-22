@@ -41,6 +41,7 @@ def cmd_confirm(args) -> int:
         record_fps=args.record_fps,
         record_gif=args.record_gif,
         record_keep_raw=args.record_keep_raw,
+        record_window_state=getattr(args, "record_window_state", False),
         repro_command=repro,
         git_rev=git_rev,
     )

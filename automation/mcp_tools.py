@@ -373,28 +373,47 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
     with VncClient(proxmox, vmid=vm.vmid) as vnc:
         screenshotter = Screenshotter(vnc)
         injector = InputInjector(vnc, ssh, vm.is_windows)
-        runner = FunctionalRunner(
-            vlm=vlm,
-            screenshotter=screenshotter,
-            injector=injector,
-            screenshot_dir=screenshot_dir,
-            log_fn=lambda msg: print(f"[mOSdat] {msg}"),
-            popup_sweep=True,
+        # Stage 3c: AT-SPI uses a dedicated persistent SSHClient (ControlMaster
+        # multiplexing). Shell `ssh` stays non-persistent.
+        from automation.atspi import AtspiClient as _AtspiClient
+        _ssh_atspi = (
+            SSHClient(vm.ip, vm.user, persistent=True)
+            if not vm.is_windows
+            else None
         )
-        from automation.runners.scenario_loader import load_test_yaml
+        _atspi_client = (
+            _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
+        )
+        try:
+            runner = FunctionalRunner(
+                vlm=vlm,
+                screenshotter=screenshotter,
+                injector=injector,
+                screenshot_dir=screenshot_dir,
+                log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                popup_sweep=True,
+                atspi=_atspi_client,
+            )
+            from automation.runners.scenario_loader import load_test_yaml
 
-        name, steps, _, _ = load_test_yaml(scenario_path, cfg)
-        passed, log = runner.run_test(
-            steps=steps,
-            name=name,
-            vars={
-                "app_path": vm.packages[0].app_path
-                if vm.packages
-                else "/opt/Rocket.Chat/rocketchat-desktop"
-            },
-            results_dir=str(screenshot_dir.parent),
-            vm_name=vm.name,
-        )
+            name, steps, _, _ = load_test_yaml(scenario_path, cfg)
+            passed, log = runner.run_test(
+                steps=steps,
+                name=name,
+                vars={
+                    "app_path": vm.packages[0].app_path
+                    if vm.packages
+                    else "/opt/Rocket.Chat/rocketchat-desktop"
+                },
+                results_dir=str(screenshot_dir.parent),
+                vm_name=vm.name,
+            )
+        finally:
+            if _ssh_atspi is not None:
+                try:
+                    _ssh_atspi.close_persistent()
+                except Exception:
+                    pass
 
     return jsonrpc_result(
         req,

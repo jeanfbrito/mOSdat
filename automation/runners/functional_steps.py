@@ -6,10 +6,11 @@ it without a circular dependency.
 """
 
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from automation.runners.functional import FunctionalStep
+    from automation.atspi import AtspiClient  # noqa: F401 — type-only
 
 
 class StepFailed(Exception):
@@ -164,6 +165,37 @@ class _StepsMixin:
         Raises StepFailed on hard failures.
         """
 
+
+        # Stage 1D: AT-SPI fast path — if the step provides an `atspi:` block,
+        # try coordinate-free dispatch first. On success we return immediately
+        # (do_action on the AT-SPI bus replaces VLM-localize + injector.click).
+        # On failure: if the step ALSO defines `localize:` (this body's normal
+        # input), fall through to the VLM path; otherwise propagate the error.
+        if step.atspi is not None:
+            if self.atspi is None:
+                raise RuntimeError(
+                    "step.atspi is set but FunctionalRunner was constructed "
+                    "without an AtspiClient — wire it via FunctionalRunner(..., atspi=...)"
+                )
+            from automation.atspi import AtspiError
+            self.log(f"  Step {step_num}: atspi {step.atspi}{retry_label}")
+            t0_atspi = time.perf_counter()
+            try:
+                act_res = self.atspi.click(**step.atspi)
+                latency_ms_atspi = round((time.perf_counter() - t0_atspi) * 1000)
+                self._emit("atspi_click", step_num=step_num, attempt=attempt,
+                           target=step.atspi, latency_ms=latency_ms_atspi,
+                           result=act_res)
+                return None  # success — caller proceeds to verify (or step done)
+            except AtspiError as e:
+                latency_ms_atspi = round((time.perf_counter() - t0_atspi) * 1000)
+                self._emit("atspi_click_fallback", step_num=step_num,
+                           attempt=attempt, target=step.atspi,
+                           latency_ms=latency_ms_atspi, error=str(e)[:200])
+                if not step.localize:
+                    # No VLM fallback configured — propagate.
+                    raise
+                self.log(f"    ✗ atspi failed ({e}); falling back to VLM localize")
 
         if self.popup_sweep:
             self._sweep_popups(step_num)
@@ -334,8 +366,63 @@ class _StepsMixin:
             self._do_checkpoint(step.checkpoint, step_num)
             return
 
-        label = step.localize[:60] if step.localize else (step.launch or step.shell or "")[:60]
+        # Stage 2: wait_for — poll-on-VM AT-SPI condition wait. One SSH
+        # round-trip, returns on first/all match or timeout. Early-return
+        # before the click/localize/verify pipeline, like `checkpoint:`.
+        # Precedence: wait_for wins over a bare `wait: N` if both are set.
+        if step.wait_for is not None:
+            if self.atspi is None:
+                raise RuntimeError(
+                    "step.wait_for is set but FunctionalRunner was constructed "
+                    "without an AtspiClient — wire it via "
+                    "FunctionalRunner(..., atspi=...)"
+                )
+            from automation.atspi import AtspiError
+            _wf_label = f"wait_for:{'any' if step.wait_for.get('any') else 'all'}"[:60]
+            _wf_display = f"{step_num}: {step.label}" if getattr(step, "label", None) else str(step_num)
+            _wf_start_ts = time.perf_counter()
+            self._emit("step_start", step_num=step_num, label=_wf_label,
+                       step_label=_wf_display, kind="wait_for")
+            self.log(f"  Step {_wf_display}: wait_for {step.wait_for}")
+            t0_wf = time.perf_counter()
+            try:
+                result = self.atspi.wait_for(**step.wait_for)
+            except AtspiError as wf_err:
+                latency_ms_wf = round((time.perf_counter() - t0_wf) * 1000)
+                self._emit("wait_for_timeout", step_num=step_num,
+                           target=step.wait_for, latency_ms=latency_ms_wf,
+                           error=str(wf_err))
+                duration_ms = round((time.perf_counter() - _wf_start_ts) * 1000)
+                self._emit("step_end", step_num=step_num, status="failed",
+                           attempts=1, duration_ms=duration_ms)
+                raise StepFailed(
+                    f"Step {step_num}: wait_for {step.wait_for} timed out: {wf_err}"
+                )
+            latency_ms_wf = round((time.perf_counter() - t0_wf) * 1000)
+            self._emit("wait_for_fired", step_num=step_num,
+                       target=step.wait_for, result=result,
+                       latency_ms=latency_ms_wf)
+            self.log(f"    ✓ wait_for fired ({result.get('matched', '?')}, "
+                     f"polls={result.get('polls', '?')})")
+            duration_ms = round((time.perf_counter() - _wf_start_ts) * 1000)
+            self._emit("step_end", step_num=step_num, status="ok",
+                       attempts=1, duration_ms=duration_ms)
+            return
+
+        # Stage 1D: atspi steps surface as their own kind in events.jsonl.
+        _atspi_label = ""
+        if step.atspi:
+            _atspi_label = (
+                f"atspi:{step.atspi.get('role', '?')}:"
+                f"{(step.atspi.get('name') or step.atspi.get('name_substr') or '')}"
+            )[:60]
+        label = (
+            step.localize[:60] if step.localize
+            else _atspi_label if step.atspi
+            else (step.launch or step.shell or "")[:60]
+        )
         kind = ("localize" if step.localize else
+                "atspi" if step.atspi else
                 "launch" if step.launch else
                 "shell" if step.shell else
                 "if_visible" if step.if_visible is not None else
@@ -407,8 +494,12 @@ class _StepsMixin:
         if step.launch:
             self._run_launch_step(step, step_num)
 
-        # Standalone key/type steps (no localize)
-        if not step.localize and not step.launch and not step.shell:
+        # Standalone key/type steps (no localize, launch, shell, atspi, wait_for)
+        # (wait_for already early-returned above; listed here for safety/clarity.)
+        if (
+            not step.localize and not step.launch and not step.shell
+            and not step.atspi and not step.wait_for
+        ):
             self._run_standalone_input(step, step_num)
 
         # if_visible: one-shot check, no retry
@@ -434,10 +525,45 @@ class _StepsMixin:
                         self.log("    ✓ already verified (state settled between attempts)")
                         return
 
-                if step.localize:
+                if step.localize or step.atspi:
                     directive = self._run_localize_body(step, attempt, step_num, label, retry_label)
                     if directive == "continue":
                         continue
+
+                # Stage 1D: verify_atspi short-circuits the slow VLM verify
+                # path. AtspiClient.verify() returns bool (never raises on
+                # no-match), so this is a single round-trip check.
+                if step.verify_atspi is not None:
+                    if self.atspi is None:
+                        raise RuntimeError(
+                            "step.verify_atspi is set but FunctionalRunner was "
+                            "constructed without an AtspiClient — wire it via "
+                            "FunctionalRunner(..., atspi=...)"
+                        )
+                    t0_va = time.perf_counter()
+                    ok = self.atspi.verify(**step.verify_atspi)
+                    latency_ms_va = round((time.perf_counter() - t0_va) * 1000)
+                    self._emit("atspi_verify", step_num=step_num, attempt=attempt,
+                               target=step.verify_atspi, verdict="yes" if ok else "no",
+                               latency_ms=latency_ms_va)
+                    if ok:
+                        self.log(f"    ✓ atspi verified: {step.verify_atspi}")
+                        duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                        self._emit("step_end", step_num=step_num, status="ok",
+                                   attempts=attempt, duration_ms=duration_ms)
+                        return
+                    if attempt < step.retries:
+                        self.log("    ✗ atspi verify failed, retrying...")
+                        self._emit("retry", step_num=step_num, attempt=attempt,
+                                   reason="verify_atspi_failed")
+                        continue
+                    duration_ms = round((time.perf_counter() - step_start_ts) * 1000)
+                    self._emit("step_end", step_num=step_num, status="failed",
+                               attempts=attempt, duration_ms=duration_ms)
+                    raise StepFailed(
+                        f"Step {step_num}: verify_atspi {step.verify_atspi} "
+                        f"never matched after {step.retries} attempts"
+                    )
 
                 if step.verify:
                     if not step.localize:

@@ -238,6 +238,19 @@ def cmd_functional(args) -> int:
             with VncClient(proxmox, vmid=vm.vmid) as vnc:
                 screenshotter = Screenshotter(vnc)
                 injector = InputInjector(vnc, ssh, vm.is_windows)
+                # Stage 1D: AT-SPI driver shares the per-VM SSHClient. Always
+                # constructed (cheap, no remote work until first use); steps
+                # without `atspi:` / `verify_atspi:` ignore it.
+                from automation.atspi import AtspiClient
+                # Stage 3c: AT-SPI uses a dedicated SSH client with ControlMaster
+                # multiplexing. Shell steps keep the non-persistent `ssh` to
+                # avoid holding the master across heavyweight remote work.
+                ssh_atspi = (
+                    SSHClient(vm.ip, vm.user, persistent=True)
+                    if not vm.is_windows
+                    else None
+                )
+                atspi_client = AtspiClient(ssh=ssh_atspi) if ssh_atspi is not None else None
                 recorder = None
                 # C2: vm_ops needed only when checkpoints are enabled
                 from automation.proxmox.vm import VMOperations
@@ -246,12 +259,19 @@ def cmd_functional(args) -> int:
                     _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
                 try:
                     if getattr(args, "record_session", False):
+                        # Stage 3a: opt-in window/cursor state sampling.
+                        # wmctrl/xdotool are Linux-only — skip on Windows VMs.
+                        _record_ws = bool(
+                            getattr(args, "record_window_state", False)
+                        ) and not vm.is_windows
                         recorder = SessionRecorder(
                             screenshotter=screenshotter,
                             recording_dir=screenshot_dir / "recording",
                             fps=float(getattr(args, "record_fps", 10.0)),
                             keep_raw=bool(getattr(args, "record_keep_raw", False)),
                             log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                            ssh=ssh if _record_ws else None,
+                            record_window_state=_record_ws,
                         )
                         recorder.start()
                     runner = FunctionalRunner(
@@ -267,6 +287,7 @@ def cmd_functional(args) -> int:
                         click_verify_override=getattr(args, "click_verify", "auto"),
                         canary_override=getattr(args, "canary_override", "auto"),
                         app_process_name=config.app.process_name,
+                        atspi=atspi_client,
                     )
 
                     # B7: VM health probe before scenario start
@@ -303,6 +324,12 @@ def cmd_functional(args) -> int:
                     except Exception as e:
                         print(f"[mOSdat] WARN: report generation failed: {e}")
                 finally:
+                    # Stage 3c: tear down the AT-SPI ControlMaster (best-effort).
+                    if ssh_atspi is not None:
+                        try:
+                            ssh_atspi.close_persistent()
+                        except Exception:
+                            pass
                     if recorder is not None:
                         artifacts = recorder.stop_and_export(
                             make_gif=bool(getattr(args, "record_gif", False))

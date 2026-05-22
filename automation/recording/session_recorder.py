@@ -1,4 +1,24 @@
-"""Background VNC session recorder with post-run change-frame filtering."""
+"""Background VNC session recorder with post-run change-frame filtering.
+
+Stage 3a — Window/cursor state bundling (opt-in via `record_window_state=True`):
+
+When the recorder is constructed with a live `ssh` SSHClient AND
+`record_window_state=True`, a low-frequency sampler thread (default 5 Hz)
+polls `wmctrl -l`, `xdotool getactivewindow getwindowname`, and
+`xdotool getmouselocation --shell` on the VM via single SSH round-trips.
+The most recent sample is stored under a `threading.Lock` and read
+(non-blocking) by the per-frame `_append_index` writer.
+
+This keeps the per-frame VNC capture loop latency-independent of SSH:
+captures continue at full requested fps; window/cursor metadata lags by up
+to one sampler period (~200 ms). The sampler thread is joined cleanly on
+`stop_and_export()`. If the remote commands fail (missing wmctrl/xdotool,
+no DISPLAY), the sampler logs once and disables itself for the rest of the
+session — the recording succeeds, the optional metadata is just absent.
+
+Backward compat: when the feature is OFF (default), no SSH calls happen and
+`index.jsonl` lines retain the historical `{frame, ts}` schema verbatim.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +31,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import xxhash
 
@@ -41,6 +61,9 @@ class SessionRecorder:
         fps: float = 10.0,
         keep_raw: bool = False,
         log_fn: Optional[Callable[[str], None]] = None,
+        ssh: Optional[Any] = None,
+        record_window_state: bool = False,
+        window_state_sample_hz: float = 5.0,
     ) -> None:
         self.screenshotter = screenshotter
         self.recording_dir = Path(recording_dir)
@@ -60,6 +83,15 @@ class SessionRecorder:
         self._started_at: Optional[str] = None
         self._ended_at: Optional[str] = None
         self._bus: Optional[LatestFrameBus] = None
+        # Stage 3a: optional window/cursor state sampler.
+        self._ssh = ssh
+        self._record_window_state = bool(record_window_state) and ssh is not None
+        self._sample_interval = 1.0 / max(0.5, float(window_state_sample_hz))
+        self._sampler_thread: Optional[threading.Thread] = None
+        self._sampler_stop = threading.Event()
+        self._sample_lock = threading.Lock()
+        self._latest_sample: dict[str, Any] = {}
+        self._sampler_disabled = False  # set after first failure to skip subsequent polls
 
     def start(self) -> None:
         if self._running:
@@ -79,7 +111,21 @@ class SessionRecorder:
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._running = True
         self._thread.start()
-        self._log(f"recorder started ({self.fps:.2f} FPS)")
+        if self._record_window_state:
+            self._sampler_stop.clear()
+            self._sampler_disabled = False
+            with self._sample_lock:
+                self._latest_sample = {}
+            self._sampler_thread = threading.Thread(
+                target=self._sampler_loop, daemon=True
+            )
+            self._sampler_thread.start()
+            self._log(
+                f"recorder started ({self.fps:.2f} FPS, window-state sampler "
+                f"{1.0 / self._sample_interval:.1f} Hz)"
+            )
+        else:
+            self._log(f"recorder started ({self.fps:.2f} FPS)")
 
     def stop_and_export(self, make_gif: bool = False) -> RecordingArtifacts:
         self._stop_capture()
@@ -143,6 +189,12 @@ class SessionRecorder:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        # Stage 3a: stop the window-state sampler cleanly. Join with a bounded
+        # timeout — a misbehaving SSH call must not hold up scenario teardown.
+        if self._sampler_thread is not None:
+            self._sampler_stop.set()
+            self._sampler_thread.join(timeout=5)
+            self._sampler_thread = None
         if hasattr(self.screenshotter, "detach_bus"):
             self.screenshotter.detach_bus()
         self._bus = None
@@ -179,12 +231,158 @@ class SessionRecorder:
                     self._log(f"capture error #{self._capture_errors}: {exc}")
 
     def _append_index(self, frame_name: str) -> None:
-        record = {
+        record: dict[str, Any] = {
             "frame": frame_name,
             "ts": datetime.now().isoformat(),
         }
+        # Stage 3a: always carry ns-precise timestamp when the sampler is on,
+        # so post-mortem tooling can sequence frames with sub-ms granularity.
+        if self._record_window_state:
+            record["timestamp_ns"] = time.time_ns()
+            with self._sample_lock:
+                sample = dict(self._latest_sample)
+            # Only inject keys that were successfully captured. A missing
+            # sample (sampler hasn't produced one yet, or SSH call failed)
+            # leaves the line at the legacy `{frame, ts, timestamp_ns}` shape
+            # — readers tolerate the absence.
+            for key in ("active_window", "open_windows", "cursor_x", "cursor_y"):
+                if key in sample:
+                    record[key] = sample[key]
         with self.index_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
+
+    # ------------------------------------------------------------------
+    # Stage 3a: window/cursor state sampler
+    # ------------------------------------------------------------------
+
+    def _sampler_loop(self) -> None:
+        """Poll wmctrl/xdotool on the VM at low frequency; publish latest sample.
+
+        Decoupled from the capture loop so per-frame writes never block on
+        SSH round-trip latency. The sample is bundled into a single SSH call
+        per tick to keep startup cost amortized.
+        """
+        while not self._sampler_stop.is_set():
+            if self._sampler_disabled:
+                # Permanent skip: VM lacks wmctrl/xdotool or DISPLAY is missing.
+                # Sleep on the stop event so shutdown still terminates promptly.
+                self._sampler_stop.wait(self._sample_interval)
+                continue
+            sample = self._collect_window_state()
+            if sample is not None:
+                with self._sample_lock:
+                    self._latest_sample = sample
+            self._sampler_stop.wait(self._sample_interval)
+
+    def _collect_window_state(self) -> Optional[dict[str, Any]]:
+        """One SSH call → parsed wmctrl + xdotool blob, or None on failure.
+
+        On the first failure, sets `_sampler_disabled` and logs once. Subsequent
+        ticks short-circuit (the recording itself is not impacted).
+        """
+        if self._ssh is None:
+            return None
+        # Single shell script. Newline-delimited sections so we can parse
+        # without depending on JSON being installed on the VM.
+        # X11 preamble: SSH sessions have no DISPLAY/XAUTHORITY by default;
+        # mutter-Xwayland writes its auth cookie to /run/user/1000/. XAUTH
+        # may be absent on non-mutter sessions — DISPLAY=:0 alone may still
+        # work, so don't abort on missing file.
+        script = (
+            "XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1); "
+            "export DISPLAY=:0 XAUTHORITY=\"$XAUTH\"; "
+            "echo '<<<ACTIVE>>>'; "
+            "xdotool getactivewindow getwindowname 2>/dev/null || true; "
+            "echo '<<<WINDOWS>>>'; "
+            "wmctrl -l 2>/dev/null || true; "
+            "echo '<<<CURSOR>>>'; "
+            "xdotool getmouselocation --shell 2>/dev/null || true; "
+            "echo '<<<END>>>'"
+        )
+        try:
+            result = self._ssh.run(script, timeout=3)
+        except Exception as exc:  # SSH layer should not raise, but be defensive.
+            self._sampler_disabled = True
+            self._log(f"recorder window-state sampler disabled (ssh error: {exc})")
+            return None
+        if not getattr(result, "success", False):
+            self._sampler_disabled = True
+            stderr = (getattr(result, "stderr", "") or "").strip().splitlines()
+            tail = stderr[-1] if stderr else f"rc={getattr(result, 'returncode', '?')}"
+            self._log(f"recorder window-state sampler disabled ({tail})")
+            return None
+        parsed = self._parse_window_state(result.stdout or "")
+        # If neither wmctrl nor xdotool produced anything, the markers are
+        # present but the sections are empty → tools are missing. Disable.
+        if not parsed:
+            self._sampler_disabled = True
+            self._log(
+                "recorder window-state sampler disabled "
+                "(wmctrl/xdotool produced no output)"
+            )
+            return None
+        return parsed
+
+    @staticmethod
+    def _parse_window_state(blob: str) -> dict[str, Any]:
+        """Parse the marker-delimited shell output into a sample dict.
+
+        Returns {} if none of the four pieces could be extracted.
+        """
+        sections: dict[str, list[str]] = {"ACTIVE": [], "WINDOWS": [], "CURSOR": []}
+        current: Optional[str] = None
+        for raw_line in blob.splitlines():
+            line = raw_line.rstrip("\r")
+            if line == "<<<ACTIVE>>>":
+                current = "ACTIVE"; continue
+            if line == "<<<WINDOWS>>>":
+                current = "WINDOWS"; continue
+            if line == "<<<CURSOR>>>":
+                current = "CURSOR"; continue
+            if line == "<<<END>>>":
+                current = None; continue
+            if current is not None and line != "":
+                sections[current].append(line)
+
+        out: dict[str, Any] = {}
+
+        # Active window: xdotool getactivewindow getwindowname → exact title.
+        if sections["ACTIVE"]:
+            out["active_window"] = sections["ACTIVE"][0]
+
+        # Open windows: `wmctrl -l` lines look like
+        #   "0x04200007  0 hostname Window Title Here"
+        # Drop window-id (col 0), desktop (col 1), client-machine (col 2);
+        # keep the rest as the title. Cap to 20 entries.
+        if sections["WINDOWS"]:
+            titles: list[str] = []
+            for line in sections["WINDOWS"]:
+                parts = line.split(None, 3)
+                if len(parts) >= 4:
+                    titles.append(parts[3])
+                elif len(parts) == 3:
+                    titles.append("")  # window with empty title
+            if titles:
+                out["open_windows"] = titles[:20]
+
+        # Cursor: xdotool --shell outputs `X=123\nY=456\nSCREEN=0\nWINDOW=...`
+        if sections["CURSOR"]:
+            for line in sections["CURSOR"]:
+                if "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                if key == "X":
+                    try:
+                        out["cursor_x"] = int(val)
+                    except ValueError:
+                        pass
+                elif key == "Y":
+                    try:
+                        out["cursor_y"] = int(val)
+                    except ValueError:
+                        pass
+
+        return out
 
     def _filter_and_copy(self, raw_frames: list[Path]) -> list[Path]:
         if self.filtered_dir.exists():

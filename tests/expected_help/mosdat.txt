@@ -1,11 +1,11 @@
 usage: mosdat [-h]
-              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,doctor,visual,recipes,routines}
+              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
               ...
 
 mOSdat - Multi-OS Desktop App Testing with GPU passthrough
 
 positional arguments:
-  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,doctor,visual,recipes,routines}
+  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
     run                 Full test matrix run
     test                Quick test with pre-built package
     functional          Run VLM functional UI tests
@@ -32,6 +32,8 @@ positional arguments:
                         files
     trace               F1b: Probe input capabilities (menu accelerators,
                         shortcuts, focus) on a VM
+    atspi-dump          Print the live AT-SPI accessibility tree of a target
+                        VM
     doctor              I13: Check VM and host health (SSH, deps, disk,
                         processes)
     visual              Visual regression: capture or check step screenshots

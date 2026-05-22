@@ -298,15 +298,32 @@ def run_routine_test(
         with VncClient(proxmox, vmid=vm.vmid) as vnc:
             screenshotter = Screenshotter(vnc)
             injector = InputInjector(vnc, ssh, vm.is_windows)
-            runner = FunctionalRunner(
-                vlm=vlm,
-                screenshotter=screenshotter,
-                injector=injector,
-                screenshot_dir=screenshot_dir,
-                log_fn=log,
+            # Stage 3c: dedicated persistent SSH for AT-SPI (ControlMaster
+            # multiplexing). Shell `ssh` stays non-persistent.
+            from automation.atspi import AtspiClient as _AtspiClient
+            _ssh_atspi = (
+                SSHClient(vm_ip, vm_user, connect_timeout=10, persistent=True)
+                if not vm.is_windows
+                else None
             )
-            parsed_steps = [parse_step(s) for s in steps]
-            passed, summary = runner.run_test(parsed_steps, name=routine_name)
+            _atspi_client = _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
+            try:
+                runner = FunctionalRunner(
+                    vlm=vlm,
+                    screenshotter=screenshotter,
+                    injector=injector,
+                    screenshot_dir=screenshot_dir,
+                    log_fn=log,
+                    atspi=_atspi_client,
+                )
+                parsed_steps = [parse_step(s) for s in steps]
+                passed, summary = runner.run_test(parsed_steps, name=routine_name)
+            finally:
+                if _ssh_atspi is not None:
+                    try:
+                        _ssh_atspi.close_persistent()
+                    except Exception:
+                        pass
 
         elapsed = int((time.time() - t_start) * 1000)
         status = "PASS" if passed else "FAIL"

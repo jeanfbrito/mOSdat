@@ -1,0 +1,68 @@
+name: "_smoke-stage3-controlmaster"
+description: |
+  Stage 3c ControlMaster speedup — 10 separate AT-SPI find steps.
+  Each find is one SSH call. With ControlMaster ON, connection reuse speeds up calls.
+  Time this scenario with ControlMaster ON (default) and OFF to verify speedup.
+
+steps:
+  # ── Pre-test cleanup ──────────────────────────────────────────────────────
+  - shell: |
+      pkill -KILL -f rocketchat-desktop 2>/dev/null || true
+      sleep 1
+      echo "CLEANUP_DONE"
+
+  # ── Launch app with a11y flags ────────────────────────────────────────
+  - shell: |
+      DISPLAY=:0 ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then echo "window up"; break; fi
+        sleep 1
+      done
+
+  # ── Wait for frame ────────────────────────────────────────────────────
+  - wait_for: {any: [{role: "frame", name_substr: true}], timeout: 30}
+    retries: 1
+
+  # ── 10 find-only AT-SPI steps (no click, just locate) ──────────────────
+  - label: "find push button File"
+    atspi: {role: "push button", name: "File"}
+    retries: 1
+
+  - label: "find push button Edit"
+    atspi: {role: "push button", name: "Edit"}
+    retries: 1
+
+  - label: "find push button View"
+    atspi: {role: "push button", name: "View"}
+    retries: 1
+
+  - label: "find push button Window"
+    atspi: {role: "push button", name: "Window"}
+    retries: 1
+
+  - label: "find push button Help"
+    atspi: {role: "push button", name: "Help"}
+    retries: 1
+
+  - label: "find entry (login field)"
+    atspi: {role: "entry"}
+    retries: 1
+
+  - label: "find section login"
+    atspi: {role: "section"}
+    retries: 1
+
+  - label: "find Add workspace button"
+    atspi: {role: "push button", name: "Add workspace"}
+    retries: 1
+
+  - label: "find Customize app button"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "find document web"
+    atspi: {role: "document web"}
+    retries: 1

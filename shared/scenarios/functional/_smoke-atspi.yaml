@@ -1,0 +1,64 @@
+name: "_smoke-atspi"
+description: |
+  Stage 1E live smoke — AT-SPI replaces VLM localize_click for accessible widgets.
+  Pre: clean userData. Launch RC.Electron with --force-renderer-accessibility.
+  Then click "Connect" push button via AT-SPI, verify frame title changed.
+
+steps:
+  # ── Pre-test cleanup ──────────────────────────────────────────────────────
+  - shell: |
+      # Kill ALL RC instances
+      for attempt in 1 2 3 4 5 6; do
+        pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true
+        pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true
+        sleep 1
+        pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' >/dev/null 2>&1 || break
+      done
+      pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true
+      
+      # Dismiss apport crash dialog if present
+      pkill -9 -x apport-gtk 2>/dev/null || true
+      
+      # Wipe config dirs so clean state
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        rm -rf "$d"
+        mkdir -p "$d"
+      done
+      sleep 2
+      echo "CLEANUP_DONE"
+
+  # ── Launch app with a11y flags (inline; runner's launch: bypasses the routine) ──
+  - shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      export DISPLAY=:0 XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      # wait for window
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then echo "window up after ${i}s"; break; fi
+        sleep 1
+      done
+
+  # ── Wait for Chromium a11y tree settle ──────────────────────────────────────
+  - wait: 8
+
+  # ── Click Connect button via AT-SPI (the live test) ──────────────────────────
+  # role=push button, name="Connect" — exact match.
+  # This step MUST NOT invoke VLM. The wiring test proved that in unit mocks;
+  # this live run proves the wire is actually used.
+  - label: "click Login via AT-SPI"
+    atspi: {role: "push button", name: "Login"}
+    retries: 1
+
+  # ── Wait for frame transition ────────────────────────────────────────────────
+  - wait: 2
+
+  # ── Verify Connect succeeded: frame title changed ────────────────────────────
+  # After clicking Connect, the welcome screen should appear.
+  # Frame role + name_substr match on "Rocket.Chat" or similar.
+  # If tree changed, this passes.
+  - label: "verify Email entry present via AT-SPI"
+    verify_atspi: {role: "entry", name: "Email or username"}
+    retries: 1

@@ -398,14 +398,30 @@ def cmd_functional(args) -> int:
                     _vm_ops_for_ckpt = VMOperations(proxmox, vm, config)
                 try:
                     if getattr(args, "record_session", False):
+                        _record_ws = bool(
+                            getattr(args, "record_window_state", False)
+                        ) and not vm.is_windows
                         recorder = SessionRecorder(
                             screenshotter=screenshotter,
                             recording_dir=screenshot_dir / "recording",
                             fps=float(getattr(args, "record_fps", 10.0)),
                             keep_raw=bool(getattr(args, "record_keep_raw", False)),
                             log_fn=lambda msg: print(f"[mOSdat] {msg}"),
+                            ssh=ssh if _record_ws else None,
+                            record_window_state=_record_ws,
                         )
                         recorder.start()
+                    # Stage 3c: AT-SPI uses a dedicated persistent SSHClient
+                    # (ControlMaster multiplexing). Shell `ssh` stays non-persistent.
+                    from automation.atspi import AtspiClient as _AtspiClient
+                    _ssh_atspi = (
+                        SSHClient(vm.ip, vm.user, persistent=True)
+                        if not vm.is_windows
+                        else None
+                    )
+                    _atspi_client = (
+                        _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
+                    )
                     runner = FunctionalRunner(
                         vlm=vlm,
                         screenshotter=screenshotter,
@@ -420,6 +436,7 @@ def cmd_functional(args) -> int:
                         canary_override=getattr(args, "canary_override", "auto"),
                         x11_mode=getattr(vm, "x11", "off"),
                         app_process_name=config.app.process_name,
+                        atspi=_atspi_client,
                     )
                     # I14: enable config snapshots if scenario opts in OR --config-snapshots flag set
                     runner._config_snapshots = (
@@ -501,6 +518,12 @@ def cmd_functional(args) -> int:
                     except Exception as e:
                         print(f"[mOSdat] WARN: report generation failed: {e}")
                 finally:
+                    # Stage 3c: tear down the AT-SPI ControlMaster (best-effort).
+                    if _ssh_atspi is not None:
+                        try:
+                            _ssh_atspi.close_persistent()
+                        except Exception:
+                            pass
                     if recorder is not None:
                         artifacts = recorder.stop_and_export(
                             make_gif=bool(getattr(args, "record_gif", False))
@@ -596,6 +619,7 @@ def main() -> int:
     from automation.commands.routines import run_routines
     from automation.commands.lint import run_lint
     from automation.commands.trace import run_trace
+    from automation.commands.atspi_dump import cmd_atspi_dump
 
     def cmd_preflight(args) -> int:
         vms = [v.strip() for v in args.vms.split(",")]
@@ -635,6 +659,7 @@ def main() -> int:
         "routines": run_routines,
         "lint": run_lint,
         "trace": run_trace,
+        "atspi-dump": cmd_atspi_dump,
     }
 
     try:

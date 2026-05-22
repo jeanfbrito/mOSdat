@@ -40,6 +40,7 @@ class ConfirmInvocation:
     record_fps: float = 30.0
     record_gif: bool = False
     record_keep_raw: bool = False
+    record_window_state: bool = False
     repro_command: str = ""                    # the original CLI string for reporter footer
     git_rev: Optional[str] = None
 
@@ -159,13 +160,26 @@ def _build_runner_for_vm(vm, config, screenshot_dir: Path, log_fn=None):
     screenshotter = Screenshotter(vnc)
     injector = InputInjector(vnc, ssh, vm.is_windows)
 
+    # Stage 3c: AT-SPI uses a dedicated persistent SSHClient (ControlMaster
+    # multiplexing). Shell `ssh` stays non-persistent.
+    from automation.atspi import AtspiClient as _AtspiClient
+    _ssh_atspi = (
+        SSHClient(vm.ip, vm.user, persistent=True) if not vm.is_windows else None
+    )
+    _atspi_client = (
+        _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
+    )
     runner = FunctionalRunner(
         vlm=vlm,
         screenshotter=screenshotter,
         injector=injector,
         screenshot_dir=screenshot_dir,
         log_fn=log_fn,
+        atspi=_atspi_client,
     )
+    # Stage 3c: attach the AT-SPI SSH client so the caller can tear down
+    # the ControlMaster after the scenario completes.
+    runner._ssh_atspi = _ssh_atspi  # type: ignore[attr-defined]
 
     return runner, ssh, vnc
 
@@ -352,12 +366,17 @@ def run_confirm(inv: ConfirmInvocation) -> ConfirmRunArtifacts:
             if inv.record_session:
                 from automation.recording import SessionRecorder
 
+                # Stage 3a: opt-in window/cursor state sampler.
+                # wmctrl/xdotool are Linux-only — skip on Windows VMs.
+                _record_ws = bool(inv.record_window_state) and not vm.is_windows
                 recorder = SessionRecorder(
                     screenshotter=runner.screenshotter,
                     recording_dir=iter_dir / "recording",
                     fps=inv.record_fps,
                     keep_raw=inv.record_keep_raw,
                     log_fn=lambda msg: print(f"[mosdat] {msg}"),
+                    ssh=ssh if _record_ws else None,
+                    record_window_state=_record_ws,
                 )
                 recorder.start()
 
@@ -406,6 +425,13 @@ def run_confirm(inv: ConfirmInvocation) -> ConfirmRunArtifacts:
             if vnc_ctx is not None:
                 try:
                     vnc_ctx.__exit__(None, None, None)
+                except Exception:
+                    pass
+            # Stage 3c: tear down the AT-SPI ControlMaster (best-effort).
+            _ssh_atspi_for_close = getattr(runner, "_ssh_atspi", None) if "runner" in locals() else None
+            if _ssh_atspi_for_close is not None:
+                try:
+                    _ssh_atspi_for_close.close_persistent()
                 except Exception:
                     pass
 

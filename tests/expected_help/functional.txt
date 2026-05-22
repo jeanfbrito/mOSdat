@@ -9,8 +9,9 @@ usage: mosdat functional [-h] --vms VMS [--test NAME] [--model MODEL]
                          [--click-verify {auto,off,yesno,diff,diff+yesno}]
                          [--canary {auto,off,on}] [--no-record-session]
                          [--record-fps FPS] [--record-gif] [--record-keep-raw]
-                         [--inject-config JSON] [--inject-servers LIST]
-                         [--inject-app-name NAME] [--inject-install-path PATH]
+                         [--record-window-state] [--inject-config JSON]
+                         [--inject-servers LIST] [--inject-app-name NAME]
+                         [--inject-install-path PATH]
                          [--inject-migrations-version VER] [--no-cache]
                          [--config-snapshots] [--var KEY=VALUE]
                          [--from-phase ID] [--until-phase ID]
@@ -67,6 +68,11 @@ options:
   --record-gif          Also export recording/session.gif (MP4 is always
                         attempted)
   --record-keep-raw     Keep recording/raw frames after export
+  --record-window-state
+                        Stage 3a: sample active window title, open-window
+                        list, and cursor position via wmctrl/xdotool, bundled
+                        into index.jsonl per frame. Adds a low-rate (~5 Hz)
+                        SSH sampler thread; capture FPS is unaffected.
   --inject-config JSON  I1: JSON object (inline or @path.json) merged into
                         config.json before launch. Pins
                         __internal__.migrations.version and defaults

@@ -237,6 +237,46 @@ class ImportStep(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Stage 1D: AT-SPI step types
+# ---------------------------------------------------------------------------
+
+class AtspiStep(_StepBase):
+    """Stage 1D: coordinate-free click via the accessibility bus.
+
+    Discriminated by presence of ``atspi`` key. Optional ``localize`` field
+    enables VLM fallback when the AT-SPI tree lookup fails at runtime.
+    """
+    atspi: dict[str, Any]
+    localize: Optional[str] = None
+
+
+class VerifyAtspiStep(_StepBase):
+    """Stage 1D: verify widget existence/state via the accessibility bus.
+
+    Discriminated by presence of ``verify_atspi`` key.
+    """
+    verify_atspi: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: wait_for step — unified poll-on-VM condition wait
+# ---------------------------------------------------------------------------
+
+class WaitForStep(_StepBase):
+    """Stage 2: poll-on-VM wait for AT-SPI / accessibility-bus conditions.
+
+    Replaces fixed ``wait: N`` + VLM verify poll loops. The worker runs the
+    poll loop ON the VM (cheap AT-SPI calls), returns when first/all
+    conditions fire or timeout expires. Single SSH round-trip.
+
+    Discriminated by presence of ``wait_for`` key. Shape:
+    ``{any: [{role, name, ...}, ...], timeout, interval}`` OR
+    ``{all: [...], timeout, interval}``. See ``AtspiClient.wait_for``.
+    """
+    wait_for: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
 # Step union — order matters: pydantic tries each in sequence
 # Discriminator by presence of key fields handled via model_validator below.
 # ---------------------------------------------------------------------------
@@ -248,6 +288,9 @@ AnyStep = Union[
     LaunchStep,
     IfVisibleStep,
     PopupSweepStep,
+    AtspiStep,       # Stage 1D: before ClickStep — atspi key not in _StepBase
+    VerifyAtspiStep, # Stage 1D: before VerifyStep — verify_atspi key not in _StepBase
+    WaitForStep,     # Stage 2: before ClickStep — wait_for key not in _StepBase
     ClickStep,       # covers LocalizeStep (has localize field)
     AcceptAnyStep,   # I7: before VerifyStep — requires accept_any key
     VerifyStep,

@@ -4,7 +4,7 @@ import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 # I11: sentinel key used to mark import steps in raw dicts
 _IMPORT_KEY = "import"
@@ -60,6 +60,17 @@ class FunctionalStep:
     label: Optional[str] = None
     motion: Optional[str] = None
     dwell_ms: Optional[int] = None
+    # Stage 1D: AT-SPI dispatch fields (coordinate-free GUI automation).
+    # When set, the runner skips VLM localize/verify and drives the VM
+    # accessibility bus directly. See automation/atspi/client.py.
+    atspi: Optional[Dict[str, Any]] = None
+    verify_atspi: Optional[Dict[str, Any]] = None
+    # Stage 2: unified poll-on-VM wait_for primitive. Worker polls AT-SPI
+    # conditions on the VM; returns on first/all match or timeout. Replaces
+    # brittle fixed `wait: N` + VLM verify poll loops with a single SSH
+    # round-trip. Precedence: if both `wait_for` and `wait` are set,
+    # `wait_for` wins (richer primitive — `wait` is a dumb sleep).
+    wait_for: Optional[Dict[str, Any]] = None
 
 
 def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep]:
@@ -103,8 +114,29 @@ def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep
             label=step.label,
             motion=step.motion,
             dwell_ms=step.dwell_ms,
+            atspi=_resolve_in_dict(step.atspi, vars),
+            verify_atspi=_resolve_in_dict(step.verify_atspi, vars),
+            wait_for=_resolve_in_dict(step.wait_for, vars),
         ))
     return resolved
+
+
+def _resolve_in_dict(d: Optional[Dict[str, Any]], vars: dict) -> Optional[Dict[str, Any]]:
+    """Stage 1D: substitute {key} placeholders in string values of a dict.
+
+    Used for atspi: / verify_atspi: fields whose values are simple role/name
+    dicts; non-string values pass through untouched. Returns a NEW dict
+    (does not mutate input) or None if input is None/empty.
+    """
+    if not d:
+        return None
+    out: Dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, str):
+            out[k] = _sub(v, vars)
+        else:
+            out[k] = v
+    return out
 
 
 def _sub(text: Optional[str], vars: dict) -> Optional[str]:
@@ -611,4 +643,7 @@ def parse_step(raw: dict) -> FunctionalStep:
         label=raw.get("label"),
         motion=raw.get("motion"),
         dwell_ms=raw.get("dwell_ms"),
+        atspi=raw.get("atspi"),
+        verify_atspi=raw.get("verify_atspi"),
+        wait_for=raw.get("wait_for"),
     )

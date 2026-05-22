@@ -165,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Also export recording/session.gif (MP4 is always attempted)")
     fn_p.add_argument("--record-keep-raw", action="store_true",
                       help="Keep recording/raw frames after export")
+    fn_p.add_argument("--record-window-state", action="store_true",
+                      dest="record_window_state",
+                      help="Stage 3a: sample active window title, open-window list, "
+                           "and cursor position via wmctrl/xdotool, bundled into "
+                           "index.jsonl per frame. Adds a low-rate (~5 Hz) SSH "
+                           "sampler thread; capture FPS is unaffected.")
     # I1: declarative userData pre-staging
     fn_p.add_argument("--inject-config", dest="inject_config", default=None, metavar="JSON",
                       help="I1: JSON object (inline or @path.json) merged into "
@@ -247,6 +253,11 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Also export recording/session.gif (MP4 is always attempted)")
     confirm_p.add_argument("--record-keep-raw", action="store_true",
                            help="Keep recording/raw frames after export")
+    confirm_p.add_argument("--record-window-state", action="store_true",
+                           dest="record_window_state",
+                           help="Stage 3a: sample active window title, open-window list, "
+                                "and cursor position via wmctrl/xdotool, bundled into "
+                                "index.jsonl per frame. Linux VMs only; ignored on Windows.")
 
     # mosdat validate
     val_p = sub.add_parser("validate", help="Validate config file")
@@ -375,6 +386,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--probe-hover", dest="probe_hover", default=None, metavar="X,Y[;X2,Y2...]",
         help="Probe hover-required classification at semicolon-separated coord pairs (e.g. '97,380;200,400')",
     )
+
+    # mosdat atspi-dump  (Stage 3b: AT-SPI accessibility tree discovery tool)
+    from automation.commands.atspi_dump import add_atspi_dump_subparser
+    add_atspi_dump_subparser(sub)
 
     # mosdat doctor  (I13: VM + host health checks)
     doctor_p = sub.add_parser("doctor", help="I13: Check VM and host health (SSH, deps, disk, processes)")
