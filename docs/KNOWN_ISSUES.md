@@ -232,3 +232,83 @@
 - **Affects**: All scenarios relying on post-action screen state (localize,
   verify, verify_not after click/key). Visible on ubuntu2204 QEMU VNC path.
 - **Ref**: Auditor diagnosis 2026-05-18; fixed same session.
+
+## Runner `launch:` step bypasses `shared/routines/launch-rocketchat.yaml`
+- **Status**: Workaround in place
+- **Issue**: The runner's `launch:` step handler builds its own bare command
+  for the target binary; it does NOT invoke the matching routine YAML at
+  `shared/routines/launch-rocketchat.yaml`. As a result, accessibility-related
+  flags (`ACCESSIBILITY_ENABLED=1`, `--force-renderer-accessibility`,
+  `--ozone-platform=x11`) baked into the routine never reach the spawned
+  process when a scenario uses `launch: rocket-chat` (or similar).
+- **Workaround**: Use an inline `shell:` step that sets the env vars and
+  flags explicitly. The Stage 1E/2 smoke scenarios
+  (`_smoke-atspi.yaml`, `_smoke-stage2-waitfor.yaml`,
+  `_smoke-stage3-controlmaster.yaml`) all do this — copy that block when
+  authoring new AT-SPI scenarios.
+- **Affects**: `automation/runners/functional_steps.py` (the `step.launch`
+  branch in `run_step`). Any scenario that uses `launch:` and relies on
+  flags from the routine YAML.
+- **Long-term fix**: Teach the `launch:` step to resolve a matching routine
+  in `shared/routines/` and invoke it instead of synthesising the command.
+- **Ref**: Discovered during Stage 1D wiring, 2026-05-22.
+
+## Canvas/custom-rendered widgets are opaque to AT-SPI
+- **Status**: By design (Chromium a11y boundary)
+- **Issue**: Chromium only exposes standard HTML elements (buttons, inputs,
+  links, headings, frames) to the AT-SPI accessibility bus. Custom Web
+  Components and canvas-drawn regions appear as bare containers with no
+  children. RC regions known to be opaque: chat message list (virtual
+  scroll), emoji picker, video call panel, rich-text editor (composer),
+  drag-and-drop file-upload overlay.
+- **Workaround**: Keep `localize:` (VLM) for these regions. Document the
+  target widget shape in the scenario so future authors know why VLM is
+  used instead of `atspi:`.
+- **Affects**: Any AT-SPI step targeting one of the listed regions.
+- **Ref**: Chromium accessibility tree exposes only standard widgets. See
+  `docs/atspi-authoring.md` "Known canvas regions" for the live list.
+
+## `_resolve_in_dict` var substitution is shallow
+- **Status**: Workaround in place
+- **Issue**: `automation/runners/scenario_loader.py:_resolve_in_dict` walks
+  only the top-level keys of `atspi:` / `verify_atspi:` / `wait_for:` dict
+  values. `{var}` substitutions DO work for top-level string values like
+  `name: "{username}"`, but they are NOT substituted inside list-of-dict
+  payloads such as `wait_for.any[].name`. The string `"{username}"` will
+  reach the worker verbatim.
+- **Workaround**: Pre-resolve vars in the scenario or use literal values
+  inside nested condition dicts.
+- **Affects**: `automation/runners/scenario_loader.py:resolve_vars` and
+  `_resolve_in_dict` helper.
+- **Long-term fix**: Deep-recurse `_resolve_in_dict` through lists of dicts
+  so the substitution behaviour matches the top-level case.
+- **Ref**: Discovered during Stage 1D wiring, 2026-05-22.
+
+## `atspi:` `name_substr: true` requires a non-empty `name`
+- **Status**: Workaround in place
+- **Issue**: The worker `find` op treats missing `name` + `name_substr: true`
+  as malformed — there is no string to substring-match against. Empty
+  `name: ""` is equally rejected.
+- **Workaround**: Always provide a non-empty `name` when setting
+  `name_substr: true`. To match "any node of role X", omit `name_substr`
+  entirely (and omit `name`) — the worker will return the first node of
+  the requested role.
+- **Affects**: `automation/atspi/worker.py:_op_find`. All three step fields
+  that route through the find op: `atspi:`, `verify_atspi:`, `wait_for:`
+  conditions.
+- **Ref**: Discovered during Stage 1D wiring, 2026-05-22.
+
+## Window-state sampler requires a live GUI session DISPLAY
+- **Status**: Workaround in place (auto-injection); sampler self-disables on failure
+- **Issue**: `wmctrl` and `xdotool` need `DISPLAY` and `XAUTHORITY` to query
+  the running session. When `--record-window-state` is on, the sampler now
+  auto-injects `DISPLAY=:0` plus the mutter XAUTHORITY
+  (`/run/user/1000/.mutter-Xwaylandauth.*`) for each SSH round-trip. This
+  works on a logged-in GNOME-X11 session owned by `jean`. Headless CI,
+  non-mutter X sessions, and pure-Wayland sessions without an Xwayland
+  cookie will not be sampled — the sampler self-disables after the first
+  failure and the recording proceeds without the extra metadata.
+- **Workaround**: Run with a real graphical login on the VM. For headless
+  runs, simply omit `--record-window-state` (default OFF).
+- **Affects**: `automation/recording/session_recorder.py:_collect_window_state`.
+- **Ref**: Discovered during Stage 3a live verify, 2026-05-22.

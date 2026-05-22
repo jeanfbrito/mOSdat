@@ -44,6 +44,14 @@ bugs. See `.claude/skills/mosdat-pr-preflight/SKILL.md` for the enforced workflo
 
 General-purpose multi-OS Electron/desktop UI testing with VLM verification, scenario authoring, build/deploy automation, preflight/doctor validation, replay, and session recording — targeting Linux and Windows VMs via Proxmox.
 
+### Accessibility-first UI automation (Stages 1+2+3 shipped 2026-05-22)
+
+mOSdat now drives Linux UI tests via AT-SPI semantic role+name clicks
+when widgets are accessible (zero-flake path), falling back to VLM
+`localize_click` for canvas regions. New step fields: `atspi:`,
+`verify_atspi:`, `wait_for:`. Discovery via `mosdat atspi-dump`.
+Authoring guide: [docs/atspi-authoring.md](docs/atspi-authoring.md).
+
 ## CRITICAL: Proxmox is a Separate Machine
 
 **Proxmox runs on a DIFFERENT machine (192.168.13.85). All hardware info must be queried via API.**
@@ -132,7 +140,7 @@ For task-specific procedures, see `docs/runbooks/`:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mOSdat** (8347 symbols, 14478 relationships, 214 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mOSdat** (8409 symbols, 14560 relationships, 213 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
