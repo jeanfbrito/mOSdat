@@ -1,0 +1,16 @@
+{
+  "asar_sha": "deadbeef12345678",
+  "captured_at": "2026-05-23T01:14:45.194039+00:00",
+  "vm": "ubuntu2204",
+  "accelerators": {
+    "alt+f": "open",
+    "ctrl+comma": "no_accel"
+  },
+  "popups": {
+    "sidebar_kebab": "transient_800ms"
+  },
+  "persisted_state_keys": [
+    "isTelephonyEnabled"
+  ],
+  "test_ids_present": false
+}
