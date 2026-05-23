@@ -136,38 +136,34 @@ steps:
   # "Choose an app" picker (which never spawns an RC dialog/check box).
   - label: "QA-002-step1e-close-settings: close Settings before dispatch (RC IPC needs main view)"
     shell: |
-      powershell -Command "& {
-        Add-Type -AssemblyName System.Windows.Forms
-        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
-        if ($rc) {
-          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
-          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
-          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Milliseconds 800
-        }
-        Write-Host SETTINGS_CLOSED
-      }"
+      Add-Type -AssemblyName System.Windows.Forms
+      $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+      if ($rc) {
+        $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+        Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+        [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Start-Sleep -Milliseconds 800
+      }
+      Write-Host SETTINGS_CLOSED
 
   - label: "persist: isTelephonyEnabled=false on disk before dispatch (step1e OFF)"
     shell: |
-        powershell -Command "& {
-          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
-          if (-not (Test-Path $cfgPath)) {
-            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
-            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
-          }
-          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
-          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
-          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
-          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $false -Force
-          $json = $cfg | ConvertTo-Json -Depth 10
-          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
-          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-          if ($verify.isTelephonyEnabled -ne $false) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
-          Write-Host TELEPHONY_PERSISTED_FALSE
-        }"
+        $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+        if (-not (Test-Path $cfgPath)) {
+          $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+          if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+        }
+        if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+        $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+        try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+        $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $false -Force
+        $json = $cfg | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+        if ($verify.isTelephonyEnabled -ne $false) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+        Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-002-step1e: Start-Process tel:{{ test_number }} (should NO-OP for RC)"
     shell: |
@@ -209,14 +205,10 @@ steps:
     atspi: {role: "push button", name: "Customize and control app"}
     retries: 1
 
-  - label: "QA-002-step2b: wait_for Settings menu item in kebab popup"
-    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
-    retries: 1
-
-  - label: "QA-002-step2c: click Settings menu item (UIA primary, VLM fallback)"
-    atspi: {role: "menu item", name: "Settings"}
+  - label: "QA-002-step2b: click Settings menu item via VLM (UIA exposes as CustomControl)"
     localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
-    retries: 1
+    click: true
+    wait: 1
 
   - label: "QA-002-step2d: wait_for Settings General tab"
     wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
@@ -231,9 +223,11 @@ steps:
     localize: "the 'Voice & Video' tab in the left-hand vertical Settings sidebar, directly below the 'General' tab and above the 'Accessibility' tab"
     retries: 1
 
-  - label: "QA-002-step2g: wait_for Telephony section (checkbox is the anchor)"
-    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
-    retries: 1
+  - label: "QA-002-step2g: settle for Telephony section to render (Fuselage CheckBox not in UIA)"
+    wait: 3
+
+  - label: "QA-002-step2g-vlm: VLM confirm Telephony section visible (checkbox anchor)"
+    localize: "the 'Telephony' label next to a checkbox in the Voice & Video Settings panel"
 
   # ── QA-002-step3: Ensure toggle is OFF (pre-stage already set it OFF) ────
   - label: "QA-002-step3: verify toggle currently OFF (no Got it prompt visible)"
@@ -253,38 +247,34 @@ steps:
   # ── QA-002-step4: Trigger callto: while disabled → must be ignored ───────
   - label: "QA-002-step4a-close-settings: close Settings before dispatch (RC IPC needs main view)"
     shell: |
-      powershell -Command "& {
-        Add-Type -AssemblyName System.Windows.Forms
-        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
-        if ($rc) {
-          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
-          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
-          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Milliseconds 800
-        }
-        Write-Host SETTINGS_CLOSED
-      }"
+      Add-Type -AssemblyName System.Windows.Forms
+      $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+      if ($rc) {
+        $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+        Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+        [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Start-Sleep -Milliseconds 800
+      }
+      Write-Host SETTINGS_CLOSED
 
   - label: "persist: isTelephonyEnabled=false on disk before dispatch (step4a OFF)"
     shell: |
-        powershell -Command "& {
-          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
-          if (-not (Test-Path $cfgPath)) {
-            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
-            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
-          }
-          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
-          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
-          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
-          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $false -Force
-          $json = $cfg | ConvertTo-Json -Depth 10
-          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
-          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-          if ($verify.isTelephonyEnabled -ne $false) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
-          Write-Host TELEPHONY_PERSISTED_FALSE
-        }"
+        $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+        if (-not (Test-Path $cfgPath)) {
+          $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+          if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+        }
+        if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+        $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+        try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+        $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $false -Force
+        $json = $cfg | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+        if ($verify.isTelephonyEnabled -ne $false) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+        Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-002-step4a: Start-Process callto:{{ test_number }} (should NO-OP for RC)"
     shell: |
@@ -382,38 +372,34 @@ steps:
   # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
   - label: "QA-002-step6a-close-settings: close Settings before dispatch (RC IPC needs main view)"
     shell: |
-      powershell -Command "& {
-        Add-Type -AssemblyName System.Windows.Forms
-        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
-        if ($rc) {
-          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
-          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
-          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Milliseconds 800
-        }
-        Write-Host SETTINGS_CLOSED
-      }"
+      Add-Type -AssemblyName System.Windows.Forms
+      $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+      if ($rc) {
+        $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+        Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+        [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Start-Sleep -Milliseconds 800
+      }
+      Write-Host SETTINGS_CLOSED
 
   - label: "persist: isTelephonyEnabled=true on disk before dispatch (step6a ON)"
     shell: |
-        powershell -Command "& {
-          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
-          if (-not (Test-Path $cfgPath)) {
-            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
-            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
-          }
-          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
-          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
-          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
-          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
-          $json = $cfg | ConvertTo-Json -Depth 10
-          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
-          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-          if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
-          Write-Host TELEPHONY_PERSISTED_TRUE
-        }"
+        $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+        if (-not (Test-Path $cfgPath)) {
+          $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+          if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+        }
+        if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+        $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+        try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+        $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
+        $json = $cfg | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+        if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+        Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-002-step6a: Start-Process tel:{{ test_number }} (should ROUTE to RC)"
     shell: |
@@ -458,38 +444,34 @@ steps:
   # ── QA-002-step7: callto: link also routes ───────────────────────────────
   - label: "QA-002-step7a-close-settings: close Settings before dispatch (RC IPC needs main view)"
     shell: |
-      powershell -Command "& {
-        Add-Type -AssemblyName System.Windows.Forms
-        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
-        if ($rc) {
-          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
-          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
-          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Milliseconds 800
-        }
-        Write-Host SETTINGS_CLOSED
-      }"
+      Add-Type -AssemblyName System.Windows.Forms
+      $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+      if ($rc) {
+        $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+        Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+        [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Start-Sleep -Milliseconds 800
+      }
+      Write-Host SETTINGS_CLOSED
 
   - label: "persist: isTelephonyEnabled=true on disk before dispatch (step7a ON)"
     shell: |
-        powershell -Command "& {
-          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
-          if (-not (Test-Path $cfgPath)) {
-            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
-            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
-          }
-          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
-          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
-          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
-          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
-          $json = $cfg | ConvertTo-Json -Depth 10
-          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
-          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-          if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
-          Write-Host TELEPHONY_PERSISTED_TRUE
-        }"
+        $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+        if (-not (Test-Path $cfgPath)) {
+          $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+          if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+        }
+        if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+        $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+        try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+        $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
+        $json = $cfg | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+        if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+        Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-002-step7a: Start-Process callto:{{ test_number }} (should ROUTE to RC)"
     shell: |
@@ -536,38 +518,34 @@ steps:
 
   - label: "QA-002-roundtrip-close-settings: close Settings before dispatch (RC IPC needs main view)"
     shell: |
-      powershell -Command "& {
-        Add-Type -AssemblyName System.Windows.Forms
-        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
-        if ($rc) {
-          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
-          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
-          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
-          Start-Sleep -Milliseconds 500
-          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-          Start-Sleep -Milliseconds 800
-        }
-        Write-Host SETTINGS_CLOSED
-      }"
+      Add-Type -AssemblyName System.Windows.Forms
+      $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+      if ($rc) {
+        $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+        Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+        [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Start-Sleep -Milliseconds 800
+      }
+      Write-Host SETTINGS_CLOSED
 
   - label: "persist: isTelephonyEnabled=false on disk before dispatch (roundtrip OFF)"
     shell: |
-        powershell -Command "& {
-          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
-          if (-not (Test-Path $cfgPath)) {
-            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
-            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
-          }
-          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
-          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
-          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
-          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $false -Force
-          $json = $cfg | ConvertTo-Json -Depth 10
-          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
-          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-          if ($verify.isTelephonyEnabled -ne $false) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
-          Write-Host TELEPHONY_PERSISTED_FALSE
-        }"
+        $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+        if (-not (Test-Path $cfgPath)) {
+          $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+          if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+        }
+        if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+        $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+        try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+        $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $false -Force
+        $json = $cfg | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+        $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+        if ($verify.isTelephonyEnabled -ne $false) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+        Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-002-roundtrip: Start-Process tel:{{ test_number }} after OFF (should NO-OP)"
     shell: |
