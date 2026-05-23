@@ -1,0 +1,20 @@
+name: dismiss-apport-crash-dialog
+description: Detect an Ubuntu/GNOME apport crash dialog and dismiss it by VLM-localizing the Cancel button and clicking via VNC (Bezier motion). No-op when no dialog visible.
+schema_version: v1
+tags: [cleanup, crash, rocketchat, apport]
+
+steps:
+  - if_visible: "Ubuntu/GNOME apport crash report dialog with text like 'The application Rocket.Chat has closed unexpectedly' or an Apport bug-report dialog with a 'Cancel' button"
+    then_steps:
+      - localize: "the 'Cancel' button on the Apport crash report dialog (bottom-left or bottom-right of the small dialog window)"
+        click: left
+        motion: bezier
+        retries: 2
+      - wait: 1
+      - if_visible: "Apport crash report dialog still visible"
+        then_steps:
+          - localize: "the close (X) button in the top-right corner of the Apport dialog title bar"
+            click: left
+            motion: bezier
+            retries: 1
+          - wait: 1
