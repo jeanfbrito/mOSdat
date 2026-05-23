@@ -14,7 +14,7 @@
 #
 # Windows adaptations from linux source:
 #   - Inline shell launch + XAUTH → `routine: launch-rocketchat`.
-#   - `xdg-open tel:` → `powershell -Command "Start-Process 'tel:...'"`.
+#   - `xdg-open tel:` → `cmd /c start "" "tel:..."`.
 #   - `xdg-mime query default x-scheme-handler/tel` →
 #     `Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\tel\UserChoice' -Name ProgId`
 #     (returns the ProgID currently bound to the `tel:` URL scheme — on a
@@ -136,7 +136,7 @@ steps:
   # "Choose an app" picker (which never spawns an RC dialog/check box).
   - label: "QA-002-step1e: Start-Process tel:{{ test_number }} (should NO-OP for RC)"
     shell: |
-        try { Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue } catch {}
+        cmd /c start "" "tel:{{ test_number }}"
         Start-Sleep -Seconds 2
         Write-Host 'TEL_DISPATCHED'
 
@@ -212,7 +212,7 @@ steps:
   # ── QA-002-step4: Trigger callto: while disabled → must be ignored ───────
   - label: "QA-002-step4a: Start-Process callto:{{ test_number }} (should NO-OP for RC)"
     shell: |
-        try { Start-Process 'callto:{{ test_number }}' -ErrorAction SilentlyContinue } catch {}
+        cmd /c start "" "callto:{{ test_number }}"
         Start-Sleep -Seconds 2
         Write-Host 'CALLTO_DISPATCHED'
 
@@ -285,14 +285,35 @@ steps:
           Set-ItemProperty -Path "$base\shell\open\command" -Name '(Default)' -Value "`"$rcExe`" `"%1`"" -Force
           Write-Host "${scheme}_HANDLER_REGISTERED"
         }
+        # Flush Windows shell association cache via SHChangeNotify.
+        # Without this the OS caches the old handler and Start-Process tel:
+        # still shows the system picker even after HKCU\Software\Classes is written.
+        try {
+          python -c "from win32com.shell import shell, shellcon; shell.SHChangeNotify(shellcon.SHCNE_ASSOCCHANGED, shellcon.SHCNF_IDLIST, None, None)"
+          Write-Host 'SHCHANGENOTIFY_OK'
+        } catch {
+          Write-Host "SHCHANGENOTIFY_SKIPPED: $_"
+        }
+        Start-Sleep -Seconds 1
         Write-Host 'RC_PROTOCOL_HANDLER_PREREQ_DONE'
 
   # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
   - label: "QA-002-step6a: Start-Process tel:{{ test_number }} (should ROUTE to RC)"
     shell: |
-        Start-Process 'tel:{{ test_number }}'
+        cmd /c start "" "tel:{{ test_number }}"
         Start-Sleep -Seconds 1
         Write-Host 'TEL_DISPATCHED_ENABLED'
+
+  - wait: 2
+
+  # If the Windows system "How do you want to open?" picker appears, dismiss it.
+  - label: "QA-002-step6a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   # wait_for a telephony surface to paint. With 2 workspaces and no
   # preferred server, the server picker modal appears.
@@ -314,9 +335,20 @@ steps:
   # ── QA-002-step7: callto: link also routes ───────────────────────────────
   - label: "QA-002-step7a: Start-Process callto:{{ test_number }} (should ROUTE to RC)"
     shell: |
-        Start-Process 'callto:{{ test_number }}'
+        cmd /c start "" "callto:{{ test_number }}"
         Start-Sleep -Seconds 1
         Write-Host 'CALLTO_DISPATCHED_ENABLED'
+
+  - wait: 2
+
+  # If the Windows OS picker appeared for callto:, dismiss it.
+  - label: "QA-002-step7a-picker: dismiss OS protocol picker for callto: if visible"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared after the callto: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-002-step7b: wait_for telephony dispatch surface (callto: ROUTED)"
     wait_for:
@@ -340,7 +372,7 @@ steps:
 
   - label: "QA-002-roundtrip: Start-Process tel:{{ test_number }} after OFF (should NO-OP)"
     shell: |
-        try { Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue } catch {}
+        cmd /c start "" "tel:{{ test_number }}"
         Start-Sleep -Seconds 2
         Write-Host 'TEL_DISPATCHED_AFTER_DISABLE'
 

@@ -153,6 +153,16 @@ steps:
           Set-ItemProperty -Path "$base\shell\open\command" -Name '(Default)' -Value "`"$rcExe`" `"%1`"" -Force
           Write-Host "${scheme}_HANDLER_REGISTERED"
         }
+        # Flush Windows shell association cache via SHChangeNotify.
+        # Without this the OS caches the old handler and Start-Process tel:
+        # still shows the system picker even after HKCU\Software\Classes is written.
+        try {
+          python -c "from win32com.shell import shell, shellcon; shell.SHChangeNotify(shellcon.SHCNE_ASSOCCHANGED, shellcon.SHCNF_IDLIST, None, None)"
+          Write-Host 'SHCHANGENOTIFY_OK'
+        } catch {
+          Write-Host "SHCHANGENOTIFY_SKIPPED: $_"
+        }
+        Start-Sleep -Seconds 1
         Write-Host 'RC_PROTOCOL_HANDLER_PREREQ_DONE'
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -162,6 +172,17 @@ steps:
     shell: |
       powershell -Command "Start-Process '{{ tel_link }}'"
       echo TEL_DISPATCHED_1_PICKER_EXPECTED
+
+  - wait: 2
+
+  # If the Windows OS picker appeared, click Rocket.Chat to route to RC.
+  - label: "QA-007-step2a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-007-step2b: wait_for picker modal (dialog role)"
     wait_for: {any: [{role: "dialog"}], timeout: 30}
@@ -233,7 +254,17 @@ steps:
       powershell -Command "Start-Process '{{ tel_link }}'"
       echo TEL_DISPATCHED_2_NO_PICKER_EXPECTED
 
-  - wait: 3
+  - wait: 2
+
+  # If OS picker still appears (shell cache), dismiss it — the Fuselage picker
+  # should NOT re-open because a preference was stored in step 3.
+  - label: "QA-007-step4a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-007-step4b: assert picker did NOT open (preference shortcut worked)"
     shell: |
@@ -291,7 +322,16 @@ steps:
       powershell -Command "Start-Process '{{ tel_link }}'"
       echo TEL_DISPATCHED_3_AFTER_RESTART_NO_PICKER_EXPECTED
 
-  - wait: 3
+  - wait: 2
+
+  # OS picker handler for post-restart dispatch.
+  - label: "QA-007-step6a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-007-step6b: assert picker still skipped post-restart (preference survived)"
     shell: |
@@ -363,6 +403,17 @@ steps:
     shell: |
       powershell -Command "Start-Process '{{ tel_link }}'"
       echo TEL_DISPATCHED_4_AFTER_RESET_PICKER_EXPECTED
+
+  - wait: 2
+
+  # If OS picker shows (preference was cleared), click RC to route to RC.
+  - label: "QA-007-step7e-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-007-step7f: wait_for picker modal to re-open (Remember checkbox re-appears)"
     wait_for: {any: [{role: "check box", name: "Remember for future calls", name_substr: true}], timeout: 30}

@@ -17,7 +17,7 @@
 #
 # Brief authoring rules (batch C):
 #   - `routine: cleanup-rocketchat` + `routine: launch-rocketchat` per-OS.
-#   - PowerShell `Start-Process 'tel:...'` and `Start-Process 'callto:...'`
+#   - PowerShell `cmd /c start "" "tel:..."` and `cmd /c start "" "callto:..."`
 #     replace `xdg-open`. Same fire-and-forget semantics; the assertion is
 #     always on the RC AT-SPI surface, not on the dispatch exit code.
 #   - userData path on Windows: $env:APPDATA\Rocket.Chat. Pre-stage inline
@@ -149,7 +149,7 @@ steps:
 
   - label: "QA-014-step1e: Start-Process 'tel:{{ test_number }}' while Telephony OFF"
     shell: |
-        Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue
+        cmd /c start "" "tel:{{ test_number }}"
         Start-Sleep -Seconds 2
         Write-Host 'START_PROCESS_TEL_OFF_DISPATCHED'
 
@@ -212,7 +212,7 @@ steps:
   # lines 226-397 for the verbatim sub-scenario. Windows equivalents:
   #   - rm -rf "$HOME/.config/Rocket.Chat" → Remove-Item -Recurse -Force
   #     "$env:APPDATA\Rocket.Chat"
-  #   - xdg-open 'tel:...' → Start-Process 'tel:...'
+  #   - xdg-open 'tel:...' → cmd /c start "" "tel:..."
   #   - All AT-SPI probes UNCHANGED (atspi/wait_for/verify_atspi).
   #   - kebab→Settings→Voice & Video→Telephony toggle path UNCHANGED.
   # --- END SKIPPED step2 sub-scenario ---
@@ -295,7 +295,7 @@ steps:
   # Empty tel: — scheme with no payload.
   - label: "QA-014-step3e: Start-Process 'tel:' (malformed, empty payload)"
     shell: |
-        Start-Process 'tel:' -ErrorAction SilentlyContinue
+        cmd /c start "" "tel:"
         Start-Sleep -Seconds 2
         Write-Host 'START_PROCESS_TEL_EMPTY'
 
@@ -329,7 +329,7 @@ steps:
 
   - label: "QA-014-step4a: Start-Process 'callto:?subject=empty' (query-only)"
     shell: |
-        Start-Process 'callto:?subject=empty' -ErrorAction SilentlyContinue
+        cmd /c start "" "callto:?subject=empty"
         Start-Sleep -Seconds 2
         Write-Host 'START_PROCESS_CALLTO_QUERY_ONLY'
 
@@ -380,6 +380,16 @@ steps:
           Set-ItemProperty -Path "$base\shell\open\command" -Name '(Default)' -Value "`"$rcExe`" `"%1`"" -Force
           Write-Host "${scheme}_HANDLER_REGISTERED"
         }
+        # Flush Windows shell association cache via SHChangeNotify.
+        # Without this the OS caches the old handler and Start-Process tel:
+        # still shows the system picker even after HKCU\Software\Classes is written.
+        try {
+          python -c "from win32com.shell import shell, shellcon; shell.SHChangeNotify(shellcon.SHCNE_ASSOCCHANGED, shellcon.SHCNF_IDLIST, None, None)"
+          Write-Host 'SHCHANGENOTIFY_OK'
+        } catch {
+          Write-Host "SHCHANGENOTIFY_SKIPPED: $_"
+        }
+        Start-Sleep -Seconds 1
         Write-Host 'RC_PROTOCOL_HANDLER_PREREQ_DONE'
 
   # ═════════════════════════════════════════════════════════════════════════
@@ -388,9 +398,20 @@ steps:
 
   - label: "QA-014-step5a: Start-Process 'tel:{{ test_number }}' (should open picker)"
     shell: |
-        Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue
+        cmd /c start "" "tel:{{ test_number }}"
         Start-Sleep -Seconds 1
         Write-Host 'START_PROCESS_TEL_MULTIWS'
+
+  - wait: 2
+
+  # If OS picker appears, click Rocket.Chat to route to RC.
+  - label: "QA-014-step5a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-014-step5b: wait_for server picker (any picker surface)"
     wait_for:
@@ -432,10 +453,21 @@ steps:
 
   - label: "QA-014-step6a: rapid-fire two tel: links via Start-Process"
     shell: |
-        Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue
-        Start-Process 'tel:{{ test_number_b }}' -ErrorAction SilentlyContinue
+        cmd /c start "" "tel:{{ test_number }}"
+        cmd /c start "" "tel:{{ test_number_b }}"
         Start-Sleep -Seconds 2
         Write-Host 'TEL_RAPID_FIRE_DISPATCHED'
+
+  - wait: 2
+
+  # Dismiss OS picker if it appeared for either rapid-fire dispatch.
+  - label: "QA-014-step6a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-014-step6b: wait_for picker surface (at least one)"
     wait_for:
@@ -558,9 +590,20 @@ steps:
 
   - label: "QA-014-step7e: Start-Process 'tel:{{ test_number_c }}' with stale preferred server"
     shell: |
-        Start-Process 'tel:{{ test_number_c }}' -ErrorAction SilentlyContinue
+        cmd /c start "" "tel:{{ test_number_c }}"
         Start-Sleep -Seconds 1
         Write-Host 'START_PROCESS_TEL_STALE_PREFERRED'
+
+  - wait: 2
+
+  # If OS picker appears, click Rocket.Chat to route to RC.
+  - label: "QA-014-step7e-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   # Expected: stale preferred is detected → picker opens with the REAL
   # workspaces (graceful fallback). Silent failure would also fail this.

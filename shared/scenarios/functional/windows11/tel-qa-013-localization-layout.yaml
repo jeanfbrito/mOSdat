@@ -212,6 +212,38 @@ steps:
     verify_atspi: {role: "page tab", name: "Voice & Video"}
     retries: 1
 
+  # Cycle Telephony toggle OFF then ON to trigger sub-control rendering.
+  # When telephony is pre-staged ON, the Preferred Server sub-controls may not
+  # render until an actual in-session toggle event fires the UI state machine.
+  # Strategy: click toggle (ON→OFF), wait, click again (OFF→ON fires Got it),
+  # dismiss Got it, sub-controls appear.
+  - label: "QA-013-step2b-toggle-off: click Telephony toggle to turn OFF (ON→OFF, no modal)"
+    localize: "the Telephony toggle switch in the Voice & Video Settings panel, to the right of the 'Telephony' label"
+    click: "left"
+
+  - wait: 1
+
+  - label: "QA-013-step2b-toggle-on: click Telephony toggle to turn ON (OFF→ON, Got it fires)"
+    localize: "the Telephony toggle switch in the Voice & Video Settings panel, to the right of the 'Telephony' label"
+    click: "left"
+
+  - wait: 1
+
+  # Dismiss Got it (fires only on OFF→ON, confirms toggle landed correctly).
+  - label: "QA-013-step2b-got-it: wait_for Got it modal (OFF→ON confirmation)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 8
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-013-step2b-dismiss: dismiss Got it modal"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 2
+
+  - wait: 2
+
   - label: "QA-013-step2c: verify server picker surface visible"
     # Telephony section UI: "Preferred server" combo box + label. The widget
     # name has drifted across PR builds. Windows UIA may expose it as

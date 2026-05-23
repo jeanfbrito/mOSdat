@@ -167,6 +167,16 @@ steps:
           Set-ItemProperty -Path "$base\shell\open\command" -Name '(Default)' -Value "`"$rcExe`" `"%1`"" -Force
           Write-Host "${scheme}_HANDLER_REGISTERED"
         }
+        # Flush Windows shell association cache via SHChangeNotify.
+        # Without this the OS caches the old handler and Start-Process tel:
+        # still shows the system picker even after HKCU\Software\Classes is written.
+        try {
+          python -c "from win32com.shell import shell, shellcon; shell.SHChangeNotify(shellcon.SHCNE_ASSOCCHANGED, shellcon.SHCNF_IDLIST, None, None)"
+          Write-Host 'SHCHANGENOTIFY_OK'
+        } catch {
+          Write-Host "SHCHANGENOTIFY_SKIPPED: $_"
+        }
+        Start-Sleep -Seconds 1
         Write-Host 'RC_PROTOCOL_HANDLER_PREREQ_DONE'
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -176,6 +186,18 @@ steps:
     shell: |
       powershell -Command "Start-Process '{{ tel_link }}'"
       echo TEL_DISPATCHED_1
+
+  - wait: 2
+
+  # If the Windows system "How do you want to open?" picker appears (means
+  # HKCU\Classes handler wasn't picked up yet), click Rocket.Chat in it.
+  - label: "QA-006-step2a-picker: dismiss OS protocol picker if visible (click Rocket.Chat row)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-006-step2b: wait_for picker modal (Fuselage dialog role)"
     wait_for: {any: [{role: "dialog"}], timeout: 30}
@@ -246,6 +268,17 @@ steps:
     shell: |
       powershell -Command "Start-Process '{{ callto_link }}'"
       echo CALLTO_DISPATCHED_2
+
+  - wait: 2
+
+  # If Windows OS picker appeared for callto: as well, dismiss it.
+  - label: "QA-006-step5a-picker: dismiss OS protocol picker for callto: if visible"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared after the callto: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-006-step5b: wait_for picker modal AGAIN (Remember was unchecked)"
     wait_for: {any: [{role: "check box", name: "Remember for future calls", name_substr: true}], timeout: 30}

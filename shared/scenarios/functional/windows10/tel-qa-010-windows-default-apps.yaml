@@ -13,7 +13,7 @@
 #   5. Assign `tel` to Rocket.Chat (verify HKCU UserChoice ProgId after assign).
 #   6. Assign `callto` to Rocket.Chat (verify HKCU UserChoice ProgId after assign).
 #   7. Open RC diagnostics → isDefault.tel & isDefault.callto pass.
-#   8. `Start-Process 'tel:+15551234567'` and `Start-Process 'callto:+15551234567'`
+#   8. `cmd /c start "" "tel:+15551234567"` and `cmd /c start "" "callto:+15551234567"`
 #      → RC opens telephony flow for both.
 #
 # Brief authoring rules (batch C):
@@ -44,7 +44,7 @@
 #     is the in-app mirror of the same registry lookup. Both anchors are
 #     valuable: registry proves OS truth; diagnostics proves the app sees it.
 #   - Spec step 8 ("Rocket.Chat opens telephony flow"): PowerShell
-#     `Start-Process 'tel:...'` is the Windows equivalent of `xdg-open tel:...`.
+#     `cmd /c start "" "tel:..."` is the Windows equivalent of `xdg-open tel:...`.
 #     If the protocol handler is bound to RC, the running RC process surfaces
 #     the server picker (multi-workspace pre-stage) — same modal anchor as
 #     TEL-QA-005/006 (Remember-for-future-calls check box).
@@ -359,6 +359,16 @@ steps:
           Set-ItemProperty -Path "$base\shell\open\command" -Name '(Default)' -Value "`"$rcExe`" `"%1`"" -Force
           Write-Host "${scheme}_HKCU_CLASSES_REGISTERED"
         }
+        # Flush Windows shell association cache via SHChangeNotify.
+        # Without this Electron's isDefaultProtocolClient() may still return
+        # false even after HKCU\Software\Classes is written correctly.
+        try {
+          python -c "from win32com.shell import shell, shellcon; shell.SHChangeNotify(shellcon.SHCNE_ASSOCCHANGED, shellcon.SHCNF_IDLIST, None, None)"
+          Write-Host 'SHCHANGENOTIFY_OK'
+        } catch {
+          Write-Host "SHCHANGENOTIFY_SKIPPED: $_"
+        }
+        Start-Sleep -Seconds 1
         Write-Host 'RC_PROTOCOL_HANDLER_PREREQ_DONE'
 
   # ── QA-010-step7: Open RC diagnostics, verify isDefault.tel + .callto pass
@@ -424,7 +434,18 @@ steps:
 
   - label: "QA-010-step8a: Start-Process 'tel:{{ test_number }}' (should focus RC + open picker)"
     shell: |
-      powershell -Command "Start-Process 'tel:{{ test_number }}'"
+      cmd /c start "" "tel:{{ test_number }}"
+
+  - wait: 2
+
+  # If OS picker appears, click Rocket.Chat to route to RC.
+  - label: "QA-010-step8a-picker: dismiss OS protocol picker if visible (click Rocket.Chat)"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared in front of the Rocket.Chat window after the tel: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-010-step8b: wait_for picker surface (tel: dispatch)"
     wait_for:
@@ -443,7 +464,18 @@ steps:
 
   - label: "QA-010-step8d: Start-Process 'callto:{{ test_number }}' (should focus RC + open picker)"
     shell: |
-      powershell -Command "Start-Process 'callto:{{ test_number }}'"
+      cmd /c start "" "callto:{{ test_number }}"
+
+  - wait: 2
+
+  # If OS picker appears for callto:, dismiss it.
+  - label: "QA-010-step8d-picker: dismiss OS protocol picker for callto: if visible"
+    if_visible: "the Windows system 'How do you want to open this?' or 'Open with' dialog that appeared after the callto: link was dispatched"
+    then:
+      - localize: "the Rocket.Chat or Rocket.Chat.exe option listed in the Windows protocol picker dialog or 'Open with' sheet that appeared"
+        click: "left"
+
+  - wait: 1
 
   - label: "QA-010-step8e: wait_for picker surface (callto: dispatch)"
     wait_for:

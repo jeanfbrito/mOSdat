@@ -25,7 +25,7 @@
 #   * Per-OS routine resolver picks `shared/routines/windows/launch-rocketchat.yaml`
 #     for `routine: cleanup-rocketchat` and the inline launch (we use the
 #     routine here — the Wayland-XAUTH Known-Issue does not apply on Windows).
-#   * `xdg-open tel:` becomes `Start-Process 'tel:...'` (the Windows protocol
+#   * `xdg-open tel:` becomes `cmd /c start "" "tel:..."` (the Windows protocol
 #     handler invocation).
 #   * User data lives under `$env:APPDATA\Rocket.Chat` (Roaming) — the
 #     pre-stage step writes servers.json + overridden-settings.json there.
@@ -131,7 +131,7 @@ steps:
 
   - label: "QA-005-step4a: Start-Process tel:+15551234567 (E.164)"
     shell: |
-      powershell -Command "Start-Process 'tel:+15551234567'"
+      cmd /c start "" "tel:+15551234567"
       echo QA005_STEP4A_DISPATCHED
 
   - label: "QA-005-step4a: wait for dispatch to reach renderer (frame visible)"
@@ -163,7 +163,7 @@ steps:
 
   - label: "QA-005-step4b: Start-Process tel:+55 11 99999-1234 (spaced + dashed)"
     shell: |
-      powershell -Command "Start-Process 'tel:+55 11 99999-1234'"
+      cmd /c start "" "tel:+55 11 99999-1234"
       echo QA005_STEP4B_DISPATCHED
 
   - label: "QA-005-step4b: wait for dispatch to reach renderer (frame visible)"
@@ -192,7 +192,7 @@ steps:
 
   - label: "QA-005-step5a: Start-Process callto:+15551234567 (callto E.164)"
     shell: |
-      powershell -Command "Start-Process 'callto:+15551234567'"
+      cmd /c start "" "callto:+15551234567"
       echo QA005_STEP5A_DISPATCHED
 
   - label: "QA-005-step5a: wait for dispatch to reach renderer (frame visible)"
@@ -221,7 +221,7 @@ steps:
 
   - label: "QA-005-step5b: Start-Process callto://+491234567890 (authority form)"
     shell: |
-      powershell -Command "Start-Process 'callto://+491234567890'"
+      cmd /c start "" "callto://+491234567890"
       echo QA005_STEP5B_DISPATCHED
 
   - label: "QA-005-step5b: wait for dispatch to reach renderer (frame visible)"
