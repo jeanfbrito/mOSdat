@@ -331,6 +331,14 @@
 - **Ref**: Discovered while wiring `3325-diagnostics-panel` against the
   PR3325 clean redeploy, 2026-05-22.
 
+## Rocket.Chat.Electron #3325 (`feat/telephony-deeplink`) — TypeError on zero-workspaces fresh profile
+
+- **Status**: upstream bug, awaiting PR fix.
+- **Issue**: launching Rocket.Chat with an empty `servers.json` (zero workspaces) throws `TypeError: Cannot read properties of null (reading 'url')` at `setupServers` (main.js:6581). RC main process exits silently; no window appears.
+- **Workaround**: stage at least one workspace in `servers.json` before launching. mOSdat scenario `tel-qa-014-negative-cases.yaml` step2 (zero-workspaces test) is currently SKIPPED for this reason — re-enable when upstream is fixed.
+- **Affects**: `tel-qa-014-negative-cases.yaml` step2 sub-scenario.
+- **Ref**: stack at `/opt/Rocket.Chat/resources/app.asar/app/main.js:6581:26 setupServers → select`. Discovered 2026-05-22 on ubuntu2204@192.168.13.81 (RC 4.14.1 PR build).
+
 ## Fuselage ToggleSwitch: AT-SPI action_name decoupled from React `checked` state
 - **Status**: Workaround in place (probe-by-modal pattern)
 - **Issue**: The Telephony master toggle (Fuselage `<ToggleSwitch>`) is

@@ -1,0 +1,462 @@
+# qa_flow: TEL-QA-007
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/07-preferred-server-persistence.md
+# Authored 2026-05-22 atop swiss-knife epic Stage 1+2+3 + pointer-mode default.
+#
+# Mirrors the 7-step QA flow 1:1:
+#   1. Start with fresh profile / clear settings → no preferred server.
+#   2. Click tel:+15551234567 → server picker opens.
+#   3. Check Remember choice and select workspace A → dial path uses ws A.
+#   4. Click same link again → picker SKIPPED; ws A used.
+#   5. Quit and relaunch Rocket.Chat → app starts normally.
+#   6. Click same link again → picker STILL skipped; ws A used.
+#   7. Clear/reset preferred server (Settings → Voice & Video → Telephony Server
+#      dropdown back to Auto) → next dispatch re-opens the picker.
+#
+# Pattern borrowed from `tel-qa-006-multi-workspace-picker.yaml` (multi-workspace
+# pre-stage + picker modal + Remember checkbox handling) and `3325-remember-choice.yaml`
+# (preference reset via Settings dropdown / overridden-settings.json).
+#
+# Pre-staging:
+#   - servers.json: 3 distinct workspaces (Workspace, Mobile RC, Open RC) so the
+#     picker has multiple choices to disambiguate the persistence test.
+#   - overridden-settings.json: isTelephonyEnabled=true so the picker is reached
+#     without manually toggling the master switch.
+#     telephonyPreferredServer=null AND telephonyRememberChoice=null so the
+#     INITIAL state is "no preferred server" (step 1 of the QA flow).
+#
+# Persistence assertion strategy:
+#   - After step 3 (Remember CHECKED + workspace A selected), the preference is
+#     written into the app's persisted settings (electron-store). We assert this
+#     two ways:
+#       a) The picker does NOT re-open on the next dispatch (step 4).
+#       b) overridden-settings.json on disk contains telephonyPreferredServer
+#          equal to the chosen workspace URL.
+#   - For the restart cycle (step 5-6), we cleanly kill the binary, wait for the
+#     window to disappear, then re-launch with the SAME pre-staged userData
+#     (preserving the just-written telephonyPreferredServer value).
+#   - For the reset cycle (step 7), we use a shell step to clear the
+#     telephonyPreferredServer key in overridden-settings.json, then re-launch
+#     and dispatch — the picker MUST re-open (no preference = ask again).
+#
+# AT-SPI/VLM ratio: AT-SPI pointer-mode for kebab-style widgets. Modal presence
+# asserted via `verify_atspi` against the `dialog` role.
+#
+# Live-discovered widget names (ubuntu2204@192.168.13.81, PR3325 head — verified
+# 2026-05-22 via tree dump after xdg-open tel:):
+#   - picker modal:         role "dialog" (Fuselage Modal portal, no name)
+#   - remember checkbox:    role "check box", name "Remember for future calls"
+#   - workspace row:        role "push button", name "<title> <hostname>" e.g.
+#                           "Southlogic rocketchat.jeanbrito.com"
+#   - dismissal:            Escape key only (no Cancel button in tree)
+
+name: "tel-qa-007-preferred-server-persistence"
+description: |
+  TEL-QA-007 — Preferred server persistence.
+
+  With 2+ workspaces configured and Telephony ENABLED but no remembered-choice
+  preference, dispatching a phone link surfaces the picker. Once the user
+  selects a workspace WITH Remember checked, the preference must persist:
+    - across the immediate next dispatch (no picker — direct to ws A)
+    - across an app restart (kill + relaunch — still no picker)
+    - until the user clears it via Settings → Voice & Video → Telephony Server
+      dropdown back to Auto (or the persisted overridden-settings.json key is
+      cleared), at which point a fresh dispatch re-opens the picker.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  open_url: "https://open.rocket.chat"
+  tel_link: "tel:+15551234567"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── QA-007-step1: Fresh profile — 3 workspaces, NO preferred server ─────
+  # Pre-stage userData so the very first dispatch (step 2) opens the picker.
+  # Inlined from launch-rocketchat (Known Issue #1: Wayland-only XAUTH path
+  # in the routine — inline shell is safer until that's repaired).
+  - label: "QA-007-step1a: stage fresh userData (3 workspaces, no preferred server)"
+    shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}",
+        "Open RC":   "{{ open_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      def _u(u):
+          return u if u.endswith("/") else u + "/"
+      first_url  = _u("{{ workspace_url }}")
+      mobile_url = _u("{{ mobile_url }}")
+      open_url   = _u("{{ open_url }}")
+      config = {
+          "servers": [
+              {"url": first_url,  "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+              {"url": open_url,   "title": "Open RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      # Telephony ENABLED; NO remembered choice (picker fires on FIRST dispatch).
+      overrides = {
+          "isTelephonyEnabled": True,
+          "telephonyPreferredServer": None,
+          "telephonyRememberChoice": False,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED_FRESH_NO_PREFERRED_SERVER
+
+  # ── QA-007-step1b: Launch Rocket.Chat with a11y flags ────────────────────
+  - label: "QA-007-step1b: launch Rocket.Chat (inline, XAUTH fallback chain)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-007-step1c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step2: First dispatch — picker MUST open (no preferred server yet)
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
+        "{{ tel_link }}" >/dev/null 2>&1 &
+      echo TEL_DISPATCHED_1_PICKER_EXPECTED
+
+  - label: "QA-007-step2b: wait_for picker modal (dialog role)"
+    wait_for: {any: [{role: "dialog"}], timeout: 30}
+    retries: 5
+
+  - label: "QA-007-step2c: verify_atspi picker dialog present"
+    verify_atspi: {role: "dialog"}
+    retries: 5
+
+  - label: "QA-007-step2d: verify_atspi Remember for future calls checkbox present"
+    verify_atspi: {role: "check box", name: "Remember for future calls", name_substr: true}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step3: Check Remember + select workspace A → preference persisted
+  # ══════════════════════════════════════════════════════════════════════════
+  # CRITICAL: tick Remember FIRST, THEN click the workspace row. The PR's
+  # picker reads the checkbox state at the moment the row is activated.
+  - label: "QA-007-step3a: tick Remember for future calls checkbox"
+    atspi: {role: "check box", name: "Remember for future calls", name_substr: true}
+    retries: 5
+
+  - wait: 1
+
+  - label: "QA-007-step3b: click Workspace A row (rocketchat.jeanbrito.com, Remember CHECKED)"
+    atspi: {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+    retries: 5
+
+  # Modal closes → dial path proceeds. Deterministic signal: picker dialog gone.
+  - label: "QA-007-step3c: assert picker closed after row selection (Remember checkbox gone)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        PROBE='{
+          "ops": [
+            {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+          ]
+        }'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+          echo "PICKER_CLOSED_OK (attempt ${attempt})"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FAILED — picker still visible after workspace row click with Remember checked" >&2
+      exit 1
+
+  # ── QA-007-step3d: assert preference WAS persisted on disk ───────────────
+  # The PR writes the choice into electron-store (which mOSdat overlays via
+  # overridden-settings.json). Poll for the telephonyPreferredServer key to
+  # become non-null in either config dir.
+  - label: "QA-007-step3d: assert telephonyPreferredServer persisted on disk"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+          [ -f "$d/overridden-settings.json" ] || continue
+          VAL=$(python3 -c "
+      import json
+      d = json.load(open('$d/overridden-settings.json'))
+      v = d.get('telephonyPreferredServer')
+      print(v if v else 'NULL')
+      " 2>/dev/null)
+          if [ -n "$VAL" ] && [ "$VAL" != "NULL" ]; then
+            echo "PREFERRED_SERVER_PERSISTED ($VAL in $d)"
+            exit 0
+          fi
+        done
+        sleep 1
+      done
+      echo "FAILED — telephonyPreferredServer is still null after Remember+select" >&2
+      exit 1
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step4: Second dispatch — picker MUST be skipped (preference set)
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
+        "{{ tel_link }}" >/dev/null 2>&1 &
+      echo TEL_DISPATCHED_2_NO_PICKER_EXPECTED
+
+  - wait: 3
+
+  # The picker MUST NOT open. Negative assertion: the Remember-for-future-calls
+  # checkbox should remain ABSENT across the poll window.
+  - label: "QA-007-step4b: assert picker did NOT open (preference shortcut worked)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5; do
+        PROBE='{
+          "ops": [
+            {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+          ]
+        }'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q PRESENT; then
+          echo "FAILED — picker re-opened despite remembered preference (attempt ${attempt})" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      echo "PICKER_SKIPPED_OK (preference honored across 5 polls)"
+
+  - label: "QA-007-step4c: verify app alive (main frame visible)"
+    verify_atspi: {role: "frame"}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step5: Quit and relaunch — preference must survive restart
+  # ══════════════════════════════════════════════════════════════════════════
+  # Kill the binary cleanly, wait for the window to disappear, then re-launch
+  # WITHOUT re-staging userData (we want the just-persisted preference intact).
+  - label: "QA-007-step5a: quit Rocket.Chat (graceful kill)"
+    shell: |
+      pkill -f rocketchat-desktop 2>/dev/null || true
+      for i in $(seq 1 20); do
+        if ! wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "RC_QUIT_OK (after ${i}s)"
+          exit 0
+        fi
+        sleep 1
+      done
+      # Hard kill as a safety net
+      pkill -9 -f rocketchat-desktop 2>/dev/null || true
+      sleep 2
+      echo "RC_QUIT_FORCED"
+
+  - wait: 2
+
+  - label: "QA-007-step5b: relaunch Rocket.Chat (same userData, preference must persist)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "RC_RELAUNCHED_OK (after ${i}s)"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-007-step5c: wait_for main window frame after relaunch"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step6: Dispatch after restart — picker MUST still be skipped
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
+        "{{ tel_link }}" >/dev/null 2>&1 &
+      echo TEL_DISPATCHED_3_AFTER_RESTART_NO_PICKER_EXPECTED
+
+  - wait: 3
+
+  - label: "QA-007-step6b: assert picker still skipped post-restart (preference survived)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5; do
+        PROBE='{
+          "ops": [
+            {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+          ]
+        }'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q PRESENT; then
+          echo "FAILED — picker re-opened after restart (preference did NOT persist)" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      echo "PICKER_SKIPPED_POST_RESTART_OK (preference survived restart)"
+
+  - label: "QA-007-step6c: verify app alive post-restart"
+    verify_atspi: {role: "frame"}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step7: Reset preferred server → picker MUST re-open
+  # ══════════════════════════════════════════════════════════════════════════
+  # Two reset paths exist (per the QA flow):
+  #   (a) UI path: open Settings → Voice & Video → Telephony Server dropdown,
+  #       change selection back to "Auto".
+  #   (b) Settings file path: clear telephonyPreferredServer in
+  #       overridden-settings.json.
+  #
+  # We use (b) here because it is deterministic, decoupled from UI label drift,
+  # and exercises the same persistence layer the PR writes to. The dropdown
+  # UI is covered by tel-qa-001 (settings discovery) and 3325-remember-choice.
+  - label: "QA-007-step7a: quit Rocket.Chat before clearing preference"
+    shell: |
+      pkill -f rocketchat-desktop 2>/dev/null || true
+      for i in $(seq 1 20); do
+        if ! wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "RC_QUIT_FOR_RESET_OK (after ${i}s)"
+          exit 0
+        fi
+        sleep 1
+      done
+      pkill -9 -f rocketchat-desktop 2>/dev/null || true
+      sleep 2
+      echo "RC_QUIT_FORCED_FOR_RESET"
+
+  - wait: 2
+
+  - label: "QA-007-step7b: clear telephonyPreferredServer in overridden-settings.json"
+    shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        [ -f "$d/overridden-settings.json" ] || continue
+        python3 - "$d/overridden-settings.json" <<'PY'
+      import json, sys
+      p = sys.argv[1]
+      data = json.load(open(p))
+      data["telephonyPreferredServer"] = None
+      data["telephonyRememberChoice"] = False
+      open(p, "w").write(json.dumps(data, indent=2))
+      print(f"CLEARED_PREFERENCE_IN {p}")
+      PY
+      done
+      echo PREFERENCE_RESET_DONE
+
+  - label: "QA-007-step7c: relaunch Rocket.Chat with reset preference"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "RC_RELAUNCHED_POST_RESET_OK (after ${i}s)"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-007-step7d: wait_for main window frame after reset"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 5
+
+  - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
+        "{{ tel_link }}" >/dev/null 2>&1 &
+      echo TEL_DISPATCHED_4_AFTER_RESET_PICKER_EXPECTED
+
+  - label: "QA-007-step7f: wait_for picker modal to re-open (Remember checkbox re-appears)"
+    wait_for: {any: [{role: "check box", name: "Remember for future calls", name_substr: true}], timeout: 30}
+    retries: 5
+
+  - label: "QA-007-step7g: verify_atspi picker dialog re-opened (preference cleared works)"
+    verify_atspi: {role: "dialog"}
+    retries: 5
+
+  # ── QA-007-step7h: dismiss the re-opened picker (clean exit) ─────────────
+  - label: "QA-007-step7h: dismiss picker via Escape key"
+    key: Escape
+
+  - wait: 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
