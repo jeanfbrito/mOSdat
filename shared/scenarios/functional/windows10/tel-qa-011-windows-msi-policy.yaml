@@ -402,7 +402,13 @@ steps:
   # (multi-workspace pre-stage).
   - label: "QA-011-step7a: Start-Process 'tel:{{ test_number }}'"
     shell: |
-      cmd /c start "" "tel:{{ test_number }}"
+      $rc = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
 
   - wait: 2
 
@@ -430,7 +436,13 @@ steps:
 
   - label: "QA-011-step7c: Start-Process 'callto:{{ test_number }}'"
     shell: |
-      cmd /c start "" "callto:{{ test_number }}"
+      $rc = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Start-Process -FilePath $rc -ArgumentList 'callto:{{ test_number }}' -WindowStyle Hidden
 
   - wait: 2
 

@@ -149,7 +149,13 @@ steps:
 
   - label: "QA-014-step1e: Start-Process 'tel:{{ test_number }}' while Telephony OFF"
     shell: |
-        cmd /c start "" "tel:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'START_PROCESS_TEL_OFF_DISPATCHED'
 
@@ -295,7 +301,13 @@ steps:
   # Empty tel: — scheme with no payload.
   - label: "QA-014-step3e: Start-Process 'tel:' (malformed, empty payload)"
     shell: |
-        cmd /c start "" "tel:"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'START_PROCESS_TEL_EMPTY'
 
@@ -329,7 +341,13 @@ steps:
 
   - label: "QA-014-step4a: Start-Process 'callto:?subject=empty' (query-only)"
     shell: |
-        cmd /c start "" "callto:?subject=empty"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'callto:?subject=empty' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'START_PROCESS_CALLTO_QUERY_ONLY'
 
@@ -398,7 +416,13 @@ steps:
 
   - label: "QA-014-step5a: Start-Process 'tel:{{ test_number }}' (should open picker)"
     shell: |
-        cmd /c start "" "tel:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 1
         Write-Host 'START_PROCESS_TEL_MULTIWS'
 
@@ -453,8 +477,14 @@ steps:
 
   - label: "QA-014-step6a: rapid-fire two tel: links via Start-Process"
     shell: |
-        cmd /c start "" "tel:{{ test_number }}"
-        cmd /c start "" "tel:{{ test_number_b }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number_b }}' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'TEL_RAPID_FIRE_DISPATCHED'
 
@@ -590,7 +620,13 @@ steps:
 
   - label: "QA-014-step7e: Start-Process 'tel:{{ test_number_c }}' with stale preferred server"
     shell: |
-        cmd /c start "" "tel:{{ test_number_c }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number_c }}' -WindowStyle Hidden
         Start-Sleep -Seconds 1
         Write-Host 'START_PROCESS_TEL_STALE_PREFERRED'
 

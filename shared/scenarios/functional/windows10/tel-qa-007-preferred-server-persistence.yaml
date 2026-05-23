@@ -170,7 +170,13 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
     shell: |
-      powershell -Command "Start-Process '{{ tel_link }}'"
+      $rc = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
       echo TEL_DISPATCHED_1_PICKER_EXPECTED
 
   - wait: 2
@@ -251,7 +257,13 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
     shell: |
-      powershell -Command "Start-Process '{{ tel_link }}'"
+      $rc = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
       echo TEL_DISPATCHED_2_NO_PICKER_EXPECTED
 
   - wait: 2
@@ -319,7 +331,13 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
     shell: |
-      powershell -Command "Start-Process '{{ tel_link }}'"
+      $rc = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
       echo TEL_DISPATCHED_3_AFTER_RESTART_NO_PICKER_EXPECTED
 
   - wait: 2
@@ -401,7 +419,13 @@ steps:
 
   - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
     shell: |
-      powershell -Command "Start-Process '{{ tel_link }}'"
+      $rc = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
       echo TEL_DISPATCHED_4_AFTER_RESET_PICKER_EXPECTED
 
   - wait: 2

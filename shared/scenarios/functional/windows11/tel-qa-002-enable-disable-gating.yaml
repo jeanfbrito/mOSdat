@@ -136,7 +136,13 @@ steps:
   # "Choose an app" picker (which never spawns an RC dialog/check box).
   - label: "QA-002-step1e: Start-Process tel:{{ test_number }} (should NO-OP for RC)"
     shell: |
-        cmd /c start "" "tel:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'TEL_DISPATCHED'
 
@@ -211,7 +217,13 @@ steps:
   # ── QA-002-step4: Trigger callto: while disabled → must be ignored ───────
   - label: "QA-002-step4a: Start-Process callto:{{ test_number }} (should NO-OP for RC)"
     shell: |
-        cmd /c start "" "callto:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'callto:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'CALLTO_DISPATCHED'
 
@@ -299,7 +311,13 @@ steps:
   # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
   - label: "QA-002-step6a: Start-Process tel:{{ test_number }} (should ROUTE to RC)"
     shell: |
-        cmd /c start "" "tel:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 1
         Write-Host 'TEL_DISPATCHED_ENABLED'
 
@@ -334,7 +352,13 @@ steps:
   # ── QA-002-step7: callto: link also routes ───────────────────────────────
   - label: "QA-002-step7a: Start-Process callto:{{ test_number }} (should ROUTE to RC)"
     shell: |
-        cmd /c start "" "callto:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'callto:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 1
         Write-Host 'CALLTO_DISPATCHED_ENABLED'
 
@@ -371,7 +395,13 @@ steps:
 
   - label: "QA-002-roundtrip: Start-Process tel:{{ test_number }} after OFF (should NO-OP)"
     shell: |
-        cmd /c start "" "tel:{{ test_number }}"
+        $rc = @(
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
         Start-Sleep -Seconds 2
         Write-Host 'TEL_DISPATCHED_AFTER_DISABLE'
 
