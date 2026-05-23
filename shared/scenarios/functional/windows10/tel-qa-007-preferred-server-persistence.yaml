@@ -184,6 +184,25 @@ steps:
         Write-Host SETTINGS_CLOSED
       }"
 
+  - label: "persist: isTelephonyEnabled=true on disk before dispatch (step2a ON)"
+    shell: |
+        powershell -Command "& {
+          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+          if (-not (Test-Path $cfgPath)) {
+            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+          }
+          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
+          $json = $cfg | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+          if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+          Write-Host TELEPHONY_PERSISTED_TRUE
+        }"
+
   - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
     shell: |
       $rc = @(
@@ -287,6 +306,25 @@ steps:
         Write-Host SETTINGS_CLOSED
       }"
 
+  - label: "persist: isTelephonyEnabled=true on disk before dispatch (step4a ON)"
+    shell: |
+        powershell -Command "& {
+          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+          if (-not (Test-Path $cfgPath)) {
+            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+          }
+          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
+          $json = $cfg | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+          if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+          Write-Host TELEPHONY_PERSISTED_TRUE
+        }"
+
   - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
     shell: |
       $rc = @(
@@ -376,6 +414,25 @@ steps:
         }
         Write-Host SETTINGS_CLOSED
       }"
+
+  - label: "persist: isTelephonyEnabled=true on disk before dispatch (step6a ON)"
+    shell: |
+        powershell -Command "& {
+          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+          if (-not (Test-Path $cfgPath)) {
+            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+          }
+          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
+          $json = $cfg | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+          if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+          Write-Host TELEPHONY_PERSISTED_TRUE
+        }"
 
   - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
     shell: |
@@ -480,6 +537,25 @@ steps:
         }
         Write-Host SETTINGS_CLOSED
       }"
+
+  - label: "persist: isTelephonyEnabled=true on disk before dispatch (step7e ON)"
+    shell: |
+        powershell -Command "& {
+          $cfgPath = \"$env:APPDATA\Rocket.Chat\overridden-settings.json\"
+          if (-not (Test-Path $cfgPath)) {
+            $cfgPath2 = \"$env:APPDATA\Rocket.Chat (development)\overridden-settings.json\"
+            if (Test-Path $cfgPath2) { $cfgPath = $cfgPath2 }
+          }
+          if (-not (Test-Path $cfgPath)) { Write-Error 'overridden-settings.json not found'; exit 1 }
+          $raw = [System.IO.File]::ReadAllText($cfgPath, [System.Text.UTF8Encoding]::new($false))
+          try { $cfg = $raw | ConvertFrom-Json } catch { $cfg = [pscustomobject]@{} }
+          $cfg | Add-Member -NotePropertyName isTelephonyEnabled -NotePropertyValue $true -Force
+          $json = $cfg | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText($cfgPath, $json, [System.Text.UTF8Encoding]::new($false))
+          $verify = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+          if ($verify.isTelephonyEnabled -ne $true) { Write-Error 'isTelephonyEnabled verify failed'; exit 1 }
+          Write-Host TELEPHONY_PERSISTED_TRUE
+        }"
 
   - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
     shell: |
