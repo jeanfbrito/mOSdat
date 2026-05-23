@@ -304,7 +304,7 @@ steps:
     atspi: {role: "push button", name: "Got it"}
     retries: 1
 
-  - wait: 2
+  - wait: 5
 
   # ── Pre-register RC as tel:/callto: OS default handler ───────────────────
   # Delete stale UserChoice (hash-protected on Win10 1803+) and register

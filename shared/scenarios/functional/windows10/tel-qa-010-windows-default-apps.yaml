@@ -221,6 +221,9 @@ steps:
     atspi: {role: "push button", name: "Got it"}
     retries: 1
 
+  # Settle Redux state propagation (renderer → main process IPC mirror)
+  - wait: 3
+
   - wait: 2
 
   # ── QA-010-step3: Open Windows Settings → Apps → Default apps ────────────
