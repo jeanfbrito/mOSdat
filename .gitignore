@@ -42,6 +42,9 @@ __pycache__/
 
 # Agent scratch (kept out of git)
 .sisyphus/
+
+# Timestamped agent-generated log droppings (YYYYMMDD-HHMMSS-*.md at repo root)
+/20[0-9][0-9][01][0-9][0-3][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*.md
 .claude/*
 # Project-scoped Claude Code skills ARE tracked.
 !.claude/skills/
