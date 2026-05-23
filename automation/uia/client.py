@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import socket
 import tempfile
 import time
 import uuid
@@ -62,6 +63,7 @@ from automation.transport.ssh import SSHClient
 
 DEFAULT_WORKER_REMOTE_PATH = "C:\\tmp\\mosdat_uia_worker.py"
 DEFAULT_SETUP_REMOTE_PATH = "C:\\tmp\\mosdat_uia_setup.ps1"
+DEFAULT_SETUP_DAEMON_REMOTE_PATH = "C:\\tmp\\mosdat_uia_setup_daemon.ps1"
 DEFAULT_REMOTE_PAYLOAD_DIR = "C:\\tmp"
 DEFAULT_PAYLOAD_INLINE_MAX_BYTES = 8 * 1024  # 8 KB
 DEFAULT_CALL_TIMEOUT_S = 60
@@ -70,9 +72,13 @@ DEFAULT_WAIT_FOR_INTERVAL_S = 0.5
 DEFAULT_APP_FILTER = "rocket"
 DEFAULT_SESSION1_POLL_INTERVAL_S = 0.25
 DEFAULT_SESSION1_BUFFER_S = 8  # extra slack on top of the op-batch timeout
+DEFAULT_DAEMON_PORT = 5555
+DEFAULT_DAEMON_SETUP_TIMEOUT_S = 60
+DEFAULT_DAEMON_TUNNEL_WAIT_S = 15.0
 
 _LOCAL_WORKER_PATH = Path(__file__).resolve().parent / "worker.py"
 _LOCAL_SETUP_PATH = Path(__file__).resolve().parent / "setup.ps1"
+_LOCAL_SETUP_DAEMON_PATH = Path(__file__).resolve().parent / "setup_daemon.ps1"
 
 
 # --------------------------- exceptions --------------------------------------
@@ -102,21 +108,80 @@ class UiaClient:
         worker_remote_path: str = DEFAULT_WORKER_REMOTE_PATH,
         *,
         setup_remote_path: str = DEFAULT_SETUP_REMOTE_PATH,
+        setup_daemon_remote_path: str = DEFAULT_SETUP_DAEMON_REMOTE_PATH,
         remote_payload_dir: str = DEFAULT_REMOTE_PAYLOAD_DIR,
         app_filter: str = DEFAULT_APP_FILTER,
         call_timeout: int = DEFAULT_CALL_TIMEOUT_S,
         use_session1: bool = True,
         session1_poll_interval: float = DEFAULT_SESSION1_POLL_INTERVAL_S,
+        # Daemon mode: persistent worker registered as a logon-triggered
+        # scheduled task on the VM, host talks to it via an SSH -L tunnel.
+        # When `use_daemon=True`, supersedes use_session1.
+        use_daemon: Optional[bool] = None,
+        daemon_port: int = DEFAULT_DAEMON_PORT,
+        local_forward_port: Optional[int] = None,
     ) -> None:
         self._ssh = ssh
         self._worker_path = worker_remote_path
         self._setup_path = setup_remote_path
+        self._setup_daemon_path = setup_daemon_remote_path
         self._payload_dir = remote_payload_dir
         self._app_filter = app_filter
         self._call_timeout = call_timeout
         self._worker_deployed = False
         self._use_session1 = bool(use_session1)
         self._session1_poll_interval = float(session1_poll_interval)
+        # Daemon-mode state.
+        # Default policy: enable daemon only when the caller has NOT opted
+        # into a legacy transport explicitly. `use_session1=False` is the
+        # signal unit tests use to request the legacy argv shape; we honour
+        # it by leaving the daemon off so the legacy ssh.run path stays in
+        # play. Production callers leave `use_session1` at its True default
+        # and end up on the daemon transport.
+        # Default: daemon OFF to keep existing unit tests (which mock ssh.run
+        # and inspect the legacy argv / session1 schtasks XML wire shapes)
+        # working without modification. Production callers explicitly pass
+        # `use_daemon=True` (see commands/functional_cmd.py, routines/harness.py,
+        # mcp_tools.py, issue_confirm.py, main.py) to get the persistent
+        # transport.
+        if use_daemon is None:
+            self._use_daemon = False
+        else:
+            self._use_daemon = bool(use_daemon)
+        self._daemon_port = int(daemon_port)
+        self._local_port = (int(local_forward_port)
+                            if local_forward_port is not None
+                            else self._pick_free_local_port())
+        self._daemon_setup_done = False
+        if self._use_daemon:
+            # Inject the port forward into the SSH transport. The
+            # ControlMaster picks it up on first connect.
+            try:
+                self._ssh.add_port_forward(
+                    self._local_port, "127.0.0.1", self._daemon_port,
+                )
+            except AttributeError:
+                # Older SSHClient without port-forward support — fall back to
+                # legacy session1 transport rather than failing at construction.
+                self._use_daemon = False
+
+    @staticmethod
+    def _pick_free_local_port() -> int:
+        """Bind a transient ephemeral socket to grab a free port from the OS.
+
+        Closed immediately; there's a tiny TOCTOU window before the SSH
+        forward grabs it but in practice the kernel won't recycle that
+        port for the brief gap.
+        """
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", 0))
+            return int(s.getsockname()[1])
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
 
     # ----- deployment -------------------------------------------------------
 
@@ -166,16 +231,172 @@ class UiaClient:
         Does NOT raise on per-op failure (worker batch may legitimately
         have a failing `verify` you want to inspect). Raises `UiaError`
         only on transport/parse failure or a batch-level error.
+
+        Transport selection (priority order):
+          * `use_daemon=True` (default) — TCP request to the persistent
+            worker over the SSH -L tunnel. No schtasks per call.
+          * `use_session1=True` — legacy schtasks-per-op InteractiveToken
+            transport (preserved for backward-compat).
+          * else — Session-0 argv-or-stdin transport (unit tests).
         """
-        self._ensure_deployed()
         batch = {"ops": ops, "init": init or {"force_uia_init": True}}
         payload = json.dumps(batch, separators=(",", ":"))
         timeout = timeout if timeout is not None else self._call_timeout
 
+        if self._use_daemon:
+            return self._run_batch_daemon(payload, timeout=timeout)
+
+        # Legacy paths still need the worker on the VM.
+        self._ensure_deployed()
         if self._use_session1:
             return self._run_batch_session1(payload, timeout=timeout)
         return self._run_batch_legacy(
             payload, timeout=timeout, inline_max_bytes=inline_max_bytes,
+        )
+
+    # ----- daemon transport (persistent worker + SSH port-forward) ----------
+
+    def _run_batch_daemon(self, payload: str, *, timeout: int) -> dict:
+        """Send one op-batch to the persistent daemon via the local-forwarded
+        TCP tunnel. Idempotently registers/starts the daemon on first call.
+
+        Wire protocol: <json>\n request, <json>\n response. The daemon
+        accepts one batch per connection and writes the response back on
+        the same socket, then closes.
+
+        On `ConnectionRefusedError` / `socket.error` the method re-triggers
+        `_ensure_daemon_setup()` (which re-opens the SSH tunnel) and retries
+        the connection exactly once. If the retry also fails, `UiaError` is
+        raised with both the original and retry errors.
+        """
+        self._ensure_daemon_setup()
+        _orig_err: Optional[OSError] = None
+        for _attempt in range(2):
+            try:
+                s = socket.create_connection(
+                    ("127.0.0.1", self._local_port), timeout=10,
+                )
+                break  # connected — exit retry loop
+            except (ConnectionRefusedError, socket.error) as e:
+                if _attempt == 0:
+                    _orig_err = e
+                    # Tunnel died mid-session — force re-setup on next call so
+                    # _ensure_daemon_setup() re-opens the port-forward.
+                    self._daemon_setup_done = False
+                    try:
+                        self._ensure_daemon_setup()
+                    except UiaError:
+                        raise UiaError(
+                            f"daemon: cannot connect to local tunnel 127.0.0.1:"
+                            f"{self._local_port} (original: {_orig_err!r}); "
+                            f"re-setup also failed",
+                        ) from e
+                else:
+                    raise UiaError(
+                        f"daemon: cannot connect to local tunnel 127.0.0.1:"
+                        f"{self._local_port} (original: {_orig_err!r}); "
+                        f"retry also failed: {e!r}",
+                    ) from e
+        try:
+            s.settimeout(max(1.0, float(timeout)))
+            s.sendall(payload.encode("utf-8") + b"\n")
+            buf = bytearray()
+            while True:
+                try:
+                    chunk = s.recv(65536)
+                except socket.timeout as e:
+                    raise UiaError(
+                        f"daemon: timed out after {timeout}s waiting for "
+                        f"response (got {len(buf)} bytes)",
+                    ) from e
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                if buf.endswith(b"\n"):
+                    break
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+        if not buf:
+            raise UiaError("daemon: empty response from worker")
+        try:
+            return json.loads(buf.decode("utf-8").rstrip("\n"))
+        except Exception as e:
+            raise UiaError(
+                f"daemon: could not parse worker response as JSON: {e!r}; "
+                f"first 500 bytes: {bytes(buf)[:500]!r}",
+            ) from e
+
+    def _ensure_daemon_setup(self) -> None:
+        """First-call setup: deploy worker + setup script, register the
+        scheduled task, open the SSH port-forward, probe the tunnel.
+
+        Idempotent (Register-ScheduledTask -Force on the VM side handles
+        re-registration cleanly). After success, `_daemon_setup_done`
+        prevents further work for the lifetime of this client.
+        """
+        if self._daemon_setup_done:
+            return
+
+        # Step 1: ship the worker + setup script to the VM.
+        self._ensure_deployed()
+        if not _LOCAL_SETUP_DAEMON_PATH.exists():
+            raise UiaError(
+                f"local setup_daemon.ps1 not found at "
+                f"{_LOCAL_SETUP_DAEMON_PATH}",
+            )
+        scp_res = self._ssh.scp_to(_LOCAL_SETUP_DAEMON_PATH,
+                                   self._setup_daemon_path)
+        if not scp_res.success:
+            raise UiaError(
+                f"daemon: failed to scp setup_daemon.ps1: {scp_res.stderr}",
+                stderr=scp_res.stderr,
+            )
+
+        # Step 2: run setup_daemon.ps1 on the VM (registers + starts task).
+        # Pass the worker path + port explicitly so test/runtime overrides
+        # propagate. Wait up to DEFAULT_DAEMON_SETUP_TIMEOUT_S for the
+        # listener probe inside the script.
+        setup_cmd = (
+            f"powershell -NoProfile -ExecutionPolicy Bypass -File "
+            f"\"{self._setup_daemon_path}\" -WorkerPath "
+            f"\"{self._worker_path}\" -Port {self._daemon_port}"
+        )
+        setup_res = self._ssh.run(
+            setup_cmd, timeout=DEFAULT_DAEMON_SETUP_TIMEOUT_S,
+        )
+        if not setup_res.success or "DAEMON_LISTENING_PORT_" not in (
+            setup_res.stdout or ""
+        ):
+            raise UiaError(
+                f"daemon: setup_daemon.ps1 failed: "
+                f"rc={setup_res.returncode} "
+                f"stdout={setup_res.stdout!r} stderr={setup_res.stderr!r}",
+                stderr=setup_res.stderr,
+            )
+
+        # Step 3: probe the local end of the SSH tunnel. The setup_res run
+        # above already opened the ControlMaster (forward came along).
+        deadline = time.monotonic() + DEFAULT_DAEMON_TUNNEL_WAIT_S
+        last_err: Optional[BaseException] = None
+        while time.monotonic() < deadline:
+            try:
+                probe = socket.create_connection(
+                    ("127.0.0.1", self._local_port), timeout=2,
+                )
+                probe.close()
+                self._daemon_setup_done = True
+                return
+            except (OSError, socket.error) as e:
+                last_err = e
+                time.sleep(0.5)
+        raise UiaError(
+            f"daemon: port-forward to {self._local_port}->VM:"
+            f"{self._daemon_port} not reachable after "
+            f"{DEFAULT_DAEMON_TUNNEL_WAIT_S}s "
+            f"(last error: {last_err!r})",
         )
 
     # ----- legacy (Session 0) transport -------------------------------------

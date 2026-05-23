@@ -3,7 +3,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -26,12 +26,18 @@ class SSHClient:
         *,
         persistent: bool = False,
         control_persist: int = 60,
+        port_forwards: Optional[List[Tuple[int, str, int]]] = None,
     ) -> None:
         self.host = host
         self.user = user
         self.connect_timeout = connect_timeout
         self._persistent = persistent
         self._control_persist = control_persist
+        # Local→remote TCP forwards: [(local_port, remote_host, remote_port), ...]
+        # Injected into ssh argv as `-L lp:rh:rp`. When `persistent=True`, the
+        # ControlMaster opens the forward on first use and ControlPersist keeps
+        # it alive across subsequent run/scp calls.
+        self._port_forwards: List[Tuple[int, str, int]] = list(port_forwards or [])
         self._base_opts = [
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -59,7 +65,17 @@ class SSHClient:
             "-o", f"ControlPath={self._control_path}",
             "-o", "ControlMaster=auto",
             "-o", f"ControlPersist={self._control_persist}",
+            # Keep the master alive through NAT idle-timeout gaps.
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=5",
         ]
+
+    def _forward_opts(self) -> list[str]:
+        """Build `-L` port-forward args. Empty when no forwards configured."""
+        args: list[str] = []
+        for lp, rh, rp in self._port_forwards:
+            args += ["-L", f"{int(lp)}:{rh}:{int(rp)}"]
+        return args
 
     def _ssh_args(self) -> list[str]:
         """Build the ssh argv prefix (no remote command). Used by tests."""
@@ -67,6 +83,7 @@ class SSHClient:
             ["ssh"]
             + self._base_opts
             + self._control_opts()
+            + self._forward_opts()
             + [f"{self.user}@{self.host}"]
         )
 
@@ -168,6 +185,34 @@ class SSHClient:
             return SSHResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
         except subprocess.TimeoutExpired:
             return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
+
+    def add_port_forward(self, local_port: int, remote_host: str,
+                         remote_port: int) -> None:
+        """Append a `-L` forward. Effective only on NEXT ssh invocation —
+        an already-open ControlMaster won't pick up new -L args without a
+        reconnect. Caller should `close_persistent()` first if a master is
+        already running.
+        """
+        self._port_forwards.append(
+            (int(local_port), str(remote_host), int(remote_port))
+        )
+
+    def check_master(self) -> bool:
+        """Return True iff the ControlMaster socket is alive (ssh -O check)."""
+        if not self._control_path:
+            return False
+        try:
+            r = subprocess.run(
+                [
+                    "ssh", "-O", "check",
+                    "-S", self._control_path,
+                    f"{self.user}@{self.host}",
+                ],
+                capture_output=True, text=True, timeout=5,
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
 
     # -------------------------------------------------------------- teardown
     def close_persistent(self) -> None:

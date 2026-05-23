@@ -132,7 +132,6 @@ steps:
 
   - label: "QA-003-step1f: click Voice & Video tab"
     atspi: {role: "page tab", name: "Voice & Video"}
-    localize: "the 'Voice & Video' tab in the left-hand vertical Settings sidebar, directly below the 'General' tab and above the 'Accessibility' tab"
     retries: 1
 
   - label: "QA-003-step1g: wait_for Telephony section (checkbox is the anchor)"

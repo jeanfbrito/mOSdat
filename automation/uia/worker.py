@@ -66,8 +66,12 @@ clean JSON error instead of an unhandled ImportError.
 from __future__ import annotations
 
 import json
+import os
+import socket
 import sys
+import threading
 import time
+import traceback
 from typing import Any, Optional
 
 
@@ -281,7 +285,7 @@ def _matches_app(elem: Any, needle: str) -> bool:
         title = ""
     if needle in title:
         return True
-    # Process name via psutil if available; otherwise fall back to title only.
+    # Process name: try psutil first, then ctypes QueryFullProcessImageNameW.
     try:
         import psutil  # type: ignore
 
@@ -291,23 +295,134 @@ def _matches_app(elem: Any, needle: str) -> bool:
             nm = (proc.name() or "").lower()
             if needle in nm:
                 return True
+    except ImportError:
+        # psutil not available — fall through to ctypes path.
+        pass
+    except Exception:
+        pass
+    try:
+        import ctypes  # type: ignore
+        import ctypes.wintypes as wt  # type: ignore
+
+        pid = elem.process_id()
+        if pid:
+            _OpenProcess = ctypes.windll.kernel32.OpenProcess
+            _QueryName = getattr(
+                ctypes.windll.kernel32, "QueryFullProcessImageNameW", None
+            )
+            if _QueryName is not None:
+                h = _OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED
+                if h:
+                    try:
+                        buf = ctypes.create_unicode_buffer(512)
+                        sz = wt.DWORD(512)
+                        if _QueryName(h, 0, buf, ctypes.byref(sz)):
+                            exe = buf.value.lower()
+                            if needle in exe:
+                                return True
+                    finally:
+                        ctypes.windll.kernel32.CloseHandle(h)
     except Exception:
         pass
     return False
 
 
 def _find_app(desktop: Any, app_filter: str) -> Optional[Any]:
-    """Locate the top-level window matching app_filter."""
+    """Locate the top-level window matching app_filter.
+
+    Primary: desktop.windows() (works on Win10 and Taskbar-only Win11 root).
+    Fallback: psutil process-iter + Application.connect(process=pid) for Win11
+    where only the Taskbar appears as a direct desktop child.
+    """
     try:
         windows = desktop.windows()
     except Exception:
-        return None
+        windows = []
     for w in windows:
         try:
             if _matches_app(w, app_filter):
                 return w
         except Exception:
             continue
+
+    # Win11 fallback: desktop.windows() may only return the Taskbar.
+    # Use pywin32 EnumWindows to find matching HWNDs by title/class, then
+    # wrap with pywinauto via ElementFromHandle so we get a full UIA element.
+    if not app_filter:
+        return None
+    try:
+        import ctypes  # type: ignore
+        import ctypes.wintypes as wt  # type: ignore
+        import comtypes  # type: ignore
+        import comtypes.client  # type: ignore
+        from pywinauto.uia_element_info import UIAElementInfo  # type: ignore
+        from pywinauto.base_wrapper import BaseWrapper  # type: ignore
+
+        needle = app_filter.lower()
+        user32 = ctypes.windll.user32
+        _EnumWindows = user32.EnumWindows
+        _EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+        _GetWindowText = user32.GetWindowTextW
+        _IsWindowVisible = user32.IsWindowVisible
+        _GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+
+        # Collect (hwnd, title, pid) for visible windows whose title or
+        # the process-exe name contains the needle.  We use
+        # QueryFullProcessImageNameW to get the exe name without psutil.
+        _OpenProcess = ctypes.windll.kernel32.OpenProcess
+        _QueryName = getattr(ctypes.windll.kernel32, "QueryFullProcessImageNameW", None)
+        PROCESS_QUERY_LIMITED = 0x1000
+
+        found_hwnd: list[int] = []
+
+        def _cb(hwnd: int, _lparam: int) -> bool:
+            if not _IsWindowVisible(hwnd):
+                return True
+            buf = ctypes.create_unicode_buffer(256)
+            _GetWindowText(hwnd, buf, 256)
+            title = buf.value.lower()
+            if needle in title:
+                found_hwnd.append(hwnd)
+                return True
+            # Check exe name via QueryFullProcessImageName.
+            if _QueryName is not None:
+                pid = wt.DWORD()
+                _GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                h = _OpenProcess(PROCESS_QUERY_LIMITED, False, pid.value)
+                if h:
+                    buf2 = ctypes.create_unicode_buffer(512)
+                    sz = wt.DWORD(512)
+                    if _QueryName(h, 0, buf2, ctypes.byref(sz)):
+                        exe = buf2.value.lower()
+                        if needle in exe:
+                            found_hwnd.append(hwnd)
+                    ctypes.windll.kernel32.CloseHandle(h)
+            return True
+
+        _EnumWindows(_EnumWindowsProc(_cb), 0)
+
+        if not found_hwnd:
+            return None
+
+        # Convert the first matching HWND to a pywinauto element.
+        from pywinauto import Desktop  # type: ignore
+
+        try:
+            _IUIA = None
+            from pywinauto.uia_defines import IUIA  # type: ignore
+            _IUIA = IUIA().iuia
+            elem_ptr = _IUIA.ElementFromHandle(found_hwnd[0])
+            ei = UIAElementInfo(elem_ptr)
+            # Build a wrapper from the desktop with this element info.
+            d = Desktop(backend="uia")
+            return d.backend.generic_wrapper_class(ei)
+        except Exception:
+            # Last resort: connect by hwnd via Application.
+            from pywinauto import Application  # type: ignore
+            app = Application(backend="uia").connect(handle=found_hwnd[0], timeout=2)
+            return app.top_window()
+    except Exception:
+        pass
     return None
 
 
@@ -743,6 +858,7 @@ def _invoke_action(elem: Any, action_idx: int) -> tuple[bool, Optional[str], Opt
         return False, None, f"action_idx {action_idx} out of range (have {len(supported)})"
 
     pat_name, code = supported[action_idx]
+    last_err: Optional[str] = None
     try:
         pat = ei.GetCurrentPattern(code)
         if pat_name == "invoke":
@@ -759,7 +875,33 @@ def _invoke_action(elem: Any, action_idx: int) -> tuple[bool, Optional[str], Opt
                 pat.Collapse()
         return True, pat_name, None
     except Exception as e:
-        return False, pat_name, f"{pat_name} raised: {e!r}"
+        last_err = f"{pat_name} raised: {e!r}"
+
+    # Pattern invoke failed (common on Win11 + pywinauto 0.6.9 where
+    # GetCurrentPattern returns a raw IUnknown not auto-cast to the typed
+    # provider interface). Fall back to pywinauto convenience methods which
+    # use a different code path through the element's automation API.
+    fallback_methods: list[str] = []
+    if pat_name == "invoke":
+        fallback_methods = ["invoke", "click_input"]
+    elif pat_name == "toggle":
+        fallback_methods = ["toggle", "click_input"]
+    elif pat_name == "select":
+        fallback_methods = ["select", "click_input"]
+    elif pat_name == "expand":
+        fallback_methods = ["expand", "click_input"]
+
+    for meth in fallback_methods:
+        fn = getattr(elem, meth, None)
+        if callable(fn):
+            try:
+                fn()
+                return True, f"{pat_name}_via_{meth}", None
+            except Exception as fe:
+                last_err = f"{pat_name}_via_{meth} raised: {fe!r}"
+                continue
+
+    return False, pat_name, last_err
 
 
 def _op_do_action(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
@@ -941,7 +1083,13 @@ def _op_move_cursor(desktop: Any, op: dict, results: dict[str, dict]) -> dict:
     try:
         from pywinauto import mouse  # type: ignore
 
-        mouse.move(coords=(x, y), duration=duration)
+        # pywinauto 0.6.9 mouse.move does not accept a 'duration' kwarg;
+        # call with coords only and fall back to SetCursorPos if that also fails.
+        try:
+            mouse.move(coords=(x, y))
+        except TypeError:
+            import ctypes  # type: ignore
+            ctypes.windll.user32.SetCursorPos(x, y)
     except Exception as e:
         return {"ok": False, "error": f"mouse.move failed: {e!r}",
                 "x": x, "y": y}
@@ -1085,7 +1233,156 @@ def _load_batch(input_spec: str) -> dict:
     return json.loads(raw)
 
 
+# --------------------------- daemon mode -------------------------------------
+#
+# Persistent socket server, launched once at logon by a scheduled task running
+# under the interactive user's token (Session 1). Eliminates the per-op
+# `schtasks /Create + /Run + /Delete` churn that produced cmd.exe console
+# flashes and stole focus from the app-under-test.
+#
+# Protocol (line-delimited JSON over TCP):
+#   request   : <json batch>\n
+#   response  : <json result>\n
+#
+# Bound to 127.0.0.1 — only reachable via the host-side ssh -L port-forward.
+# Single-shot per connection (no keep-alive multiplexing) to keep dispatch
+# trivially correct against the existing op-batch contract.
+
+
+def _daemon_log_path() -> str:
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or "."
+    return os.path.join(base, "mosdat-uia-daemon.log")
+
+
+def _daemon_log(msg: str) -> None:
+    try:
+        with open(_daemon_log_path(), "a", encoding="utf-8") as fh:
+            fh.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _recv_line(conn: socket.socket, max_bytes: int = 64 * 1024 * 1024) -> bytes:
+    """Read until newline or EOF. Caps total at 64 MB to bound memory."""
+    buf = bytearray()
+    while True:
+        if len(buf) >= max_bytes:
+            return bytes(buf)
+        try:
+            chunk = conn.recv(65536)
+        except socket.timeout:
+            raise
+        if not chunk:
+            return bytes(buf)
+        buf.extend(chunk)
+        if buf.endswith(b"\n"):
+            return bytes(buf)
+
+
+def _handle_conn(conn: socket.socket, stop_event: threading.Event) -> None:
+    """Handle one client connection: read one JSON line, dispatch, reply.
+
+    Internal control op `_shutdown` sets the stop event so the accept loop
+    exits cleanly (useful for tests; not used in production).
+    """
+    try:
+        conn.settimeout(120.0)
+        raw = _recv_line(conn)
+        if not raw:
+            return
+        try:
+            req = json.loads(raw.decode("utf-8").rstrip("\n"))
+        except Exception as e:
+            err = {"ok": False, "results": {},
+                   "errors": [f"batch_parse_failed: {e!r}"]}
+            conn.sendall(json.dumps(err).encode("utf-8") + b"\n")
+            return
+        # Internal control: graceful shutdown (for tests).
+        if isinstance(req, dict) and req.get("op") == "_shutdown":
+            conn.sendall(b'{"ok":true,"shutdown":true}\n')
+            stop_event.set()
+            return
+        result = run_batch(req)
+        payload = json.dumps(result, default=str).encode("utf-8") + b"\n"
+        conn.sendall(payload)
+    except Exception as e:
+        _daemon_log(f"conn handler raised: {e!r}\n{traceback.format_exc()}")
+        try:
+            err = {"ok": False, "results": {},
+                   "errors": [f"daemon_handler_raised: {e!r}"]}
+            conn.sendall(json.dumps(err).encode("utf-8") + b"\n")
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def run_daemon(port: int = 5555, host: str = "127.0.0.1") -> int:
+    """Run the worker as a persistent TCP server.
+
+    Bind/listen on (host, port), accept connections sequentially, dispatch
+    each one as a one-shot op-batch. Errors are logged to
+    %LOCALAPPDATA%\\mosdat-uia-daemon.log and returned to the client in the
+    standard batch-error shape; the server keeps running.
+
+    Returns 0 on graceful shutdown, 1 on bind failure.
+    """
+    _daemon_log(f"daemon starting on {host}:{port} pid={os.getpid()}")
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        srv.bind((host, port))
+    except OSError as e:
+        _daemon_log(f"bind failed: {e!r}")
+        return 1
+    srv.listen(8)
+    stop_event = threading.Event()
+    try:
+        while not stop_event.is_set():
+            try:
+                srv.settimeout(1.0)
+                try:
+                    conn, _addr = srv.accept()
+                except socket.timeout:
+                    continue
+            except OSError as e:
+                _daemon_log(f"accept failed: {e!r}")
+                time.sleep(0.5)
+                continue
+            _handle_conn(conn, stop_event)
+    finally:
+        try:
+            srv.close()
+        except Exception:
+            pass
+        _daemon_log("daemon stopped")
+    return 0
+
+
+def _parse_daemon_args(argv: list[str]) -> Optional[int]:
+    """Return the port if --daemon is in argv, else None.
+
+    `--port <n>` overrides default 5555.
+    """
+    if "--daemon" not in argv:
+        return None
+    port = 5555
+    try:
+        idx = argv.index("--port")
+        port = int(argv[idx + 1])
+    except (ValueError, IndexError):
+        pass
+    return port
+
+
 def main() -> int:
+    daemon_port = _parse_daemon_args(sys.argv)
+    if daemon_port is not None:
+        return run_daemon(daemon_port)
+
     try:
         input_spec, out_path = _parse_cli_args(sys.argv)
         batch = _load_batch(input_spec)

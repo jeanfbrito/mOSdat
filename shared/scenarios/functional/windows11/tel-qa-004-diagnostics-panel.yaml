@@ -128,7 +128,6 @@ steps:
 
   - label: "QA-004-step1g: click Voice & Video tab"
     atspi: {role: "page tab", name: "Voice & Video"}
-    localize: "the 'Voice & Video' tab in the left-hand vertical Settings sidebar, directly below the 'General' tab and above the 'Accessibility' tab"
     retries: 1
 
   - label: "QA-004-step1h: wait_for Telephony checkbox on Voice & Video tab"
@@ -168,14 +167,14 @@ steps:
     retries: 1
 
   - label: "QA-004-step3b: click Refresh in Diagnostics"
-    atspi: {role: "push button", name: "Refresh"}
+    atspi: {role: "push button", name: "Refresh", via: "action"}
     retries: 1
 
   - wait: 2
 
   # ── QA-004-step4: Click Copy diagnostics ─────────────────────────────────
   - label: "QA-004-step4: click Copy diagnostics (writes JSON to clipboard)"
-    atspi: {role: "push button", name: "Copy diagnostics"}
+    atspi: {role: "push button", name: "Copy diagnostics", via: "action"}
     retries: 1
 
   - wait: 1

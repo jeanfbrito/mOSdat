@@ -1,0 +1,172 @@
+# qa_flow: TEL-QA-001
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/01-settings-discovery.md
+# Windows 10 variant. Adapted 2026-05-23 from
+# shared/scenarios/functional/linux/tel-qa-001-settings-discovery.yaml.
+#
+# Mirrors the 5-step QA flow 1:1:
+#   1. Launch Rocket.Chat → main window visible.
+#   2. Open kebab → click `Settings` menu item → Settings screen opens.
+#   3. Click `Voice & Video` tab → V&V options visible.
+#   4. Find Telephony → Telephony section/checkbox present.
+#   5. Check initial state → toggle is OFF (pre-staged
+#      isTelephonyEnabled=false via overridden-settings.json).
+#
+# Windows adaptations from linux source:
+#   - Inline shell launch + XAUTH fallback chain → `routine: launch-rocketchat`
+#     (resolves via #50 platform-aware loader to
+#      shared/routines/windows/launch-rocketchat.yaml).
+#   - `~/.config/Rocket.Chat` → `$env:APPDATA\Rocket.Chat` (PowerShell here-doc).
+#   - AT-SPI primitives (`atspi:`, `wait_for:`, `verify_atspi:`) UNCHANGED —
+#     runner's UiaClient (task #51) handles them transparently on Windows.
+#   - Direct worker invocation paths: `/tmp/mosdat_atspi_worker.py` →
+#     `C:\tmp\mosdat_uia_worker.py` invoked via PowerShell + `python`.
+#   - `via: hint` on Fuselage ToggleSwitch — KEPT. UIA worker supports the
+#     same zero-extent ancestor-walk mode (per brief adaptation table).
+#
+# Settings tab name: `Voice & Video` (per current PR build, identical on Win).
+# UI Variation note: Windows menu-bar accelerators differ from Linux but this
+# scenario never drives them — every navigation uses the kebab path, which
+# is identical across platforms in Electron.
+
+name: "tel-qa-001-settings-discovery"
+description: |
+  TEL-QA-001 — Telephony settings discovery (Windows 10).
+
+  Smoke flow: a tester with no feature context navigates Settings → Voice &
+  Video and identifies the Telephony section. Pre-stages a workspace + a
+  telephony-OFF profile so the initial-state assertion (step 5) is meaningful.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings with telephony OFF) ─
+  # PowerShell variant of the linux Python here-doc. Writes servers.json,
+  # config.json, overridden-settings.json into both stable + dev profiles.
+  - shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first += '/' }
+        $mobile = '{{ mobile_url }}'
+        if (-not $mobile.EndsWith('/')) { $mobile += '/' }
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          New-Item -Path $d -ItemType Directory -Force | Out-Null
+          $serversJson = @{ Workspace = '{{ workspace_url }}'; 'Mobile RC' = '{{ mobile_url }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = @{
+            servers = @(
+              @{ url = $first;  title = 'Workspace' },
+              @{ url = $mobile; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false;
+              minimized = $false; fullscreen = $false; normal = $true;
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = @{
+            isTelephonyEnabled = $false
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED'
+
+  # ── QA-001-step1: Launch Rocket.Chat ─────────────────────────────────────
+  - label: "QA-001-step1: launch Rocket.Chat (routine, Windows)"
+    routine: launch-rocketchat
+
+  - label: "QA-001-step1: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # ── QA-001-step2: Open kebab → click Settings ────────────────────────────
+  - label: "QA-001-step2a: wait_for kebab button (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-001-step2b: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-001-step2c: wait_for Settings menu item in kebab popup"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-001-step2d: click Settings menu item (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-001-step2e: verify Settings screen opened (General tab present)"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  # ── QA-001-step3: Click Voice & Video tab ────────────────────────────────
+  - label: "QA-001-step3a: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-001-step3b: click Voice & Video tab (UIA primary, VLM fallback)"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    # Page-tab clicks inside the Settings canvas trigger the same Windows
+    # UIA at-point reconciliation bug as the kebab→Settings popover hop:
+    # at_point at the tab's centre reports `document web/Text Area` instead
+    # of the tab, so pointer-mode rejects the click. Pattern proven on
+    # step2d (Settings menu item): runner falls UIA→VLM transparently on
+    # UiaError; VLM locates the tab text and left-clicks.
+    localize: "the 'Voice & Video' tab in the left-hand vertical Settings sidebar, directly below the 'General' tab and above the 'Accessibility' tab"
+    retries: 1
+
+  # ── QA-001-step4: Find Telephony section ─────────────────────────────────
+  - label: "QA-001-step4: wait_for Telephony section (checkbox is the anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-001-step4: verify_atspi Telephony section present"
+    verify_atspi: {role: "check box", name: "Telephony"}
+    retries: 1
+
+  # ── QA-001-step5: Check initial state — toggle OFF ───────────────────────
+  # Behavioural proof: pre-stage set isTelephonyEnabled=false. If toggle is
+  # OFF, the one-shot "Got it" default-handler modal (which fires ONLY on
+  # OFF→ON) is NOT currently visible. Probe via the UIA worker directly.
+  - label: "QA-001-step5: verify no default-handler prompt visible (toggle is OFF)"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        Write-Host $res
+        $obj = $res | ConvertFrom-Json
+        if (-not $obj.results.f.ok) {
+          Write-Host 'TELEPHONY_INITIAL_STATE_OFF_OK'
+          exit 0
+        }
+        Write-Error 'FAILED — Got it modal is visible, meaning telephony toggled ON unexpectedly'
+        exit 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

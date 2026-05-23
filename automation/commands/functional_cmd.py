@@ -263,7 +263,7 @@ def cmd_functional(args) -> int:
                 atspi_client = None
                 uia_client = None
                 if vm.is_windows:
-                    uia_client = UiaClient(ssh=ssh_atspi)
+                    uia_client = UiaClient(ssh=ssh_atspi, use_daemon=True)
                 else:
                     # Linux + any unrecognized os_type fall back to AT-SPI;
                     # macOS is not yet supported (both None would dispatch-fail

@@ -1,0 +1,273 @@
+# qa_flow: TEL-QA-005
+# qa_source: qa/telephony-deeplink/flows/05-single-workspace-links.md
+# Status: Windows 10 variant. Drafted 2026-05-23 by adapting
+# `linux/tel-qa-005-single-workspace-links.yaml` for the windows10 VM.
+#
+# Mirrors the linux scenario 1:1 — pre-stages ONE workspace + telephony
+# ENABLED, then triggers four canonical tel:/callto: link variants via
+# `Start-Process` (the OS-level path a browser uses on Windows when a user
+# clicks a phone link on test-links.html). With one workspace configured
+# the app MUST route the call directly without a server-selection modal.
+#
+# What this scenario verifies (matches the QA flow steps 1:1):
+#   QA-005-step1: Exactly one workspace is configured (asserted at pre-stage).
+#   QA-005-step2: Telephony is enabled (pre-staged via overridden-settings).
+#   QA-005-step3: Equivalent to "Open test-links.html" — we trigger each link
+#                 via `Start-Process` which is the OS-level path a browser
+#                 uses on Windows.
+#   QA-005-step4a: tel:+15551234567       (E.164)
+#   QA-005-step4b: tel:+55 11 99999-1234  (spaced + dashed E.164)
+#   QA-005-step5a: callto:+15551234567    (callto E.164)
+#   QA-005-step5b: callto://+491234567890 (authority-form callto)
+#   QA-005-step6:  Workspace picker is NOT shown (single-workspace routing).
+#
+# Windows-specific deviations from the linux variant:
+#   * Per-OS routine resolver picks `shared/routines/windows/launch-rocketchat.yaml`
+#     for `routine: cleanup-rocketchat` and the inline launch (we use the
+#     routine here — the Wayland-XAUTH Known-Issue does not apply on Windows).
+#   * `xdg-open tel:` becomes `Start-Process 'tel:...'` (the Windows protocol
+#     handler invocation).
+#   * User data lives under `$env:APPDATA\Rocket.Chat` (Roaming) — the
+#     pre-stage step writes servers.json + overridden-settings.json there.
+#   * The AT-SPI absence-check worker call becomes a UIA worker call:
+#     `python C:\tmp\mosdat_uia_worker.py "<json>"`. `app_filter:"rocket"`
+#     transparently scopes both backends to the RC top-level window.
+#   * `atspi:` / `verify_atspi:` / `wait_for:` step fields are unchanged —
+#     the UiaClient handles them transparently via the same role/name/
+#     name_substr contract.
+#
+# Pattern lineage:
+#   - Source:                                    linux/tel-qa-005-single-workspace-links.yaml
+#   - Windows routine pattern + paths:           shared/routines/windows/{launch,cleanup}-rocketchat.yaml
+#   - UIA worker invocation pattern:             automation/uia/worker.py docstring example
+
+name: "tel-qa-005-single-workspace-links"
+description: |
+  TEL-QA-005 — Single-workspace tel: and callto: deep links (Windows 10).
+
+  Pre-stages exactly ONE workspace with telephony enabled, triggers four
+  canonical link variants (E.164 tel, dashed/spaced tel, callto E.164,
+  callto://authority) via PowerShell `Start-Process`, and asserts the
+  dialpad opens with the normalized number AND no workspace-picker modal
+  is shown.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+
+steps:
+  # ── Pre-test cleanup (windows routine resolves automatically) ───────────
+  - routine: cleanup-rocketchat
+
+  # ── QA-005-step1+step2: pre-stage exactly ONE workspace + telephony ON ──
+  - label: "QA-005-step1: stage userData with exactly one workspace"
+    shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first = $first + '/' }
+        $dirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $dirs) {
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $serversJson = @{ 'Workspace' = '{{ workspace_url }}' } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText("$d\servers.json", $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = [ordered]@{
+            servers = @(@{ url = $first; title = 'Workspace' })
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            __internal__ = @{ migrations = @{ version = '4.14.1' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$d\config.json", $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = [ordered]@{
+            isTelephonyEnabled = $true
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$d\overridden-settings.json", $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = "$d\$f"
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+          if ($config.servers.Count -ne 1) {
+            Write-Error 'expected exactly one workspace'
+            exit 1
+          }
+          Write-Host "SINGLE_WORKSPACE_STAGED ($d)"
+        }
+        Write-Host 'USERDATA_STAGED'
+
+  # ── QA-005-step2: launch RC via Windows routine ─────────────────────────
+  - routine: launch-rocketchat
+
+  # ── Wait for RC frame ───────────────────────────────────────────────────
+  - label: "QA-005-step2: wait_for RC frame to appear"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # Workspace fully loaded signal — kebab is one of the last things to render.
+  - label: "QA-005-step2: wait_for kebab button (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-005-step4a: tel:+15551234567 (E.164)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step4a: Start-Process tel:+15551234567 (E.164)"
+    shell: |
+      powershell -Command "Start-Process 'tel:+15551234567'"
+      echo QA005_STEP4A_DISPATCHED
+
+  - label: "QA-005-step4a: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step4a: verify NO workspace picker modal (single workspace = direct route)"
+    shell: |
+        for ($i = 1; $i -le 6; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if (-not $d.results.f.ok) {
+              Write-Host "NO_PICKER_OK (attempt $i) — single-workspace direct route"
+              exit 0
+            }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — workspace picker visible on single-workspace dispatch'
+        exit 1
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-005-step4b: tel:+55 11 99999-1234 (spaced + dashed E.164)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step4b: Start-Process tel:+55 11 99999-1234 (spaced + dashed)"
+    shell: |
+      powershell -Command "Start-Process 'tel:+55 11 99999-1234'"
+      echo QA005_STEP4B_DISPATCHED
+
+  - label: "QA-005-step4b: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step4b: verify NO workspace picker (Brazilian spaced+dashed routes direct)"
+    shell: |
+        for ($i = 1; $i -le 6; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if (-not $d.results.f.ok) { Write-Host "NO_PICKER_OK (attempt $i)"; exit 0 }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — picker visible on single-workspace dispatch'
+        exit 1
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-005-step5a: callto:+15551234567 (callto E.164)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step5a: Start-Process callto:+15551234567 (callto E.164)"
+    shell: |
+      powershell -Command "Start-Process 'callto:+15551234567'"
+      echo QA005_STEP5A_DISPATCHED
+
+  - label: "QA-005-step5a: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step5a: verify NO workspace picker (callto: E.164 routes direct)"
+    shell: |
+        for ($i = 1; $i -le 6; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if (-not $d.results.f.ok) { Write-Host "NO_PICKER_OK (attempt $i)"; exit 0 }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — picker visible on single-workspace dispatch'
+        exit 1
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-005-step5b: callto://+491234567890 (authority-form callto)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step5b: Start-Process callto://+491234567890 (authority form)"
+    shell: |
+      powershell -Command "Start-Process 'callto://+491234567890'"
+      echo QA005_STEP5B_DISPATCHED
+
+  - label: "QA-005-step5b: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step5b: verify NO workspace picker (callto://authority parser did not crash + direct route)"
+    shell: |
+        for ($i = 1; $i -le 6; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if (-not $d.results.f.ok) {
+              Write-Host "NO_PICKER_OK (attempt $i) — callto://authority did NOT crash"
+              exit 0
+            }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — picker visible on single-workspace callto://authority dispatch'
+        exit 1
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-005-step6: aggregate alive check + final no-picker assertion
+  # ════════════════════════════════════════════════════════════════════════
+
+  - wait: 3
+
+  - label: "QA-005-step6a: app alive — verify_atspi main frame still present"
+    verify_atspi: {role: "frame"}
+    retries: 3
+
+  - label: "QA-005-step6b: no picker after all four single-workspace dispatches"
+    shell: |
+        for ($i = 1; $i -le 6; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if (-not $d.results.f.ok) { Write-Host 'NO_PICKER_AGGREGATE_OK'; exit 0 }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — picker visible after one of the four single-workspace dispatches'
+        exit 1
+
+  # ── Final cleanup ──────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

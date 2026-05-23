@@ -306,7 +306,7 @@ def run_routine_test(
             _atspi_client = None
             _uia_client = None
             if vm.is_windows:
-                _uia_client = _UiaClient(ssh=_ssh_atspi)
+                _uia_client = _UiaClient(ssh=_ssh_atspi, use_daemon=True)
             else:
                 _atspi_client = _AtspiClient(ssh=_ssh_atspi)
             try:

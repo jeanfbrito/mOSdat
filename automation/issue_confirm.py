@@ -168,7 +168,7 @@ def _build_runner_for_vm(vm, config, screenshot_dir: Path, log_fn=None):
     _atspi_client = None
     _uia_client = None
     if vm.is_windows:
-        _uia_client = _UiaClient(ssh=_ssh_atspi)
+        _uia_client = _UiaClient(ssh=_ssh_atspi, use_daemon=True)
     else:
         _atspi_client = _AtspiClient(ssh=_ssh_atspi)
     runner = FunctionalRunner(
