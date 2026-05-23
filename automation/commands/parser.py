@@ -365,7 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
         "lint",
         help="F1a: Static analyzer for functional scenario YAML files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Example: mosdat lint shared/scenarios/functional/3325-master-toggle.yaml",
+        epilog="Example: mosdat lint shared/scenarios/functional/linux/3325-master-toggle.yaml",
     )
     lint_p.add_argument("scenario", help="Path to scenario YAML file")
 

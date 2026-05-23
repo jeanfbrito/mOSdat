@@ -350,6 +350,100 @@ def _make_runner_with_wait_for(fire_result=None, raises=None):
     return runner, vlm, ss, inj, atspi
 
 
+class TestUiaDispatch:
+    """Stage 4: when the runner is constructed with a UiaClient (Windows VM),
+    the same atspi:/verify_atspi:/wait_for: step fields dispatch through
+    self.uia instead of self.atspi. self.a11y unifies the lookup.
+    """
+
+    def _make_runner_with_uia(self, verify_result=True):
+        runner, vlm, ss, inj = _make_runner()
+        uia = MagicMock()
+        uia.click.return_value = {"ok": True}
+        uia.verify.return_value = verify_result
+        uia.wait_for.return_value = {
+            "ok": True, "matched": "any",
+            "cond": {"role": "Button", "name": "OK"},
+            "polls": 1,
+        }
+        runner.uia = uia
+        return runner, vlm, ss, inj, uia
+
+    def test_atspi_step_routes_to_uia_on_windows_vm(self):
+        # atspi: field with uia client (no atspi client) → UiaClient.click runs.
+        runner, vlm, _, inj, uia = self._make_runner_with_uia()
+        assert runner.atspi is None  # ctor default for Linux-style wiring absence
+        step = FunctionalStep(
+            atspi={"role": "Button", "name": "OK"},
+            retries=1,
+        )
+        runner.run_step(step, 1)
+        uia.click.assert_called_once_with(
+            role="Button", name="OK", input_injector=inj,
+        )
+        vlm.localize.assert_not_called()
+        inj.click.assert_not_called()
+
+    def test_verify_atspi_step_routes_to_uia_on_windows_vm(self):
+        runner, vlm, _, _, uia = self._make_runner_with_uia(verify_result=True)
+        step = FunctionalStep(
+            verify_atspi={"role": "Window", "name": "Rocket.Chat"},
+            verify_timeout=1,
+            retries=1,
+        )
+        with patch("time.sleep"):
+            runner.run_step(step, 1)
+        uia.verify.assert_called_once_with(role="Window", name="Rocket.Chat")
+        vlm.verify.assert_not_called()
+
+    def test_wait_for_step_routes_to_uia_on_windows_vm(self):
+        runner, vlm, _, inj, uia = self._make_runner_with_uia()
+        step = FunctionalStep(
+            wait_for={"any": [{"role": "Window", "name": "Rocket.Chat"}],
+                      "timeout": 5},
+            retries=1,
+        )
+        runner.run_step(step, 1)
+        uia.wait_for.assert_called_once_with(
+            any=[{"role": "Window", "name": "Rocket.Chat"}], timeout=5,
+        )
+        vlm.localize.assert_not_called()
+        inj.click.assert_not_called()
+
+    def test_a11y_property_picks_uia_when_both_set(self):
+        # Defensive: even if both are wired (shouldn't happen in practice),
+        # the property prefers uia. Tests would not exercise this path —
+        # validates the precedence rule in the property docstring.
+        runner, _, _, _ = _make_runner()
+        runner.atspi = MagicMock(name="atspi")
+        runner.uia = MagicMock(name="uia")
+        assert runner.a11y is runner.uia
+
+    def test_atspi_step_without_any_a11y_raises_naming_both(self):
+        # No atspi, no uia → RuntimeError names BOTH clients (helpful for
+        # debugging which kwarg to wire). Wrapped in StepFailed by the
+        # retry loop (atspi: runs inside it).
+        runner, _, _, _ = _make_runner()
+        assert runner.atspi is None and runner.uia is None
+        step = FunctionalStep(
+            atspi={"role": "Button", "name": "OK"},
+            retries=1,
+        )
+        with pytest.raises(StepFailed, match="AtspiClient or UiaClient"):
+            runner.run_step(step, 1)
+
+    def test_wait_for_without_any_a11y_raises_naming_both(self):
+        # wait_for: fires BEFORE the retry loop — RuntimeError propagates
+        # unwrapped (matches existing test_wait_for_without_runner_raises).
+        runner, _, _, _ = _make_runner()
+        step = FunctionalStep(
+            wait_for={"any": [{"role": "Window", "name": "x"}], "timeout": 1},
+            retries=1,
+        )
+        with pytest.raises(RuntimeError, match="AtspiClient or UiaClient"):
+            runner.run_step(step, 1)
+
+
 class TestWaitForStep:
     """Stage 2: wait_for: short-circuits VLM verify poll loops.
 

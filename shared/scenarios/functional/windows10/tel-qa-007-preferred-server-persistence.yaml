@@ -1,0 +1,357 @@
+# qa_flow: TEL-QA-007
+# qa_source: qa/telephony-deeplink/flows/07-preferred-server-persistence.md
+# Status: Windows 10 variant. Drafted 2026-05-23 by adapting
+# `linux/tel-qa-007-preferred-server-persistence.yaml` for the windows10 VM.
+#
+# Mirrors the 7-step QA flow 1:1:
+#   1. Start with fresh profile / clear settings → no preferred server.
+#   2. Click tel:+15551234567 → server picker opens.
+#   3. Check Remember choice and select workspace A → dial path uses ws A.
+#   4. Click same link again → picker SKIPPED; ws A used.
+#   5. Quit and relaunch Rocket.Chat → app starts normally.
+#   6. Click same link again → picker STILL skipped; ws A used.
+#   7. Clear/reset preferred server (settings file path, decoupled from UI
+#      label drift) → next dispatch re-opens the picker.
+#
+# Windows-specific deviations from the linux variant:
+#   * Per-OS routine resolver picks `shared/routines/windows/launch-rocketchat.yaml`
+#     and `cleanup-rocketchat.yaml`.
+#   * Link dispatch uses `Start-Process 'tel:...'` (Windows protocol handler).
+#   * userData lives under `$env:APPDATA\Rocket.Chat` (Roaming). The
+#     persistence probe reads `(Get-Content overridden-settings.json |
+#     ConvertFrom-Json).telephonyPreferredServer` — replaces the linux
+#     `cat ... | jq` pipe.
+#   * Quit/relaunch uses `Get-Process -Name 'Rocket.Chat' | Stop-Process` +
+#     `taskkill /F /IM Rocket.Chat.exe` belt-and-braces. Re-launch then
+#     re-invokes `routine: launch-rocketchat`.
+#   * AT-SPI absence-check shell calls become UIA worker calls
+#     (`python C:\tmp\mosdat_uia_worker.py "<json>"`). atspi/verify_atspi/
+#     wait_for step fields are unchanged.
+#
+# Persistence assertion strategy (unchanged from linux):
+#   - After step 3 (Remember CHECKED + workspace A selected), the preference is
+#     written into electron-store. We assert it two ways:
+#       a) The picker does NOT re-open on the next dispatch (step 4).
+#       b) overridden-settings.json on disk contains telephonyPreferredServer
+#          equal to the chosen workspace URL.
+#   - For the restart cycle (step 5-6), we cleanly stop the Windows process,
+#     wait for it to disappear, then re-launch with the SAME pre-staged
+#     userData (preserving the just-written telephonyPreferredServer value).
+#   - For the reset cycle (step 7), a shell step clears the
+#     telephonyPreferredServer key in overridden-settings.json, then re-launches
+#     and dispatches — the picker MUST re-open (no preference = ask again).
+
+name: "tel-qa-007-preferred-server-persistence"
+description: |
+  TEL-QA-007 — Preferred server persistence (Windows 10).
+
+  With 2+ workspaces configured and Telephony ENABLED but no remembered-choice
+  preference, dispatching a phone link surfaces the picker. Once the user
+  selects a workspace WITH Remember checked, the preference must persist:
+    - across the immediate next dispatch (no picker — direct to ws A)
+    - across an app restart (Stop-Process + Start-Process — still no picker)
+    - until the user clears it (overridden-settings.json reset path), at
+      which point a fresh dispatch re-opens the picker.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  open_url: "https://open.rocket.chat"
+  tel_link: "tel:+15551234567"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── QA-007-step1: Fresh profile — 3 workspaces, NO preferred server ─────
+  - label: "QA-007-step1a: stage fresh userData (3 workspaces, no preferred server)"
+    shell: |
+        function _u($u) { if ($u.EndsWith('/')) { return $u } else { return $u + '/' } }
+        $first  = _u '{{ workspace_url }}'
+        $mobile = _u '{{ mobile_url }}'
+        $open   = _u '{{ open_url }}'
+        $dirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $dirs) {
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $serversJson = [ordered]@{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+            'Open RC'   = '{{ open_url }}'
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText("$d\servers.json", $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = [ordered]@{
+            servers = @(
+              @{ url = $first;  title = 'Workspace' },
+              @{ url = $mobile; title = 'Mobile RC' },
+              @{ url = $open;   title = 'Open RC'   }
+            )
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            __internal__ = @{ migrations = @{ version = '4.14.1' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$d\config.json", $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = [ordered]@{
+            isTelephonyEnabled = $true
+            telephonyPreferredServer = $null
+            telephonyRememberChoice = $false
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$d\overridden-settings.json", $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = "$d\$f"
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_FRESH_NO_PREFERRED_SERVER'
+
+  # ── QA-007-step1b: Launch Rocket.Chat via Windows routine ────────────────
+  - routine: launch-rocketchat
+
+  - label: "QA-007-step1c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step2: First dispatch — picker MUST open (no preferred server yet)
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
+    shell: |
+      powershell -Command "Start-Process '{{ tel_link }}'"
+      echo TEL_DISPATCHED_1_PICKER_EXPECTED
+
+  - label: "QA-007-step2b: wait_for picker modal (dialog role)"
+    wait_for: {any: [{role: "dialog"}], timeout: 30}
+    retries: 5
+
+  - label: "QA-007-step2c: verify_atspi picker dialog present"
+    verify_atspi: {role: "dialog"}
+    retries: 5
+
+  - label: "QA-007-step2d: verify_atspi Remember for future calls checkbox present"
+    verify_atspi: {role: "check box", name: "Remember for future calls", name_substr: true}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step3: Check Remember + select workspace A → preference persisted
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step3a: tick Remember for future calls checkbox"
+    atspi: {role: "check box", name: "Remember for future calls", name_substr: true}
+    retries: 5
+
+  - wait: 1
+
+  - label: "QA-007-step3b: click Workspace A row (rocketchat.jeanbrito.com, Remember CHECKED)"
+    atspi: {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+    retries: 5
+
+  - label: "QA-007-step3c: assert picker closed after row selection (Remember checkbox gone)"
+    shell: |
+        for ($i = 1; $i -le 10; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if (-not $d.results.f.ok) { Write-Host "PICKER_CLOSED_OK (attempt $i)"; exit 0 }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — picker still visible after workspace row click with Remember checked'
+        exit 1
+
+  # ── QA-007-step3d: assert preference WAS persisted on disk ───────────────
+  # Windows path: $env:APPDATA\Rocket.Chat\overridden-settings.json. We read
+  # telephonyPreferredServer via ConvertFrom-Json (replaces linux cat | jq).
+  - label: "QA-007-step3d: assert telephonyPreferredServer persisted on disk"
+    shell: |
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        for ($i = 1; $i -le 10; $i++) {
+          foreach ($d in $dirs) {
+            $p = Join-Path $d 'overridden-settings.json'
+            if (-not (Test-Path $p)) { continue }
+            try {
+              $v = (Get-Content $p -Raw | ConvertFrom-Json).telephonyPreferredServer
+            } catch { $v = $null }
+            if ($v -and $v -ne 'NULL') {
+              Write-Host "PREFERRED_SERVER_PERSISTED ($v in $d)"
+              exit 0
+            }
+          }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAILED — telephonyPreferredServer is still null after Remember+select'
+        exit 1
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step4: Second dispatch — picker MUST be skipped (preference set)
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
+    shell: |
+      powershell -Command "Start-Process '{{ tel_link }}'"
+      echo TEL_DISPATCHED_2_NO_PICKER_EXPECTED
+
+  - wait: 3
+
+  - label: "QA-007-step4b: assert picker did NOT open (preference shortcut worked)"
+    shell: |
+        for ($i = 1; $i -le 5; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if ($d.results.f.ok) {
+              Write-Error "FAILED — picker re-opened despite remembered preference (attempt $i)"
+              exit 1
+            }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Host 'PICKER_SKIPPED_OK (preference honored across 5 polls)'
+
+  - label: "QA-007-step4c: verify app alive (main frame visible)"
+    verify_atspi: {role: "frame"}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step5: Quit and relaunch — preference must survive restart
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step5a: quit Rocket.Chat (Stop-Process + taskkill fallback)"
+    shell: |
+        Get-Process -Name 'Rocket.Chat' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        for ($i = 1; $i -le 20; $i++) {
+          if (-not (Get-Process -Name 'Rocket.Chat' -ErrorAction SilentlyContinue)) {
+            Write-Host "RC_QUIT_OK (after ${i}s)"
+            exit 0
+          }
+          Start-Sleep -Seconds 1
+        }
+        taskkill /F /IM 'Rocket.Chat.exe' 2>$null
+        Start-Sleep -Seconds 2
+        Write-Host 'RC_QUIT_FORCED'
+
+  - wait: 2
+
+  # Relaunch via the routine — userData was not touched so the persisted
+  # telephonyPreferredServer remains intact.
+  - routine: launch-rocketchat
+
+  - label: "QA-007-step5c: wait_for main window frame after relaunch"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step6: Dispatch after restart — picker MUST still be skipped
+  # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
+    shell: |
+      powershell -Command "Start-Process '{{ tel_link }}'"
+      echo TEL_DISPATCHED_3_AFTER_RESTART_NO_PICKER_EXPECTED
+
+  - wait: 3
+
+  - label: "QA-007-step6b: assert picker still skipped post-restart (preference survived)"
+    shell: |
+        for ($i = 1; $i -le 5; $i++) {
+          $probe = '{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            if ($d.results.f.ok) {
+              Write-Error 'FAILED — picker re-opened after restart (preference did NOT persist)'
+              exit 1
+            }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Host 'PICKER_SKIPPED_POST_RESTART_OK (preference survived restart)'
+
+  - label: "QA-007-step6c: verify app alive post-restart"
+    verify_atspi: {role: "frame"}
+    retries: 5
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # QA-007-step7: Reset preferred server → picker MUST re-open
+  # ══════════════════════════════════════════════════════════════════════════
+  # Settings-file path: clear telephonyPreferredServer in overridden-settings.json.
+  # This is deterministic, decoupled from UI label drift, and exercises the
+  # same persistence layer the PR writes to.
+  - label: "QA-007-step7a: quit Rocket.Chat before clearing preference"
+    shell: |
+        Get-Process -Name 'Rocket.Chat' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        for ($i = 1; $i -le 20; $i++) {
+          if (-not (Get-Process -Name 'Rocket.Chat' -ErrorAction SilentlyContinue)) {
+            Write-Host "RC_QUIT_FOR_RESET_OK (after ${i}s)"
+            exit 0
+          }
+          Start-Sleep -Seconds 1
+        }
+        taskkill /F /IM 'Rocket.Chat.exe' 2>$null
+        Start-Sleep -Seconds 2
+        Write-Host 'RC_QUIT_FORCED_FOR_RESET'
+
+  - wait: 2
+
+  - label: "QA-007-step7b: clear telephonyPreferredServer in overridden-settings.json"
+    shell: |
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          $p = Join-Path $d 'overridden-settings.json'
+          if (-not (Test-Path $p)) { continue }
+          $raw = [System.IO.File]::ReadAllText($p, [System.Text.UTF8Encoding]::new($false))
+          if ($raw.Length -gt 0 -and [int]$raw[0] -eq 0xFEFF) { $raw = $raw.Substring(1) }
+          $obj = $raw | ConvertFrom-Json
+          $obj.telephonyPreferredServer = $null
+          $obj.telephonyRememberChoice  = $false
+          $objJson = $obj | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText($p, $objJson, [System.Text.UTF8Encoding]::new($false))
+          Write-Host "CLEARED_PREFERENCE_IN $p"
+        }
+        Write-Host 'PREFERENCE_RESET_DONE'
+
+  - routine: launch-rocketchat
+
+  - label: "QA-007-step7d: wait_for main window frame after reset"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 5
+
+  - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
+    shell: |
+      powershell -Command "Start-Process '{{ tel_link }}'"
+      echo TEL_DISPATCHED_4_AFTER_RESET_PICKER_EXPECTED
+
+  - label: "QA-007-step7f: wait_for picker modal to re-open (Remember checkbox re-appears)"
+    wait_for: {any: [{role: "check box", name: "Remember for future calls", name_substr: true}], timeout: 30}
+    retries: 5
+
+  - label: "QA-007-step7g: verify_atspi picker dialog re-opened (preference cleared works)"
+    verify_atspi: {role: "dialog"}
+    retries: 5
+
+  # ── QA-007-step7h: dismiss the re-opened picker (clean exit) ─────────────
+  - label: "QA-007-step7h: dismiss picker via Escape key"
+    key: Escape
+
+  - wait: 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

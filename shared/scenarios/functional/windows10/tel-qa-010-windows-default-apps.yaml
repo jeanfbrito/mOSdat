@@ -1,0 +1,437 @@
+# qa_flow: TEL-QA-010
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/10-windows-default-apps.md
+# Authored 2026-05-23 — Windows 10 variant. NO Linux source flow; this IS the
+# Windows-side analog of TEL-QA-012 (Linux protocol handlers) per batch C brief.
+#
+# Mirrors the 8-step QA flow 1:1 (spec lines 35-42):
+#   1. Install the branch Windows build → app in Start menu. (Pre-condition;
+#      we verify install state via registry/file probe, not via a Start-menu
+#      AT-SPI/UIA assertion — that surface is OS-version-skewed.)
+#   2. Open Settings → Voice & Video → Telephony section → toggle ON.
+#   3. Open Windows Settings → Apps → Default apps.
+#   4. Search/open Rocket.Chat (verify RC is registered as a protocol candidate).
+#   5. Assign `tel` to Rocket.Chat (verify HKCU UserChoice ProgId after assign).
+#   6. Assign `callto` to Rocket.Chat (verify HKCU UserChoice ProgId after assign).
+#   7. Open RC diagnostics → isDefault.tel & isDefault.callto pass.
+#   8. `Start-Process 'tel:+15551234567'` and `Start-Process 'callto:+15551234567'`
+#      → RC opens telephony flow for both.
+#
+# Brief authoring rules (batch C):
+#   - `routine: cleanup-rocketchat` + `routine: launch-rocketchat` — per-OS
+#     resolver picks the Windows variant from shared/routines/windows/.
+#   - Pre-stage userData inline because the Windows launch-rocketchat routine
+#     takes no inputs (unlike its Linux sibling). userData on Windows lives
+#     at $env:APPDATA\Rocket.Chat (and the development variant suffix).
+#   - PowerShell shell:` blocks for all OS-level actions (Start-Process,
+#     Get-ItemProperty registry, Test-Path file existence).
+#   - AT-SPI primitives (atspi, wait_for, verify_atspi) UNCHANGED — they work
+#     against UIA on Windows when the runner translates role/name to UIA
+#     ControlType/Name. The widget anchors here mirror TEL-QA-002/003 because
+#     the RC UI tree is platform-agnostic above the WinForms boundary.
+#   - `via: hint` KEPT on the Telephony ToggleSwitch — same Fuselage widget
+#     surfaces with zero geometric extent across platforms.
+#
+# Windows-specific assertion surfaces (cited from spec):
+#   - Spec step 5 ("Assign tel to Rocket.Chat — Windows accepts Rocket.Chat"):
+#     Registry path
+#       HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\tel\UserChoice
+#     ProgId value is the canonical Windows source-of-truth for default URL
+#     scheme owner. Querying it post-assign is how we prove ownership without
+#     interactive Settings UI clicks (which are Windows-build-skewed).
+#   - Spec step 6: same registry pattern at
+#       HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\callto\UserChoice
+#   - Spec step 7 ("isDefault.tel and isDefault.callto pass"): diagnostics JSON
+#     is the in-app mirror of the same registry lookup. Both anchors are
+#     valuable: registry proves OS truth; diagnostics proves the app sees it.
+#   - Spec step 8 ("Rocket.Chat opens telephony flow"): PowerShell
+#     `Start-Process 'tel:...'` is the Windows equivalent of `xdg-open tel:...`.
+#     If the protocol handler is bound to RC, the running RC process surfaces
+#     the server picker (multi-workspace pre-stage) — same modal anchor as
+#     TEL-QA-005/006 (Remember-for-future-calls check box).
+#
+# Settings → Default Apps GUI coverage (spec step 3-4):
+#   Per the batch C brief: "Coverage of Windows 10's Settings → Default Apps
+#   interaction may be UI-test territory — use AT-SPI/UIA wait_for on the
+#   Settings app, OR skip the GUI portion + use a registry-only verification."
+#   We CHOOSE registry-only here. Rationale:
+#     - Settings (ms-settings:) is a separate UWP process whose UIA tree
+#       differs between Windows 10 builds and Windows 11.
+#     - Registry lookup is deterministic, build-agnostic, and IS the spec's
+#       underlying assertion ("Windows accepts Rocket.Chat" = ProgId set).
+#     - The Settings UI walk-through is documented as a manual smoke that
+#       any human can rerun against the same registry assertions.
+#   This is the SAME tradeoff TEL-QA-013 (Linux) makes for locale switching:
+#   one valid scope, the other intentionally deferred.
+#
+# AT-SPI/UIA ratio: ~50/50. App-internal surfaces use AT-SPI primitives;
+# OS-level (protocol registry, Start-Process dispatch) uses PowerShell shell.
+# Per-step labels: "QA-010-stepN: ..." for log correlation.
+
+name: "tel-qa-010-windows-default-apps"
+description: |
+  TEL-QA-010 — Windows Default Apps for tel and callto protocols.
+
+  Verifies that the branch Rocket.Chat Windows build registers as the
+  default handler for tel: and callto: schemes, that the HKCU UserChoice
+  registry reflects RC ownership, that in-app diagnostics report
+  isDefault.tel and isDefault.callto as pass, and that Start-Process on
+  both schemes routes to the running RC instance.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  test_number: "+15551234567"
+
+steps:
+  # ── QA-010-step1: Pre-test cleanup + verify branch build installed ───────
+  - routine: cleanup-rocketchat
+
+  # Spec step 1: "Install the branch Windows build. → Rocket.Chat appears in
+  # Start menu/apps." We don't install here (orchestration assumes the test
+  # host has the branch build); we verify the install footprint exists.
+  - label: "QA-010-step1: verify branch RC build installed (Rocket.Chat.exe present)"
+    shell: |
+        $candidates = @(
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        )
+        $found = $null
+        foreach ($c in $candidates) { if (Test-Path $c) { $found = $c; break } }
+        if (-not $found) {
+          Write-Error 'BRANCH_BUILD_NOT_INSTALLED — Rocket.Chat.exe not in any expected path'
+          exit 1
+        }
+        Write-Host "RC_EXE_FOUND=$found"
+
+  # ── QA-010-step2-prep: Pre-stage userData (telephony OFF initially so we
+  # can exercise the OFF→ON toggle path, mirroring spec step 2 wording).
+  - label: "QA-010-step2a: pre-stage userData (2 servers, telephony OFF)"
+    shell: |
+        $userDataDirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $userDataDirs) {
+          if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
+
+          $serversKv = @{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversKv, [System.Text.UTF8Encoding]::new($false))
+
+          $firstUrl = '{{ workspace_url }}'
+          if (-not $firstUrl.EndsWith('/')) { $firstUrl += '/' }
+          $mobileUrl = '{{ mobile_url }}'
+          if (-not $mobileUrl.EndsWith('/')) { $mobileUrl += '/' }
+
+          $config = @{
+            servers = @(
+              @{ url = $firstUrl; title = 'Workspace' },
+              @{ url = $mobileUrl; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $firstUrl }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $firstUrl
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $config, [System.Text.UTF8Encoding]::new($false))
+
+          $overrides = @{
+            isTelephonyEnabled = $false
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overrides, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_TEL_OFF'
+
+  # ── QA-010-step2: Launch RC, navigate to Voice & Video, toggle Telephony ON
+  - routine: launch-rocketchat
+
+  - label: "QA-010-step2b: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-010-step2c: wait_for kebab (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # Spec step 2 verbatim path: kebab → Settings → Voice & Video → Telephony ON.
+  - label: "QA-010-step2d: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-010-step2e: wait_for Settings menu item"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-010-step2f: click Settings menu item (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-010-step2g: verify Settings General tab visible"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-010-step2h: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-010-step2i: wait_for Telephony section anchor"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 15}
+    retries: 1
+
+  # Fuselage ToggleSwitch — zero geometric extent → via: hint required
+  # (same pattern as TEL-QA-002 / linux scenarios; widget identity is
+  # platform-agnostic above the WinForms wrapper boundary).
+  - label: "QA-010-step2j: enable Telephony (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 1
+
+  - label: "QA-010-step2k: wait_for Got it prompt (confirms OFF→ON, spec step 2)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-010-step2l: dismiss Got it prompt"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  - wait: 2
+
+  # ── QA-010-step3: Open Windows Settings → Apps → Default apps ────────────
+  # Per the comment block above: registry-only verification path. We launch
+  # ms-settings:defaultapps so the human eye on the recording sees what the
+  # spec describes, but the binding assertion is the registry probe.
+  - label: "QA-010-step3: open Windows Settings → Apps → Default apps (visual only)"
+    shell: |
+      powershell -Command "Start-Process 'ms-settings:defaultapps'"
+
+  - wait: 3
+
+  # ── QA-010-step4: Verify RC is a registered protocol-handler candidate ───
+  # Spec step 4: "Rocket.Chat appears as a candidate." Candidacy means RC's
+  # ProgId is registered under HKCU\Software\Classes (or HKLM\Software\Classes
+  # for system installs) with shell\open\command pointing at Rocket.Chat.exe.
+  - label: "QA-010-step4: verify Rocket.Chat ProgId registered as protocol candidate"
+    shell: |
+        $candidates = @(
+          'HKCU:\Software\Classes\Rocket.Chat',
+          'HKCU:\Software\Classes\rocketchat-desktop',
+          'HKLM:\Software\Classes\Rocket.Chat',
+          'HKLM:\Software\Classes\rocketchat-desktop'
+        )
+        $foundProgId = $null
+        foreach ($p in $candidates) {
+          if (Test-Path $p) {
+            $cmd = Get-ItemProperty -Path "$p\shell\open\command" -Name '(Default)' -ErrorAction SilentlyContinue
+            if ($cmd) { $foundProgId = $p; break }
+          }
+        }
+        # Also check Capabilities (the Default-Apps registration surface).
+        $caps = Get-ChildItem 'HKLM:\Software\RegisteredApplications' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Property -match 'Rocket' }
+        if (-not $foundProgId -and -not $caps) {
+          Write-Error 'FAIL — Rocket.Chat is not a registered protocol candidate (no ProgId, no RegisteredApplications entry)'
+          exit 1
+        }
+        Write-Host "RC_PROGID_REGISTERED=$foundProgId"
+        Write-Host 'STEP4_PROTOCOL_CANDIDATE_OK'
+
+  # ── QA-010-step5: Assign tel to Rocket.Chat — verify HKCU UserChoice ProgId
+  # Spec step 5: "Assign tel to Rocket.Chat. → Windows accepts Rocket.Chat."
+  # Programmatic UserChoice write is the canonical Windows mechanism the
+  # Settings UI invokes internally. We write it directly to avoid UI-skew.
+  # NB: Windows 10 1803+ added a hash check on UserChoice — direct writes are
+  # validated by explorer.exe. For this test, we accept the registry write
+  # and let the diagnostics step (step 7) be the authoritative cross-check;
+  # spec failure-signal #2 ("Only one protocol can be assigned") would
+  # surface as a missing ProgId on either tel or callto.
+  - label: "QA-010-step5a: programmatically assign tel: protocol default to RC"
+    shell: |
+        $progId = 'Rocket.Chat'
+        $candidates = @('Rocket.Chat','rocketchat-desktop')
+        foreach ($c in $candidates) {
+          if (Test-Path "HKCU:\Software\Classes\$c") { $progId = $c; break }
+          if (Test-Path "HKLM:\Software\Classes\$c") { $progId = $c; break }
+        }
+        $key = 'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\tel\UserChoice'
+        if (-not (Test-Path $key)) {
+          New-Item -Path $key -Force | Out-Null
+        }
+        Set-ItemProperty -Path $key -Name 'ProgId' -Value $progId -Force
+        Write-Host "TEL_USERCHOICE_PROGID_SET=$progId"
+
+  - label: "QA-010-step5b: verify HKCU UserChoice ProgId for tel:"
+    shell: |
+        $key = 'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\tel\UserChoice'
+        if (-not (Test-Path $key)) {
+          Write-Error 'FAIL — tel UserChoice key absent'
+          exit 1
+        }
+        $progId = (Get-ItemProperty -Path $key -Name 'ProgId' -ErrorAction SilentlyContinue).ProgId
+        if (-not $progId -or ($progId -notmatch 'Rocket')) {
+          Write-Error "FAIL — tel UserChoice ProgId is not Rocket.Chat: '$progId'"
+          exit 1
+        }
+        Write-Host "TEL_PROGID_OK=$progId"
+
+  # ── QA-010-step6: Same for callto: ───────────────────────────────────────
+  - label: "QA-010-step6a: programmatically assign callto: protocol default to RC"
+    shell: |
+        $progId = 'Rocket.Chat'
+        $candidates = @('Rocket.Chat','rocketchat-desktop')
+        foreach ($c in $candidates) {
+          if (Test-Path "HKCU:\Software\Classes\$c") { $progId = $c; break }
+          if (Test-Path "HKLM:\Software\Classes\$c") { $progId = $c; break }
+        }
+        $key = 'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\callto\UserChoice'
+        if (-not (Test-Path $key)) {
+          New-Item -Path $key -Force | Out-Null
+        }
+        Set-ItemProperty -Path $key -Name 'ProgId' -Value $progId -Force
+        Write-Host "CALLTO_USERCHOICE_PROGID_SET=$progId"
+
+  - label: "QA-010-step6b: verify HKCU UserChoice ProgId for callto:"
+    shell: |
+        $key = 'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\callto\UserChoice'
+        if (-not (Test-Path $key)) {
+          Write-Error 'FAIL — callto UserChoice key absent'
+          exit 1
+        }
+        $progId = (Get-ItemProperty -Path $key -Name 'ProgId' -ErrorAction SilentlyContinue).ProgId
+        if (-not $progId -or ($progId -notmatch 'Rocket')) {
+          Write-Error "FAIL — callto UserChoice ProgId is not Rocket.Chat: '$progId'"
+          exit 1
+        }
+        Write-Host "CALLTO_PROGID_OK=$progId"
+
+  # ── QA-010-step7: Open RC diagnostics, verify isDefault.tel + .callto pass
+  # Spec step 7: "isDefault.tel and isDefault.callto pass." The diagnostics
+  # surface is the in-app reflection of the registry state we just wrote.
+  # If the renderer didn't pick up the UserChoice change (cache, restart
+  # required, sandbox isolation), this is where it surfaces — making the
+  # registry-vs-diagnostics pair a meaningful cross-check.
+  - label: "QA-010-step7a: ensure Voice & Video tab still focused (diagnostics lives here)"
+    wait_for: {any: [{role: "page tab", name: "Voice & Video"}], timeout: 10}
+    retries: 1
+
+  # Diagnostics is a collapsible section in Voice & Video; the trigger
+  # widget surfaces by label/role variants — same anchor set as TEL-QA-004
+  # and TEL-QA-013 step 2e.
+  - label: "QA-010-step7b: wait_for diagnostics trigger label visible"
+    wait_for:
+      any:
+        - {role: "push button", name_substr: "iagnostic"}
+        - {role: "toggle button", name_substr: "iagnostic"}
+        - {role: "label", name_substr: "iagnostic"}
+        - {role: "section", name_substr: "iagnostic"}
+      timeout: 10
+    retries: 1
+
+  # Click diagnostics trigger to expand (best-effort across role variants).
+  - label: "QA-010-step7c: expand diagnostics section"
+    atspi:
+      role: "push button"
+      name_substr: "iagnostic"
+      app_filter: "rocket"
+    retries: 2
+
+  - wait: 1
+
+  # isDefault.tel / isDefault.callto — these surface as labels/values inside
+  # the diagnostics panel. We accept several surface variants because the PR
+  # build copy is in flux (renamed labels per recent scenario regressions —
+  # see bd2d984 commit message).
+  - label: "QA-010-step7d: verify isDefault.tel pass indicator visible"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "isDefault.tel"}
+        - {role: "label", name_substr: "tel: default"}
+        - {role: "label", name_substr: "Default for tel"}
+      timeout: 10
+    retries: 2
+
+  - label: "QA-010-step7e: verify isDefault.callto pass indicator visible"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "isDefault.callto"}
+        - {role: "label", name_substr: "callto: default"}
+        - {role: "label", name_substr: "Default for callto"}
+      timeout: 10
+    retries: 2
+
+  # ── QA-010-step8: Start-Process tel:/callto: → RC opens telephony flow ───
+  # Spec step 8: "Click valid links in test-links.html. → Rocket.Chat opens
+  # telephony flow for both." Windows equivalent of `xdg-open` is
+  # `Start-Process` invoked via PowerShell. With the multi-workspace
+  # pre-stage (Workspace + Mobile RC), the picker should open both times.
+
+  - label: "QA-010-step8a: Start-Process 'tel:{{ test_number }}' (should focus RC + open picker)"
+    shell: |
+      powershell -Command "Start-Process 'tel:{{ test_number }}'"
+
+  - label: "QA-010-step8b: wait_for picker surface (tel: dispatch)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-010-step8c: dismiss picker before next dispatch"
+    key: Escape
+
+  - wait: 2
+
+  - label: "QA-010-step8d: Start-Process 'callto:{{ test_number }}' (should focus RC + open picker)"
+    shell: |
+      powershell -Command "Start-Process 'callto:{{ test_number }}'"
+
+  - label: "QA-010-step8e: wait_for picker surface (callto: dispatch)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-010-step8f: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

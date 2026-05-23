@@ -160,15 +160,17 @@ def _build_runner_for_vm(vm, config, screenshot_dir: Path, log_fn=None):
     screenshotter = Screenshotter(vnc)
     injector = InputInjector(vnc, ssh, vm.is_windows)
 
-    # Stage 3c: AT-SPI uses a dedicated persistent SSHClient (ControlMaster
-    # multiplexing). Shell `ssh` stays non-persistent.
+    # Stage 3c / Stage 4: per-OS coordinate-free driver shares one persistent
+    # SSHClient. AtspiClient on Linux, UiaClient on Windows.
     from automation.atspi import AtspiClient as _AtspiClient
-    _ssh_atspi = (
-        SSHClient(vm.ip, vm.user, persistent=True) if not vm.is_windows else None
-    )
-    _atspi_client = (
-        _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
-    )
+    from automation.uia import UiaClient as _UiaClient
+    _ssh_atspi = SSHClient(vm.ip, vm.user, persistent=True)
+    _atspi_client = None
+    _uia_client = None
+    if vm.is_windows:
+        _uia_client = _UiaClient(ssh=_ssh_atspi)
+    else:
+        _atspi_client = _AtspiClient(ssh=_ssh_atspi)
     runner = FunctionalRunner(
         vlm=vlm,
         screenshotter=screenshotter,
@@ -176,6 +178,7 @@ def _build_runner_for_vm(vm, config, screenshot_dir: Path, log_fn=None):
         screenshot_dir=screenshot_dir,
         log_fn=log_fn,
         atspi=_atspi_client,
+        uia=_uia_client,
     )
     # Stage 3c: attach the AT-SPI SSH client so the caller can tear down
     # the ControlMaster after the scenario completes.

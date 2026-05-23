@@ -55,14 +55,44 @@ def routines_dir() -> Path:
     return repo_root / "shared" / "routines"
 
 
+def resolve_routine_path(slug: str, platform: Optional[str] = None) -> Path:
+    """Locate the YAML file for a routine slug, preferring a platform variant.
+
+    Lookup order:
+      1. ``shared/routines/<platform>/<slug>.yaml`` (when ``platform`` is given)
+      2. ``shared/routines/<slug>.yaml`` (top-level / Linux fallback)
+
+    Returns the path to whichever file exists first. If neither exists, returns
+    the platform-specific path so the caller's FileNotFoundError reports the
+    most useful location.
+    """
+    rdir = routines_dir()
+    if platform:
+        platform_path = rdir / platform / f"{slug}.yaml"
+        if platform_path.exists():
+            return platform_path
+    top_path = rdir / f"{slug}.yaml"
+    if top_path.exists():
+        return top_path
+    # Neither exists — surface the platform path if one was requested so the
+    # error message reflects the most specific attempted location.
+    if platform:
+        return rdir / platform / f"{slug}.yaml"
+    return top_path
+
+
 @lru_cache(maxsize=256)
-def load_routine(slug: str) -> Routine:
+def load_routine(slug: str, platform: Optional[str] = None) -> Routine:
     """Load and validate a single routine by slug name.
+
+    When ``platform`` is set, ``shared/routines/<platform>/<slug>.yaml`` is
+    preferred over ``shared/routines/<slug>.yaml``. Linux / top-level routines
+    remain at ``shared/routines/<slug>.yaml`` for backward compatibility.
 
     Raises FileNotFoundError if the file does not exist.
     Raises pydantic.ValidationError if the file is invalid.
     """
-    path = routines_dir() / f"{slug}.yaml"
+    path = resolve_routine_path(slug, platform)
     if not path.exists():
         raise FileNotFoundError(
             f"[routines] Routine {slug!r} not found at {path}"

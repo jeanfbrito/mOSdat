@@ -1,0 +1,326 @@
+# qa_flow: TEL-QA-003
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/03-default-handler-prompt.md
+# Windows 10 variant. Adapted 2026-05-23 from
+# shared/scenarios/functional/linux/tel-qa-003-default-handler-prompt.yaml.
+#
+# Mirrors the 6-step QA flow 1:1:
+#   1. Navigate kebab → Settings → Voice & Video → Telephony. Ensure toggle OFF.
+#      Verify NO default-handler prompt is currently visible.
+#   2. Switch Telephony toggle ON → default-handler prompt opens (OFF→ON).
+#   3. Read prompt copy. Capture title/body/buttons via UIA tree dump.
+#   4. If the prompt offers "Open Settings", activate it. On Windows this
+#      should open the "Default apps" Settings page (ms-settings:defaultapps).
+#   5. Dismiss the prompt (Got it). Verify modal closes + app remains usable.
+#   6. Switch Telephony OFF, then back ON. Prompt MUST reappear on the new
+#      OFF→ON transition (one-shot per transition, not session-wide).
+#
+# Windows adaptations from linux source:
+#   - Inline shell launch + XAUTH → `routine: launch-rocketchat`.
+#   - Worker path: `/tmp/mosdat_atspi_worker.py` → `C:\tmp\mosdat_uia_worker.py`.
+#   - `wmctrl -l` / `wmctrl -a` refocus → PowerShell
+#     `Get-Process -Name 'Rocket.Chat'`. Refocusing the RC window is handled
+#     by clicking back into a known RC widget; explicit refocus is omitted
+#     because UIA queries do not require window focus (unlike AT-SPI under
+#     mutter when keyboard input is mixed in).
+#   - AT-SPI/UIA primitives unchanged.
+#   - `via: hint` on Fuselage ToggleSwitch — KEPT.
+#
+# UI Variation note: On Windows the "Open Settings" path opens
+# `ms-settings:defaultapps` (Default apps panel). Our soft-evidence probe
+# looks for a non-RC window whose title contains "Settings" or "Default
+# apps". The launched Settings shell may take 1-3s to open.
+
+name: "tel-qa-003-default-handler-prompt"
+description: |
+  TEL-QA-003 — Default-handler prompt copy + actions + repeatability (Windows 10).
+
+  Enable Telephony OFF→ON, assert prompt opens once, capture copy, exercise
+  Open Settings (Windows opens Default apps), dismiss, cycle OFF→ON to
+  confirm the prompt fires on each new enable transition.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings telephony OFF) ─────
+  - shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first += '/' }
+        $mobile = '{{ mobile_url }}'
+        if (-not $mobile.EndsWith('/')) { $mobile += '/' }
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          New-Item -Path $d -ItemType Directory -Force | Out-Null
+          $serversJson = @{ Workspace = '{{ workspace_url }}'; 'Mobile RC' = '{{ mobile_url }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = @{
+            servers = @(
+              @{ url = $first;  title = 'Workspace' },
+              @{ url = $mobile; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false;
+              minimized = $false; fullscreen = $false; normal = $true;
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = @{
+            isTelephonyEnabled = $false
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED'
+
+  # ── Launch Rocket.Chat (telephony OFF pre-staged) ────────────────────────
+  - label: "QA-003-launch: launch Rocket.Chat (fresh, telephony OFF pre-staged)"
+    routine: launch-rocketchat
+
+  - label: "QA-003-launch: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-003-launch: wait for workspace to fully load (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # ── QA-003-step1: Navigate to Voice & Video → Telephony, ensure OFF ──────
+  - label: "QA-003-step1a: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-003-step1b: wait_for Settings menu item in kebab popup"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-003-step1c: click Settings menu item (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-003-step1d: wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-003-step1e: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-003-step1f: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-003-step1g: wait_for Telephony section (checkbox is the anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-003-step1h: verify toggle currently OFF (no prompt visible)"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        if (-not $obj.results.f.ok) {
+          Write-Host 'TELEPHONY_TOGGLE_OFF_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — Got it prompt visible; toggle is unexpectedly ON'
+        exit 1
+
+  - wait: 1
+
+  # ── QA-003-step2: Switch Telephony toggle ON → prompt opens once ─────────
+  - label: "QA-003-step2a: invoke Telephony toggle ON (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 1
+
+  - label: "QA-003-step2b: wait_for default-handler prompt (Got it button anchor)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  # ── QA-003-step3: Read prompt copy ───────────────────────────────────────
+  - label: "QA-003-step3: capture prompt copy (title/body/buttons via UIA tree dump)"
+    shell: |
+        $probe = '{"ops":[' +
+          '{"id":"dialog","op":"find","role":"dialog","app_filter":"rocket"},' +
+          '{"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},' +
+          '{"id":"open_settings","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"},' +
+          '{"id":"label_default","op":"find","role":"label","name":"default","name_substr":true,"app_filter":"rocket"},' +
+          '{"id":"label_phone","op":"find","role":"label","name":"phone","name_substr":true,"app_filter":"rocket"}' +
+          ']}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        Write-Host 'PROMPT_COPY_DUMP_BEGIN'
+        Write-Host $res
+        Write-Host 'PROMPT_COPY_DUMP_END'
+        $obj = $res | ConvertFrom-Json
+        $hits = @()
+        foreach ($k in 'dialog','got_it','label_default','label_phone') {
+          if ($obj.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Error 'FAIL — prompt modal carries no recognisable dialog/label widgets'
+          exit 1
+        }
+        Write-Host "PROMPT_COPY_PRESENT_OK ($($hits -join ','))"
+
+  # ── QA-003-step4: Activate "Open Settings" if present ────────────────────
+  # On Windows the button opens ms-settings:defaultapps. Probe first.
+  - label: "QA-003-step4a: probe for Open Settings button (Windows path)"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        if ($obj.results.f.ok) {
+          Write-Host 'OPEN_SETTINGS_BUTTON_PRESENT'
+        } else {
+          Write-Host 'OPEN_SETTINGS_BUTTON_ABSENT (build variance — step 4 will skip click)'
+        }
+
+  - label: "QA-003-step4b: click Open Settings if present (Windows path)"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        if (-not $obj.results.f.ok) {
+          Write-Host 'OPEN_SETTINGS_SKIPPED (button absent — build variance)'
+          exit 0
+        }
+        $click = '{"ops":[{"id":"c","op":"click","role":"push button","name":"Open Settings","app_filter":"rocket","via":"action"}]}'
+        $cres = python C:\tmp\mosdat_uia_worker.py $click 2>&1 | Out-String
+        Write-Host 'OPEN_SETTINGS_CLICK_RESULT:'
+        Write-Host $cres
+        $cobj = $cres | ConvertFrom-Json
+        if ($cobj.results.c.ok) {
+          Write-Host 'OPEN_SETTINGS_CLICKED_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — Open Settings present but click failed'
+        exit 1
+
+  - wait: 3
+
+  # Soft evidence: a Settings-ish window opened on the host. Probe for
+  # ApplicationFrameHost / SystemSettings — Windows 10 Default apps panel
+  # is hosted by SystemSettings.exe (window title "Settings").
+  - label: "QA-003-step4c: probe OS settings surface opened (soft evidence)"
+    shell: |
+        $procs = Get-Process | Where-Object {
+          ($_.MainWindowTitle -match 'Settings|Default apps') -and
+          ($_.Name -match 'SystemSettings|ApplicationFrameHost')
+        }
+        if ($procs) {
+          Write-Host 'WMCTRL_DUMP_BEGIN'
+          $procs | ForEach-Object { Write-Host "$($_.Id) $($_.Name) — $($_.MainWindowTitle)" }
+          Write-Host 'WMCTRL_DUMP_END'
+          Write-Host 'OS_SETTINGS_SURFACE_OPENED_OK'
+        } else {
+          Write-Host 'OS_SETTINGS_SURFACE_NOT_DETECTED (soft — async spawn or hidden window)'
+        }
+
+  # Refocus Rocket.Chat for step 5 (SystemSettings may have stolen focus).
+  # Uses WScript.Shell AppActivate — single-line, no embedded here-string.
+  - label: "QA-003-step4d: refocus Rocket.Chat for step 5"
+    shell: |
+        $rc = Get-Process -Name 'Rocket.Chat' -ErrorAction SilentlyContinue |
+              Where-Object MainWindowTitle |
+              Select-Object -First 1
+        if ($rc) {
+          $wshell = New-Object -ComObject WScript.Shell
+          $wshell.AppActivate($rc.Id) | Out-Null
+          Write-Host 'REFOCUSED_RC'
+        } else {
+          Write-Host 'REFOCUS_SKIPPED (RC window not found)'
+        }
+
+  - wait: 1
+
+  # ── QA-003-step5: Dismiss prompt → modal closes, app usable ──────────────
+  - label: "QA-003-step5a: dismiss the default-handler prompt (Got it)"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  - wait: 1
+
+  - label: "QA-003-step5b: verify modal closed (Got it button no longer present)"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        if (-not $obj.results.f.ok) {
+          Write-Host 'MODAL_DISMISSED_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — Got it prompt still visible after dismissal'
+        exit 1
+
+  - label: "QA-003-step5c: verify app remains usable (kebab still clickable)"
+    verify_atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  # ── QA-003-step6: Cycle OFF → ON → prompt MUST reappear ──────────────────
+  - label: "QA-003-step6a: switch Telephony OFF (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 2
+
+  - label: "QA-003-step6b: verify no prompt while OFF"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        if (-not $obj.results.f.ok) {
+          Write-Host 'TOGGLE_OFF_NO_PROMPT_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — Got it prompt visible while toggle OFF (stale modal?)'
+        exit 1
+
+  - label: "QA-003-step6c: switch Telephony ON again (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 1
+
+  - label: "QA-003-step6d: wait_for prompt to REAPPEAR on new OFF→ON transition"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-003-step6e: dismiss the reappeared prompt"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  - wait: 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

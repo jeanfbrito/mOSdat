@@ -355,7 +355,7 @@ class TestHTMLReportLabel:
 class TestMasterToggleLabels:
     """Smoke-test: load 3325-master-toggle.yaml and verify labeled steps."""
 
-    _SCENARIO = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
+    _SCENARIO = _PROJ / "shared/scenarios/functional/linux/3325-master-toggle.yaml"
 
     @pytest.mark.skipif(
         not _SCENARIO.exists(),

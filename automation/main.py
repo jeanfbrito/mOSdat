@@ -214,12 +214,14 @@ def cmd_functional(args) -> int:
 
     vms = [config.vm_by_name[name] for name in vm_names]
 
-    # Resolve test file
+    # Resolve test file — per-OS subdir of first VM first, then root fallback.
     tests_dir = config.functional.tests_dir or (config.framework_path / "shared" / "scenarios" / "functional")
     test_name = args.test or "rocketchat-smoke"
-    test_file = tests_dir / f"{test_name}.yaml"
-    if not test_file.exists():
-        print(f"[mOSdat] ERROR: Test file not found: {test_file}")
+    from automation.runners.scenario_loader import resolve_test_path, ScenarioNotFoundError
+    try:
+        test_file = resolve_test_path(test_name, tests_dir, subdir=vms[0].scenario_subdir)
+    except ScenarioNotFoundError as exc:
+        print(f"[mOSdat] ERROR: {exc}")
         return 1
 
     from automation.vlm.client import VLMClient
@@ -283,7 +285,7 @@ def cmd_functional(args) -> int:
             return 1
         cli_vars[k] = v
 
-    name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file, cli_vars=cli_vars)
+    name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file, cli_vars=cli_vars, platform=vms[0].os_type)
 
     # C2: resolve checkpoint config (YAML wins unless --no-checkpoints overrides)
     checkpoint_config = dict(yaml_checkpoints)
@@ -326,7 +328,9 @@ def cmd_functional(args) -> int:
     if until_step < from_step or until_step > total_steps:
         print(f"[mOSdat] ERROR: --until-step {until_step} out of range (from_step={from_step}, total={total_steps})")
         return 1
-    steps = steps[from_step - 1 : until_step]
+    # Stage 4: defer slicing — re-load per-VM inside the loop with
+    # `platform=vm.os_type` so routine calls resolve to the per-OS variant
+    # (`shared/routines/<platform>/<slug>.yaml`). Bounds already validated.
     partial_run = (from_step > 1 or until_step < total_steps)
 
     # Merge config vars (workspace_url, test_user, test_password) into template vars
@@ -363,6 +367,13 @@ def cmd_functional(args) -> int:
             from automation.transport.ssh import SSHClient
             from automation.transport.vnc import VncClient
             ssh = SSHClient(vm.ip, vm.user)
+
+            # Stage 4: re-load steps with platform=vm.os_type for per-OS
+            # routine resolution. Bounds already validated above; just reslice.
+            _, vm_steps, _, _ = load_test_yaml(
+                test_file, cli_vars=cli_vars, platform=vm.os_type,
+            )
+            vm_steps = vm_steps[from_step - 1 : until_step]
 
             # Inject per-VM app_path (first package with a non-empty app_path)
             vm_vars = dict(vars_)
@@ -411,17 +422,19 @@ def cmd_functional(args) -> int:
                             record_window_state=_record_ws,
                         )
                         recorder.start()
-                    # Stage 3c: AT-SPI uses a dedicated persistent SSHClient
-                    # (ControlMaster multiplexing). Shell `ssh` stays non-persistent.
+                    # Stage 3c / Stage 4: per-OS coordinate-free driver shares
+                    # one persistent SSHClient (ControlMaster multiplexing) per
+                    # VM. AtspiClient on Linux, UiaClient on Windows. Shell
+                    # `ssh` stays non-persistent.
                     from automation.atspi import AtspiClient as _AtspiClient
-                    _ssh_atspi = (
-                        SSHClient(vm.ip, vm.user, persistent=True)
-                        if not vm.is_windows
-                        else None
-                    )
-                    _atspi_client = (
-                        _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
-                    )
+                    from automation.uia import UiaClient as _UiaClient
+                    _ssh_atspi = SSHClient(vm.ip, vm.user, persistent=True)
+                    _atspi_client = None
+                    _uia_client = None
+                    if vm.is_windows:
+                        _uia_client = _UiaClient(ssh=_ssh_atspi)
+                    else:
+                        _atspi_client = _AtspiClient(ssh=_ssh_atspi)
                     runner = FunctionalRunner(
                         vlm=vlm,
                         screenshotter=screenshotter,
@@ -437,6 +450,7 @@ def cmd_functional(args) -> int:
                         x11_mode=getattr(vm, "x11", "off"),
                         app_process_name=config.app.process_name,
                         atspi=_atspi_client,
+                        uia=_uia_client,
                     )
                     # I14: enable config snapshots if scenario opts in OR --config-snapshots flag set
                     runner._config_snapshots = (
@@ -503,7 +517,7 @@ def cmd_functional(args) -> int:
                                 overall = False
                                 continue
 
-                    passed, log = runner.run_test(steps, name, vars=vm_vars)
+                    passed, log = runner.run_test(vm_steps, name, vars=vm_vars)
                     # B4: partial run note
                     if partial_run and until_step < total_steps:
                         remaining = total_steps - until_step

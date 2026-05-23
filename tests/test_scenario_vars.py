@@ -277,7 +277,7 @@ steps:
 # ---------------------------------------------------------------------------
 
 def test_example_vars_scenario_validates():
-    path = _PROJ / "shared" / "scenarios" / "functional" / "example-vars.yaml"
+    path = _PROJ / "shared" / "scenarios" / "functional" / "linux" / "example-vars.yaml"
     data = yaml.safe_load(path.read_text())
     ScenarioModel.model_validate(data)
 

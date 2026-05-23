@@ -373,17 +373,17 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
     with VncClient(proxmox, vmid=vm.vmid) as vnc:
         screenshotter = Screenshotter(vnc)
         injector = InputInjector(vnc, ssh, vm.is_windows)
-        # Stage 3c: AT-SPI uses a dedicated persistent SSHClient (ControlMaster
-        # multiplexing). Shell `ssh` stays non-persistent.
+        # Stage 3c / Stage 4: per-OS coordinate-free driver shares one
+        # persistent SSHClient. AtspiClient on Linux, UiaClient on Windows.
         from automation.atspi import AtspiClient as _AtspiClient
-        _ssh_atspi = (
-            SSHClient(vm.ip, vm.user, persistent=True)
-            if not vm.is_windows
-            else None
-        )
-        _atspi_client = (
-            _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
-        )
+        from automation.uia import UiaClient as _UiaClient
+        _ssh_atspi = SSHClient(vm.ip, vm.user, persistent=True)
+        _atspi_client = None
+        _uia_client = None
+        if vm.is_windows:
+            _uia_client = _UiaClient(ssh=_ssh_atspi)
+        else:
+            _atspi_client = _AtspiClient(ssh=_ssh_atspi)
         try:
             runner = FunctionalRunner(
                 vlm=vlm,
@@ -393,10 +393,13 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
                 log_fn=lambda msg: print(f"[mOSdat] {msg}"),
                 popup_sweep=True,
                 atspi=_atspi_client,
+                uia=_uia_client,
             )
             from automation.runners.scenario_loader import load_test_yaml
 
-            name, steps, _, _ = load_test_yaml(scenario_path, cfg)
+            name, steps, _, _ = load_test_yaml(
+                scenario_path, cfg, platform=vm.os_type,
+            )
             passed, log = runner.run_test(
                 steps=steps,
                 name=name,

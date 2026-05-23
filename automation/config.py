@@ -137,6 +137,19 @@ class VMConfig:
         return self.os_type == "windows"
 
     @property
+    def scenario_subdir(self) -> str:
+        """Per-OS subdirectory under shared/scenarios/functional/ to search first
+        when resolving a ``--test NAME`` argument.
+
+        Linux VMs → ``linux``. Windows VMs → ``vm.name`` (e.g. ``windows10`` /
+        ``windows11``) so win10 vs win11 stay in independent buckets. Unknown
+        os_type → ``linux`` as a safe default.
+        """
+        if self.is_windows:
+            return self.name
+        return "linux"
+
+    @property
     def resolved_temp_dir(self) -> str:
         """Resolve temp dir: TMPDIR env var > temp_dir field > OS default."""
         env_val = os.environ.get("TMPDIR")

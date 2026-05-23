@@ -99,6 +99,7 @@ def expand_call(
     capability_manifest: dict | None = None,
     binary_sha: str | None = None,
     _resolving: frozenset = frozenset(),
+    platform: str | None = None,
 ) -> list[dict]:
     """Expand a routine call dict into a flat list of scenario step dicts.
 
@@ -128,7 +129,7 @@ def expand_call(
             f"[routines] Cycle detected in routine calls: {chain}"
         )
 
-    routine = load_routine(name)
+    routine = load_routine(name, platform=platform)
     resolved_inputs = _resolve_inputs(routine, call_inputs, parent_vars)
 
     # Build jinja render env: parent vars + resolved inputs.
@@ -150,10 +151,10 @@ def expand_call(
 
     new_resolving = _resolving | {name}
 
-    # Recursively expand any nested routine calls
-    expanded_pre = _expand_routine_steps(rendered_pre, parent_vars, capability_manifest, new_resolving)
-    expanded_main = _expand_routine_steps(rendered_main, parent_vars, capability_manifest, new_resolving)
-    expanded_post = _expand_routine_steps(rendered_post, parent_vars, capability_manifest, new_resolving)
+    # Recursively expand any nested routine calls (propagate platform)
+    expanded_pre = _expand_routine_steps(rendered_pre, parent_vars, capability_manifest, new_resolving, platform)
+    expanded_main = _expand_routine_steps(rendered_main, parent_vars, capability_manifest, new_resolving, platform)
+    expanded_post = _expand_routine_steps(rendered_post, parent_vars, capability_manifest, new_resolving, platform)
 
     # Emit routine_call event as a synthetic shell no-op that records metadata
     # (stores event in step label for downstream consumers)
@@ -166,7 +167,7 @@ def expand_call(
     # Build on_failure steps (rendered but not injected into main flow)
     rendered_on_failure = _render_steps(routine.on_failure, render_vars)
     expanded_on_failure = _expand_routine_steps(
-        rendered_on_failure, parent_vars, capability_manifest, new_resolving
+        rendered_on_failure, parent_vars, capability_manifest, new_resolving, platform
     )
 
     result = [event_step] + expanded_pre + expanded_main + expanded_post
@@ -302,6 +303,7 @@ def _expand_routine_steps(
     parent_vars: dict,
     capability_manifest: dict | None,
     _resolving: frozenset,
+    platform: str | None = None,
 ) -> list[dict]:
     """Walk steps, recursively expanding any nested routine calls."""
     result = []
@@ -313,6 +315,7 @@ def _expand_routine_steps(
                 parent_vars,
                 capability_manifest=capability_manifest,
                 _resolving=_resolving,
+                platform=platform,
             )
             result.extend(expanded)
         else:

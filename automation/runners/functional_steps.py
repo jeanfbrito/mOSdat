@@ -172,16 +172,13 @@ class _StepsMixin:
         # On failure: if the step ALSO defines `localize:` (this body's normal
         # input), fall through to the VLM path; otherwise propagate the error.
         if step.atspi is not None:
-            if self.atspi is None:
-                raise RuntimeError(
-                    "step.atspi is set but FunctionalRunner was constructed "
-                    "without an AtspiClient — wire it via FunctionalRunner(..., atspi=...)"
-                )
+            drv = self._require_a11y("atspi")
             from automation.atspi import AtspiError
+            from automation.uia import UiaError
             self.log(f"  Step {step_num}: atspi {step.atspi}{retry_label}")
             t0_atspi = time.perf_counter()
             try:
-                act_res = self.atspi.click(
+                act_res = drv.click(
                     **step.atspi, input_injector=self.injector,
                 )
                 latency_ms_atspi = round((time.perf_counter() - t0_atspi) * 1000)
@@ -189,7 +186,7 @@ class _StepsMixin:
                            target=step.atspi, latency_ms=latency_ms_atspi,
                            result=act_res)
                 return None  # success — caller proceeds to verify (or step done)
-            except AtspiError as e:
+            except (AtspiError, UiaError) as e:
                 latency_ms_atspi = round((time.perf_counter() - t0_atspi) * 1000)
                 self._emit("atspi_click_fallback", step_num=step_num,
                            attempt=attempt, target=step.atspi,
@@ -373,13 +370,9 @@ class _StepsMixin:
         # before the click/localize/verify pipeline, like `checkpoint:`.
         # Precedence: wait_for wins over a bare `wait: N` if both are set.
         if step.wait_for is not None:
-            if self.atspi is None:
-                raise RuntimeError(
-                    "step.wait_for is set but FunctionalRunner was constructed "
-                    "without an AtspiClient — wire it via "
-                    "FunctionalRunner(..., atspi=...)"
-                )
+            drv = self._require_a11y("wait_for")
             from automation.atspi import AtspiError
+            from automation.uia import UiaError
             _wf_label = f"wait_for:{'any' if step.wait_for.get('any') else 'all'}"[:60]
             _wf_display = f"{step_num}: {step.label}" if getattr(step, "label", None) else str(step_num)
             _wf_start_ts = time.perf_counter()
@@ -388,8 +381,8 @@ class _StepsMixin:
             self.log(f"  Step {_wf_display}: wait_for {step.wait_for}")
             t0_wf = time.perf_counter()
             try:
-                result = self.atspi.wait_for(**step.wait_for)
-            except AtspiError as wf_err:
+                result = drv.wait_for(**step.wait_for)
+            except (AtspiError, UiaError) as wf_err:
                 latency_ms_wf = round((time.perf_counter() - t0_wf) * 1000)
                 self._emit("wait_for_timeout", step_num=step_num,
                            target=step.wait_for, latency_ms=latency_ms_wf,
@@ -536,14 +529,9 @@ class _StepsMixin:
                 # path. AtspiClient.verify() returns bool (never raises on
                 # no-match), so this is a single round-trip check.
                 if step.verify_atspi is not None:
-                    if self.atspi is None:
-                        raise RuntimeError(
-                            "step.verify_atspi is set but FunctionalRunner was "
-                            "constructed without an AtspiClient — wire it via "
-                            "FunctionalRunner(..., atspi=...)"
-                        )
+                    drv = self._require_a11y("verify_atspi")
                     t0_va = time.perf_counter()
-                    ok = self.atspi.verify(**step.verify_atspi)
+                    ok = drv.verify(**step.verify_atspi)
                     latency_ms_va = round((time.perf_counter() - t0_va) * 1000)
                     self._emit("atspi_verify", step_num=step_num, attempt=attempt,
                                target=step.verify_atspi, verdict="yes" if ok else "no",

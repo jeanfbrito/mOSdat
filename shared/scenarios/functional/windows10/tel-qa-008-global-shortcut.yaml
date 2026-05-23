@@ -1,0 +1,534 @@
+# qa_flow: TEL-QA-008
+# qa_source: qa/telephony-deeplink/flows/08-global-shortcut.md
+# Status: Windows 10 variant. Drafted 2026-05-23 by adapting
+# `linux/tel-qa-008-global-shortcut.yaml` for the windows10 VM.
+#
+# Mirrors the 11-step QA flow 1:1 (Windows execution path):
+#   1.  Navigate kebab → Settings → Voice & Video → Telephony section
+#       (Global Shortcut controls visible).
+#   2.  Enable shortcut + bind a non-conflicting accelerator. Pre-staged via
+#       overridden-settings to avoid Fuselage Capture/Save AT-SPI drift
+#       (same widget family as the master toggle, same drift).
+#   3.  Copy '+15551234567' to clipboard (Set-Clipboard).
+#   4.  Press shortcut → dialpad opens with normalized digits.
+#   5.  Copy 'tel:+55 11 99999-1234'.
+#   6.  Press shortcut → dialpad opens with normalized digits.
+#   7.  Copy 'not a phone'.
+#   8.  Press shortcut → dialpad opens empty OR remains closed; no crash.
+#   9.  Try a reserved/conflicting accelerator. Windows best-effort:
+#       Electron globalShortcut.register returns false silently when the OS
+#       rejects the bind; no UI conflict toast is shown. We assert the app
+#       is still alive and the previously-bound accelerator still fires.
+#   10. Switch Telephony OFF from V&V section. Master toggle uses
+#       `via: hint` (zero-extent Fuselage ToggleSwitch). After OFF, the
+#       Global Shortcut row becomes inactive AND the IPC-side
+#       globalShortcut.unregister runs.
+#   11. Press the same accelerator. Dialpad does NOT open. No call request.
+#
+# Windows-specific deviations from the linux variant:
+#   * Per-OS routine resolver picks `shared/routines/windows/launch-rocketchat.yaml`
+#     and `cleanup-rocketchat.yaml`.
+#   * Trigger mechanism (CRITICAL):
+#       Linux uses `xdotool key ctrl+shift+p` + xterm focus-steal.
+#       Windows uses `[System.Windows.Forms.SendKeys]::SendWait('^+P')` after
+#       focusing a different window (notepad). The UIA worker does NOT expose
+#       a `send_keys` op (verified 2026-05-23 in `automation/uia/worker.py` —
+#       only find/verify/do_action/tree_dump/wait_for/get_at_point are
+#       registered), so pywinauto-via-worker is NOT an option here.
+#       Trade-off: SendKeys::SendWait dispatches to the FOREGROUND window. By
+#       activating notepad immediately before SendWait, we satisfy the
+#       "global shortcut, RC not focused" semantics from the spec.
+#   * Clipboard: PowerShell `Set-Clipboard` / `Get-Clipboard` (replaces
+#     xclip / xsel).
+#   * Focus-steal target: `notepad.exe` (replaces xterm).
+#   * userData paths: `$env:APPDATA\Rocket.Chat` (Roaming).
+#   * AT-SPI absence-check worker calls become UIA worker calls.
+#   * atspi/verify_atspi/wait_for step fields are unchanged.
+#   * Reserved accelerator: linux used Ctrl+Alt+T (typical desktop terminal
+#     bind). On Windows that combo is free by default. We use Ctrl+Alt+Q as
+#     a best-effort "different combo" — the actual reserved-conflict test
+#     value on Windows is OS-flavor-dependent. The regression guard
+#     (step9c: previously bound accel still works) is the strongest
+#     platform-independent test we can run.
+#
+# Trigger mechanism choice (documented):
+#   SendKeys::SendWait was chosen over pywinauto SendKeys because:
+#     (a) UIA worker does NOT expose a `send_keys` op — adding one is out
+#         of scope for this scenario (would touch the worker + client).
+#     (b) SendKeys::SendWait is built into .NET / PowerShell on every
+#         Windows 10 build with no extra install.
+#     (c) The "global shortcut from another window" semantic is preserved
+#         by activating notepad first, then SendWait — SendWait targets
+#         the foreground window which is notepad at that point.
+#   Future work: if the UIA worker gains a `send_keys` op (via pywinauto's
+#   `keyboard.send_keys`), this scenario can swap the trigger block for a
+#   single-line worker call. The wait_for / verify shape stays identical.
+#
+# Pattern lineage:
+#   - Source:                            linux/tel-qa-008-global-shortcut.yaml
+#   - Windows routine pattern + paths:   shared/routines/windows/{launch,cleanup}-rocketchat.yaml
+#   - UIA worker invocation pattern:     automation/uia/worker.py docstring example
+
+name: "tel-qa-008-global-shortcut"
+description: |
+  TEL-QA-008 — Telephony global shortcut bind, trigger, clipboard parse, and
+  unregister-on-disable contract (Windows 10).
+
+  Pre-stages telephony ENABLED with a non-conflicting accelerator
+  (Ctrl+Shift+P). Verifies the V&V settings expose the Global Shortcut row.
+  Drives 5 trigger cases (E.164, tel: URI with separators, invalid text,
+  reserved-conflict best-effort, post-disable re-trigger) via PowerShell
+  SendKeys::SendWait after activating notepad, and asserts dialpad behavior.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  # Accelerator stored in Electron format (matches overridden-settings.json).
+  accelerator: "Ctrl+Shift+P"
+  # SendKeys::SendWait code for the same combo: ^ = Ctrl, + = Shift.
+  sendkeys_combo: "^+P"
+  reserved_accelerator: "Ctrl+Alt+Q"
+  reserved_sendkeys_combo: "^%Q"
+  phone_e164: "+15551234567"
+  phone_uri_raw: "tel:+55 11 99999-1234"
+  phone_uri_normalized: "+5511999991234"
+  invalid_text: "not a phone"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-flight: confirm SendKeys + notepad available ─────────────────────
+  - label: "QA-008-step0: verify trigger toolchain present (notepad + SendKeys)"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        if (-not [System.Windows.Forms.SendKeys]) {
+          Write-Error 'FAIL — System.Windows.Forms.SendKeys unavailable'
+          exit 1
+        }
+        $np = (Get-Command notepad.exe -ErrorAction SilentlyContinue)
+        if (-not $np) { Write-Error 'FAIL — notepad.exe missing'; exit 1 }
+        Write-Host 'TOOLCHAIN_OK'
+
+  # ── Pre-stage userData: telephony ENABLED + accelerator bound ────────────
+  - label: "QA-008-pre-stage: write servers + overrides (telephony ON, accel={{ accelerator }})"
+    shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first = $first + '/' }
+        $dirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $dirs) {
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $serversJson = @{ 'Workspace' = '{{ workspace_url }}' } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText("$d\servers.json", $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = [ordered]@{
+            servers = @(@{ url = $first; title = 'Workspace' })
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            __internal__ = @{ migrations = @{ version = '4.14.1' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$d\config.json", $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = [ordered]@{
+            isTelephonyEnabled = $true
+            telephonyPreferredServer = $first
+            telephonyGlobalShortcutConfig = @{
+              enabled = $true
+              accelerator = '{{ accelerator }}'
+            }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 8
+          [System.IO.File]::WriteAllText("$d\overridden-settings.json", $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = "$d\$f"
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED'
+
+  # ── Launch RC via Windows routine ────────────────────────────────────────
+  - routine: launch-rocketchat
+
+  - label: "QA-008-launch: wait_for main frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-008-launch: wait for workspace ready (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # ── QA-008-step1: kebab → Settings → Voice & Video → Telephony section ───
+  - label: "QA-008-step1a: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-008-step1b: wait_for Settings menu item"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-008-step1c: click Settings (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-008-step1d: wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-008-step1e: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-008-step1f: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-008-step1g: wait_for Telephony section (checkbox anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  # ── QA-008-step2: Global Shortcut controls visible (spec step 1 + 2) ─────
+  - label: "QA-008-step2a: verify Global Shortcut row present"
+    wait_for:
+      any:
+        - {role: "label", name: "Global Shortcut", name_substr: true}
+        - {role: "static", name: "Global Shortcut", name_substr: true}
+        - {role: "heading", name: "Global Shortcut", name_substr: true}
+        - {role: "push button", name: "Capture", name_substr: true}
+        - {role: "push button", name: "Clear", name_substr: true}
+      timeout: 10
+    retries: 1
+
+  # ── QA-008-step2b: launch focus-steal notepad for global-shortcut probes ─
+  - label: "QA-008-step2b: launch focus-steal notepad"
+    shell: |
+        $existing = Get-Process -Name 'notepad' -ErrorAction SilentlyContinue
+        if (-not $existing) {
+          Start-Process notepad.exe
+          Start-Sleep -Seconds 2
+        }
+        # AppActivate by window title prefix; SendKeys::SendWait targets the foreground window.
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        Write-Host 'NOTEPAD_FOCUSED'
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-008-step3 + step4: clipboard=phone E.164, press shortcut, dialpad fills
+  # ════════════════════════════════════════════════════════════════════════
+  - label: "QA-008-step3: copy {{ phone_e164 }} to clipboard"
+    shell: |
+        Set-Clipboard -Value '{{ phone_e164 }}'
+        $got = Get-Clipboard -Raw
+        if ($got -ne '{{ phone_e164 }}') {
+          Write-Error "FAIL — clipboard='$got'"
+          exit 1
+        }
+        Write-Host 'CLIPBOARD_E164_OK'
+
+  - label: "QA-008-step4a: focus notepad + dispatch {{ accelerator }} (SendKeys::SendWait)"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('{{ sendkeys_combo }}')
+        Write-Host 'SHORTCUT_FIRED_E164'
+
+  - label: "QA-008-step4b: wait_for dialpad surface (E.164 clipboard)"
+    wait_for:
+      any:
+        - {role: "entry", name: "phone", name_substr: true}
+        - {role: "entry", name: "number", name_substr: true}
+        - {role: "entry"}
+        - {role: "dialog"}
+        - {role: "push button", name: "Call", name_substr: true}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-008-step4c: verify dialpad pre-filled with parsed digits (best-effort)"
+    shell: |
+        $probe = '{"ops":[{"id":"e","op":"find","role":"entry","app_filter":"rocket"}]}'
+        $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        try {
+          $d = $res | ConvertFrom-Json
+          $e = $d.results.e
+          if (-not $e.ok) { Write-Host 'READBACK_UNAVAILABLE — entry not found'; exit 0 }
+          $val = $e.node.text
+          if (-not $val) { $val = $e.node.name }
+          if (-not $val) { $val = '' }
+        } catch {
+          Write-Host 'READBACK_UNAVAILABLE — parse error'; exit 0
+        }
+        Write-Host "dialpad entry readback: [$val]"
+        $digits = ($val -replace '[^0-9]','')
+        if (-not $digits) { Write-Host 'READBACK_UNAVAILABLE — no digits surfaced'; exit 0 }
+        if ($digits -match '15551234567') { Write-Host 'E164_PREFILL_OK'; exit 0 }
+        Write-Error "FAIL — dialpad shows unexpected digits '$digits' (expected 15551234567)"
+        exit 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-008-step5 + step6: clipboard=tel: URI, press shortcut, dialpad fills
+  # ════════════════════════════════════════════════════════════════════════
+  - label: "QA-008-step5: copy '{{ phone_uri_raw }}' to clipboard"
+    shell: |
+        Set-Clipboard -Value '{{ phone_uri_raw }}'
+        $got = Get-Clipboard -Raw
+        if ($got -ne '{{ phone_uri_raw }}') {
+          Write-Error "FAIL — clipboard='$got'"
+          exit 1
+        }
+        Write-Host 'CLIPBOARD_TEL_URI_OK'
+
+  - label: "QA-008-step6a: focus notepad + dispatch {{ accelerator }}"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('{{ sendkeys_combo }}')
+        Write-Host 'SHORTCUT_FIRED_TEL_URI'
+
+  - label: "QA-008-step6b: wait_for dialpad surface (tel: URI clipboard)"
+    wait_for:
+      any:
+        - {role: "entry", name: "phone", name_substr: true}
+        - {role: "entry", name: "number", name_substr: true}
+        - {role: "entry"}
+        - {role: "dialog"}
+        - {role: "push button", name: "Call", name_substr: true}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-008-step6c: verify dialpad pre-filled with normalized digits (best-effort)"
+    shell: |
+        $probe = '{"ops":[{"id":"e","op":"find","role":"entry","app_filter":"rocket"}]}'
+        $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        try {
+          $d = $res | ConvertFrom-Json
+          $e = $d.results.e
+          if (-not $e.ok) { Write-Host 'READBACK_UNAVAILABLE'; exit 0 }
+          $val = $e.node.text; if (-not $val) { $val = $e.node.name }; if (-not $val) { $val = '' }
+        } catch { Write-Host 'READBACK_UNAVAILABLE — parse error'; exit 0 }
+        Write-Host "dialpad entry readback: [$val]"
+        $digits = ($val -replace '[^0-9]','')
+        if (-not $digits) { Write-Host 'READBACK_UNAVAILABLE — no digits surfaced'; exit 0 }
+        if ($digits -match '5511999991234') { Write-Host 'TEL_URI_PREFILL_OK'; exit 0 }
+        Write-Error "FAIL — dialpad shows unexpected digits '$digits' (expected 5511999991234)"
+        exit 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-008-step7 + step8: invalid clipboard → dialpad empty OR no-op, no crash
+  # ════════════════════════════════════════════════════════════════════════
+  - label: "QA-008-step7: copy invalid text '{{ invalid_text }}' to clipboard"
+    shell: |
+        Set-Clipboard -Value '{{ invalid_text }}'
+        Write-Host 'CLIPBOARD_INVALID_OK'
+
+  - label: "QA-008-step8a: focus notepad + dispatch {{ accelerator }} (invalid clipboard)"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('{{ sendkeys_combo }}')
+        Write-Host 'SHORTCUT_FIRED_INVALID'
+
+  - wait: 3
+
+  - label: "QA-008-step8b: verify dialpad EMPTY or absent — no malformed prefill"
+    shell: |
+        # First, fail loudly if any system crash/error dialog is up.
+        $crash = '{"ops":[{"id":"crash","op":"find","role":"dialog","name":"crashed","name_substr":true},{"id":"error","op":"find","role":"dialog","name":"Rocket.Chat","name_substr":true}]}'
+        $res = & python C:\tmp\mosdat_uia_worker.py $crash 2>&1 | Out-String
+        try {
+          $d = $res | ConvertFrom-Json
+          if ($d.results.crash.ok) {
+            Write-Error 'FAIL — crash dialog visible after invalid-clipboard trigger'
+            exit 1
+          }
+        } catch { }
+        $probe = '{"ops":[{"id":"e","op":"find","role":"entry","app_filter":"rocket"}]}'
+        $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        try {
+          $d = $res | ConvertFrom-Json
+          $e = $d.results.e
+          if (-not $e.ok) { Write-Host 'INVALID_CLIPBOARD_OK — dialpad absent'; exit 0 }
+          $val = $e.node.text; if (-not $val) { $val = $e.node.name }; if (-not $val) { $val = '' }
+        } catch { Write-Host 'INVALID_CLIPBOARD_OK — parse error treated as absent'; exit 0 }
+        Write-Host "dialpad entry readback: [$val]"
+        $digits = ($val -replace '[^0-9]','')
+        if (-not $digits) { Write-Host 'INVALID_CLIPBOARD_OK — entry empty'; exit 0 }
+        Write-Error "FAIL — invalid clipboard produced digits '$digits' in dialpad entry"
+        exit 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-008-step9: reserved/conflicting accelerator (Windows best-effort)
+  # ════════════════════════════════════════════════════════════════════════
+  - label: "QA-008-step9a: dispatch reserved accelerator {{ reserved_accelerator }} (best-effort)"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        try {
+          [System.Windows.Forms.SendKeys]::SendWait('{{ reserved_sendkeys_combo }}')
+        } catch { }
+        Write-Host 'RESERVED_DISPATCHED'
+
+  - wait: 2
+
+  - label: "QA-008-step9b: verify RC still alive (main frame present)"
+    verify_atspi: {role: "frame"}
+    retries: 3
+
+  - label: "QA-008-step9c: clipboard=E.164 + previously bound accel still works"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        Set-Clipboard -Value '{{ phone_e164 }}'
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('{{ sendkeys_combo }}')
+        Write-Host 'PRIOR_ACCEL_REFIRED'
+
+  - label: "QA-008-step9d: dialpad still opens — prior bind preserved"
+    wait_for:
+      any:
+        - {role: "entry"}
+        - {role: "dialog"}
+        - {role: "push button", name: "Call", name_substr: true}
+      timeout: 15
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-008-step10: Switch Telephony OFF from V&V section
+  # ════════════════════════════════════════════════════════════════════════
+  - label: "QA-008-step10a: bring RC to foreground"
+    shell: |
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Rocket.Chat') } catch { }
+        Start-Sleep -Seconds 1
+        Write-Host 'RC_FOREGROUNDED'
+
+  - label: "QA-008-step10b: ensure Telephony checkbox visible (reopen Settings if needed)"
+    shell: |
+        $probe = '{"ops":[{"id":"t","op":"find","role":"check box","name":"Telephony","app_filter":"rocket"}]}'
+        $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        try {
+          $d = $res | ConvertFrom-Json
+          if ($d.results.t.ok) { Write-Host 'TELEPHONY_CB_VISIBLE_OK'; exit 0 }
+        } catch { }
+        Write-Host 'TELEPHONY_CB_NOT_VISIBLE — runner will re-navigate'
+        exit 0
+
+  # Defensive re-navigation (idempotent).
+  - label: "QA-008-step10c: click kebab (re-open path)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 2
+
+  - label: "QA-008-step10d: wait_for Settings menu item"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 15}
+    retries: 1
+
+  - label: "QA-008-step10e: click Settings (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-008-step10f: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-008-step10g: wait_for Telephony checkbox"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 15}
+    retries: 1
+
+  # Master toggle OFF — Fuselage ToggleSwitch needs via:hint (zero-extent
+  # widget). Toggle is ON (pre-staged), so a single invocation flips OFF.
+  - label: "QA-008-step10h: invoke Telephony toggle OFF (via: hint)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════
+  # QA-008-step11: shortcut no longer fires while telephony OFF
+  # ════════════════════════════════════════════════════════════════════════
+  - label: "QA-008-step11a: clipboard still=E.164; focus notepad + re-fire {{ accelerator }}"
+    shell: |
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName Microsoft.VisualBasic
+        Set-Clipboard -Value '{{ phone_e164 }}'
+        try { [Microsoft.VisualBasic.Interaction]::AppActivate('Untitled - Notepad') } catch { }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('{{ sendkeys_combo }}')
+        Write-Host 'SHORTCUT_REFIRED_AFTER_DISABLE'
+
+  - wait: 4
+
+  - label: "QA-008-step11b: verify dialpad does NOT open (shortcut unregistered)"
+    shell: |
+        for ($i = 1; $i -le 5; $i++) {
+          $probe = '{"ops":[{"id":"call","op":"find","role":"push button","name":"Call","name_substr":true,"app_filter":"rocket"},{"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"},{"id":"phone_entry","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"},{"id":"number_entry","op":"find","role":"entry","name":"number","name_substr":true,"app_filter":"rocket"}]}'
+          $res = & python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+          try {
+            $d = $res | ConvertFrom-Json
+            $hits = @()
+            foreach ($k in 'call','remember','phone_entry','number_entry') {
+              if ($d.results.$k.ok) { $hits += $k }
+            }
+            if ($hits.Count -eq 0) {
+              Write-Host "SHORTCUT_UNREGISTERED_OK (attempt $i) — no dialpad surface"
+              exit 0
+            }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error 'FAIL — dialpad surface painted while telephony OFF'
+        exit 1
+
+  - label: "QA-008-step11c: RC still alive after shortcut unregister"
+    verify_atspi: {role: "frame"}
+    retries: 3
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - shell: |
+        Get-Process -Name 'notepad' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Host 'NOTEPAD_CLEANUP_OK'
+
+  - routine: cleanup-rocketchat

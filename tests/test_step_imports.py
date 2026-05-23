@@ -553,7 +553,7 @@ class TestDemoExpansion:
 class TestMasterToggleConversion:
     def test_master_toggle_has_import_step(self):
         """3325-master-toggle.yaml references cleanup-rocketchat (as routine: or !import)."""
-        p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
+        p = _PROJ / "shared/scenarios/functional/linux/3325-master-toggle.yaml"
         assert p.exists()
         content = p.read_text()
         # After conversion to routines-first form, cleanup-rocketchat is called
@@ -566,7 +566,7 @@ class TestMasterToggleConversion:
 
     def test_master_toggle_imports_manifest(self):
         """3325-master-toggle.yaml references cleanup-rocketchat via routine: or imports:."""
-        p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
+        p = _PROJ / "shared/scenarios/functional/linux/3325-master-toggle.yaml"
         doc = yaml.safe_load(p.read_text())
         content = p.read_text()
         # After conversion to routines-first form the scenario uses routine: calls
@@ -579,7 +579,7 @@ class TestMasterToggleConversion:
 
     def test_master_toggle_loads_without_error(self):
         """3325-master-toggle.yaml loads via load_test_yaml without error."""
-        p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
+        p = _PROJ / "shared/scenarios/functional/linux/3325-master-toggle.yaml"
         # Should not raise (fragment is real + exists)
         _, steps, _, _ = load_test_yaml(p)
         # Should have > 1 step (import expands to at least 1 shell step)
@@ -587,13 +587,13 @@ class TestMasterToggleConversion:
 
     def test_master_toggle_first_step_is_shell(self):
         """After expansion, first step of 3325-master-toggle.yaml is a shell step."""
-        p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
+        p = _PROJ / "shared/scenarios/functional/linux/3325-master-toggle.yaml"
         _, steps, _, _ = load_test_yaml(p)
         assert steps[0].shell is not None
 
     def test_master_toggle_cleanup_step_has_prefixed_label(self):
         """Expanded cleanup-rocketchat step carries a routine/import prefix label."""
-        p = _PROJ / "shared/scenarios/functional/3325-master-toggle.yaml"
+        p = _PROJ / "shared/scenarios/functional/linux/3325-master-toggle.yaml"
         _, steps, _, _ = load_test_yaml(p)
         # After conversion to routines-first form, the first step is expanded from
         # a routine: cleanup-rocketchat call and carries a [routine:cleanup-rocketchat]

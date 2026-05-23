@@ -246,7 +246,7 @@ class TestMotionDwellFields:
 
 class TestCanonicalSmoke:
     def test_smoke_linux_yaml_parses_clean(self):
-        yaml_path = _PROJ / "shared" / "scenarios" / "functional" / "rocketchat-smoke-linux.yaml"
+        yaml_path = _PROJ / "shared" / "scenarios" / "functional" / "linux" / "rocketchat-smoke-linux.yaml"
         if not yaml_path.exists():
             pytest.skip("rocketchat-smoke-linux.yaml not found")
         with open(yaml_path) as f:
@@ -353,7 +353,7 @@ class TestBugConfirmationSchema:
 
     def test_canonical_smoke_still_loads_clean(self):
         """Existing canonical scenario still parses after schema extension."""
-        yaml_path = _PROJ / "shared" / "scenarios" / "functional" / "rocketchat-smoke-linux.yaml"
+        yaml_path = _PROJ / "shared" / "scenarios" / "functional" / "linux" / "rocketchat-smoke-linux.yaml"
         if not yaml_path.exists():
             pytest.skip("rocketchat-smoke-linux.yaml not found")
         with open(yaml_path) as f:

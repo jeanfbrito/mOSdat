@@ -101,12 +101,16 @@ def cmd_functional(args) -> int:
 
     vms = [config.vm_by_name[name] for name in vm_names]
 
-    # Resolve test file
+    # Resolve test file — try per-OS subdir of first VM first, then root fallback.
+    # All VMs in a single invocation share the same scenario file; subdir is picked
+    # from vms[0] (mosdat dispatches per-platform anyway in real runs).
     tests_dir = config.functional.tests_dir or (config.framework_path / "shared" / "scenarios" / "functional")
     test_name = args.test or "rocketchat-smoke"
-    test_file = tests_dir / f"{test_name}.yaml"
-    if not test_file.exists():
-        print(f"[mOSdat] ERROR: Test file not found: {test_file}")
+    from automation.runners.scenario_loader import resolve_test_path, ScenarioNotFoundError
+    try:
+        test_file = resolve_test_path(test_name, tests_dir, subdir=vms[0].scenario_subdir)
+    except ScenarioNotFoundError as exc:
+        print(f"[mOSdat] ERROR: {exc}")
         return 1
 
     from automation.vlm.client import VLMClient
@@ -174,7 +178,10 @@ def cmd_functional(args) -> int:
     if until_step < from_step or until_step > total_steps:
         print(f"[mOSdat] ERROR: --until-step {until_step} out of range (from_step={from_step}, total={total_steps})")
         return 1
-    steps = steps[from_step - 1 : until_step]
+    # NB: don't slice `steps` yet — we re-load per-VM inside the loop with
+    # `platform=vm.os_type` so routine expansion picks the per-OS variant
+    # (e.g. shared/routines/windows/<slug>.yaml). Slicing is reapplied to
+    # the per-VM step list using the bounds validated above.
     partial_run = (from_step > 1 or until_step < total_steps)
 
     # Merge config vars (workspace_url, test_user, test_password) into template vars
@@ -212,6 +219,13 @@ def cmd_functional(args) -> int:
             from automation.transport.vnc import VncClient
             ssh = SSHClient(vm.ip, vm.user)
 
+            # Stage 4: re-load steps with platform=vm.os_type so routine calls
+            # (`shared/routines/<platform>/<slug>.yaml`) resolve per-OS. Bounds
+            # already validated against the platform-less load above; we just
+            # reapply the slice. Same yaml_checkpoints/vars semantics.
+            _, vm_steps, _, _ = load_test_yaml(test_file, platform=vm.os_type)
+            vm_steps = vm_steps[from_step - 1 : until_step]
+
             # Inject per-VM app_path (first package with a non-empty app_path)
             vm_vars = dict(vars_)
             for pkg in vm.packages:
@@ -238,19 +252,24 @@ def cmd_functional(args) -> int:
             with VncClient(proxmox, vmid=vm.vmid) as vnc:
                 screenshotter = Screenshotter(vnc)
                 injector = InputInjector(vnc, ssh, vm.is_windows)
-                # Stage 1D: AT-SPI driver shares the per-VM SSHClient. Always
-                # constructed (cheap, no remote work until first use); steps
-                # without `atspi:` / `verify_atspi:` ignore it.
-                from automation.atspi import AtspiClient
-                # Stage 3c: AT-SPI uses a dedicated SSH client with ControlMaster
-                # multiplexing. Shell steps keep the non-persistent `ssh` to
+                # Stage 1D / Stage 4: per-OS coordinate-free driver. Both
+                # clients share the same per-VM persistent SSHClient (one
+                # ControlMaster multiplex for AT-SPI on Linux, one for UIA
+                # on Windows). Shell steps keep the non-persistent `ssh` to
                 # avoid holding the master across heavyweight remote work.
-                ssh_atspi = (
-                    SSHClient(vm.ip, vm.user, persistent=True)
-                    if not vm.is_windows
-                    else None
-                )
-                atspi_client = AtspiClient(ssh=ssh_atspi) if ssh_atspi is not None else None
+                from automation.atspi import AtspiClient
+                from automation.uia import UiaClient
+                ssh_atspi = SSHClient(vm.ip, vm.user, persistent=True)
+                atspi_client = None
+                uia_client = None
+                if vm.is_windows:
+                    uia_client = UiaClient(ssh=ssh_atspi)
+                else:
+                    # Linux + any unrecognized os_type fall back to AT-SPI;
+                    # macOS is not yet supported (both None would dispatch-fail
+                    # loudly via _require_a11y on any atspi: / verify_atspi:
+                    # / wait_for: step).
+                    atspi_client = AtspiClient(ssh=ssh_atspi)
                 recorder = None
                 # C2: vm_ops needed only when checkpoints are enabled
                 from automation.proxmox.vm import VMOperations
@@ -288,6 +307,7 @@ def cmd_functional(args) -> int:
                         canary_override=getattr(args, "canary_override", "auto"),
                         app_process_name=config.app.process_name,
                         atspi=atspi_client,
+                        uia=uia_client,
                     )
 
                     # B7: VM health probe before scenario start
@@ -309,7 +329,7 @@ def cmd_functional(args) -> int:
                                 overall = False
                                 continue
 
-                    passed, log = runner.run_test(steps, name, vars=vm_vars)
+                    passed, log = runner.run_test(vm_steps, name, vars=vm_vars)
                     # B4: partial run note
                     if partial_run and until_step < total_steps:
                         remaining = total_steps - until_step
@@ -324,7 +344,9 @@ def cmd_functional(args) -> int:
                     except Exception as e:
                         print(f"[mOSdat] WARN: report generation failed: {e}")
                 finally:
-                    # Stage 3c: tear down the AT-SPI ControlMaster (best-effort).
+                    # Stage 3c / Stage 4: tear down the persistent a11y
+                    # ControlMaster (shared by AT-SPI on Linux, UIA on
+                    # Windows). Best-effort — VNC/recorder cleanup follows.
                     if ssh_atspi is not None:
                         try:
                             ssh_atspi.close_persistent()

@@ -161,10 +161,10 @@ def test_match_artifact_returns_newest(tmp_path: Path) -> None:
     assert match_artifact(tmp_path / "missing", "*.deb") is None
 
 
-def test_targets_table_only_deb_in_v1() -> None:
-    # If we add rpm/AppImage/exe later, this test should be updated alongside
-    # docs/IMPROVEMENTS.md and the spec example.
-    assert set(TARGETS) == {"deb"}
+def test_targets_table_contains_deb_and_exe() -> None:
+    # deb = Linux .deb deploy (Phase 1). exe = Windows NSIS deploy (this task).
+    # rpm / AppImage remain TODO; expand this set when they land.
+    assert set(TARGETS) == {"deb", "exe"}
 
 
 # ---------------------------------------------------------------------------

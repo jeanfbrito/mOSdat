@@ -168,7 +168,7 @@ def test_nested_routine_expansion():
         steps=[{"routine": "inner-routine"}, {"shell": "echo outer"}],
     )
 
-    def _load(name):
+    def _load(name, platform=None):
         if name == "inner-routine":
             return inner
         return outer

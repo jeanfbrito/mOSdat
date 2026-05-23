@@ -268,7 +268,7 @@ class TestResolvePhases:
 class TestDemoScenario:
 
     def test_master_toggle_phases_validate(self):
-        path = _PROJ / "shared" / "scenarios" / "functional" / "3325-master-toggle.yaml"
+        path = _PROJ / "shared" / "scenarios" / "functional" / "linux" / "3325-master-toggle.yaml"
         # The scenario uses routine: steps (not inline steps), so ScenarioModel
         # cannot validate the raw YAML — routine: is not an AnyStep variant.
         # Validate phases from the raw YAML doc directly, and use load_test_yaml

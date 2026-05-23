@@ -469,11 +469,14 @@ def _expand_routines(
     parent_vars: dict,
     scenario_path: Path,
     _resolving: frozenset = frozenset(),
+    platform: Optional[str] = None,
 ) -> list[dict]:
     """Walk step list, expand routine: calls into their constituent steps.
 
     Handles nested routine calls recursively. Cycle detection via _resolving.
     Import steps pass through untouched (I11 handles them separately).
+    When ``platform`` is set, routine resolution prefers
+    ``shared/routines/<platform>/<slug>.yaml`` over ``shared/routines/<slug>.yaml``.
     """
     result = []
     for step in steps:
@@ -486,6 +489,7 @@ def _expand_routines(
                     parent_vars,
                     capability_manifest=None,
                     _resolving=_resolving,
+                    platform=platform,
                 )
             except RuntimeError as exc:
                 raise RuntimeError(
@@ -503,7 +507,66 @@ def _expand_routines(
     return result
 
 
-def load_test_yaml(path, _unused=None, cli_vars: dict | None = None) -> tuple[str, list[FunctionalStep], dict, dict]:
+class ScenarioNotFoundError(FileNotFoundError):
+    """Raised when ``--test NAME`` cannot be resolved to a scenario file.
+
+    Carries the list of candidate paths probed so the CLI can print a
+    helpful diagnostic.
+    """
+
+    def __init__(self, name: str, candidates: list[Path]):
+        self.test_name = name
+        self.candidates = list(candidates)
+        listing = "\n  ".join(str(c) for c in candidates)
+        super().__init__(
+            f"Test scenario {name!r} not found. Probed:\n  {listing}"
+        )
+
+
+def resolve_test_path(
+    name: str,
+    base_dir: Path,
+    subdir: Optional[str] = None,
+) -> Path:
+    """Resolve a ``--test NAME`` argument to a concrete scenario YAML path.
+
+    Resolution order:
+    1. ``base_dir / subdir / NAME.yaml`` (if ``subdir`` is given) — per-OS variant.
+    2. ``base_dir / NAME.yaml`` — backward-compat root.
+    3. If NAME already contains a path separator (``linux/foo``), only
+       ``base_dir / NAME.yaml`` is probed (caller specified the subfolder).
+
+    NAME may include or omit the ``.yaml`` extension.
+
+    :raises ScenarioNotFoundError: if no candidate exists, with the probed paths.
+    """
+    base_dir = Path(base_dir)
+    stem = name[:-5] if name.endswith(".yaml") else name
+
+    # Explicit path with separator: user already chose the subdir
+    if "/" in stem or "\\" in stem:
+        explicit = base_dir / f"{stem}.yaml"
+        if explicit.exists():
+            return explicit
+        raise ScenarioNotFoundError(name, [explicit])
+
+    candidates: list[Path] = []
+    if subdir:
+        candidates.append(base_dir / subdir / f"{stem}.yaml")
+    candidates.append(base_dir / f"{stem}.yaml")
+
+    for path in candidates:
+        if path.exists():
+            return path
+    raise ScenarioNotFoundError(name, candidates)
+
+
+def load_test_yaml(
+    path,
+    _unused=None,
+    cli_vars: dict | None = None,
+    platform: Optional[str] = None,
+) -> tuple[str, list[FunctionalStep], dict, dict]:
     """Load a YAML functional test file.
 
     I8: ``cli_vars`` (from ``--var KEY=VALUE``) is merged over the scenario's
@@ -515,6 +578,10 @@ def load_test_yaml(path, _unused=None, cli_vars: dict | None = None) -> tuple[st
     I11: ``!import <name>`` and ``- import: <name>`` step references are
     expanded inline before var substitution, so vars from the parent scenario
     flow into fragment steps.
+
+    ``platform`` (optional): target platform string used for routine resolution
+    (e.g. ``"linux"`` or ``"windows"``). When set, routine calls prefer
+    ``shared/routines/<platform>/<slug>.yaml`` over ``shared/routines/<slug>.yaml``.
     """
     import sys as _sys
     import yaml
@@ -552,7 +619,7 @@ def load_test_yaml(path, _unused=None, cli_vars: dict | None = None) -> tuple[st
         # R1: expand routine: calls AFTER import expansion, BEFORE var subst
         # Pass yaml_vars (pre-CLI-merge) so routine inputs can reference scenario vars
         yaml_vars_early: dict = data.get("vars", {}) or {}
-        expanded_steps = _expand_routines(expanded_steps, yaml_vars_early, path)
+        expanded_steps = _expand_routines(expanded_steps, yaml_vars_early, path, platform=platform)
         # Strip internal routine metadata keys before schema validation
         expanded_steps = [
             {k: v for k, v in s.items() if not k.startswith("_")}

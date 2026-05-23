@@ -1,0 +1,426 @@
+# qa_flow: TEL-QA-011
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/11-windows-msi-policy.md
+# Authored 2026-05-23 — Windows-only flow. No Linux source.
+#
+# Mirrors the 8-step QA flow 1:1 (spec lines 35-42):
+#   1. Install MSI with SET_DEFAULT_ASSOCIATIONS=1 (silent /qn).
+#   2. Query policy registry value → points to RC's DefaultAssociations XML
+#      under install resources.
+#   3. Test the XML path exists.
+#   4. Sign out / sign back in — Windows applies defaults (deferred; documented
+#      below as a manual step, since a sign-out from inside a session would
+#      kill the test agent).
+#   5. Open RC settings, Voice & Video, toggle Telephony ON.
+#   6. Open diagnostics → isDefault.tel and isDefault.callto pass.
+#   7. Click valid links → RC handles both protocols.
+#   8. Uninstall → installer removes policy only if it owns the sentinel.
+#
+# Brief authoring rules (batch C):
+#   - `routine: cleanup-rocketchat` and `routine: launch-rocketchat` (per-OS
+#     resolver picks the Windows variant from shared/routines/windows/).
+#   - PowerShell `shell:` blocks for OS-level work: msiexec, reg query,
+#     Test-Path, Get-WmiObject Win32_Product, Get-Item file version.
+#   - AT-SPI primitives preserved for the in-app surfaces (settings nav,
+#     telephony toggle, diagnostics readout).
+#   - `via: hint` retained for the Fuselage ToggleSwitch (zero-extent widget).
+#
+# MSI install detection strategy (cited from spec):
+#   - Spec step 1 ("Install succeeds"): we don't run msiexec.exe here unless
+#     an MSI artifact path is provided via `var: msi_artifact_path`. If the
+#     branch build is already installed (the default test-bench state), we
+#     skip the install op and document it; the remaining policy/registry
+#     assertions still cover the spec's evidence list ("MSI install log",
+#     "reg query output", "screenshot/command output proving XML exists").
+#   - The agent action column ("Run msiexec /i <msi> SET_DEFAULT_ASSOCIATIONS=1
+#     /qn") is honored when `msi_artifact_path` is provided; otherwise the
+#     gate is the MSI detection probe (Win32_Product / install dir existence).
+#
+# Policy registry path (cited from spec line 36):
+#   HKLM\SOFTWARE\Policies\Microsoft\Windows\System
+#     Value: DefaultAssociationsConfiguration
+#     Data: path to RocketChatDefaultAppAssociations.xml under install
+#       <install_root>\resources\
+#   Spec failure-signal #1: "Registry path contains resources\\resources" —
+#   we explicitly assert the path does NOT contain that double-segment.
+#   Spec failure-signal #2: "XML file is missing" — Test-Path on the
+#   registry-returned path.
+#
+# Diagnostics + link-dispatch coverage:
+#   Spec steps 6-7 mirror TEL-QA-010 steps 7-8. We use the same anchor sets
+#   (Default Apps registry-or-diagnostics cross-check; Start-Process
+#   triggers the picker because we pre-stage two workspaces).
+#
+# Uninstall hygiene (spec step 8):
+#   "Installer removes policy only if it owns the sentinel." We document
+#   this as a verification step — after uninstall, the policy key should be
+#   absent IF (and only IF) the MSI's uninstaller wrote the sentinel during
+#   install. Without an actual uninstall in this run (it would kill the
+#   subsequent assertions), we surface the current sentinel state instead.
+#
+# AT-SPI/UIA ratio: ~40/60. Most assertions are registry/file-system shell
+# probes (MSI is a system-installer concern); the in-app surfaces are AT-SPI.
+# Per-step labels: "QA-011-stepN: ..." for log correlation.
+
+name: "tel-qa-011-windows-msi-policy"
+description: |
+  TEL-QA-011 — Windows MSI SET_DEFAULT_ASSOCIATIONS policy.
+
+  Verifies the MSI installer registers a policy at
+  HKLM\Policies\Microsoft\Windows\System pointing to a RocketChat
+  DefaultAssociations XML, that the XML exists at the registry path,
+  that the path does not exhibit the double-resources failure signal,
+  that in-app diagnostics report isDefault.{tel,callto} pass, that
+  Start-Process on both schemes routes to RC, and documents uninstall
+  policy-cleanup hygiene.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  test_number: "+15551234567"
+  # Optional MSI artifact path — when null, install step is skipped and we
+  # assert the existing branch-build install footprint instead.
+  msi_artifact_path: ""
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── QA-011-step1: MSI install with SET_DEFAULT_ASSOCIATIONS=1 ────────────
+  # If the test bench already has the branch build installed, we surface the
+  # MSI Win32_Product entry as evidence the policy install path was used
+  # (an MSI install populates Win32_Product; a copy-extracted install does
+  # not). This is the practical Windows install-mode discriminator.
+  - label: "QA-011-step1a: optionally install MSI with SET_DEFAULT_ASSOCIATIONS=1"
+    shell: |
+        $msi = '{{ msi_artifact_path }}'
+        if ($msi -and (Test-Path $msi)) {
+          $logPath = "$env:TEMP\rc_msi_install.log"
+          Write-Host "INSTALLING_MSI=$msi LOG=$logPath"
+          $exit = (Start-Process msiexec.exe -ArgumentList @('/i', $msi, 'SET_DEFAULT_ASSOCIATIONS=1', '/qn', '/L*V', $logPath) -Wait -PassThru).ExitCode
+          if ($exit -ne 0) {
+            Write-Error "FAIL — msiexec exited $exit (see $logPath)"
+            exit 1
+          }
+          Write-Host 'MSI_INSTALL_OK'
+        } else {
+          Write-Host 'MSI_INSTALL_SKIPPED — no msi_artifact_path provided; relying on pre-installed branch build'
+        }
+
+  - label: "QA-011-step1b: verify MSI install footprint (Win32_Product OR install path)"
+    shell: |
+        $msiProduct = Get-WmiObject Win32_Product -Filter "Name like 'Rocket.Chat%'" -ErrorAction SilentlyContinue
+        $candidates = @(
+          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+        )
+        $installedExe = $null
+        foreach ($c in $candidates) { if (Test-Path $c) { $installedExe = $c; break } }
+        if (-not $msiProduct -and -not $installedExe) {
+          Write-Error 'FAIL — neither Win32_Product nor install path indicates an installed branch build'
+          exit 1
+        }
+        if ($msiProduct) {
+          Write-Host "MSI_PRODUCT=$($msiProduct.Name) VERSION=$($msiProduct.Version)"
+        }
+        if ($installedExe) {
+          $info = (Get-Item $installedExe).VersionInfo
+          Write-Host "RC_EXE=$installedExe FILEVERSION=$($info.FileVersion) PRODUCT=$($info.ProductName)"
+        }
+        Write-Host 'STEP1_INSTALL_FOOTPRINT_OK'
+
+  # ── QA-011-step2: Query DefaultAssociationsConfiguration policy registry ──
+  # Spec step 2 verbatim: reg query
+  #   HKLM\SOFTWARE\Policies\Microsoft\Windows\System /v
+  #   DefaultAssociationsConfiguration
+  # Expected: value points to Rocket.Chat XML under install resources.
+  - label: "QA-011-step2a: query DefaultAssociationsConfiguration policy value"
+    shell: |
+        $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
+        if (-not (Test-Path $key)) {
+          Write-Error 'FAIL — policy key absent: HKLM\Policies\Microsoft\Windows\System'
+          exit 1
+        }
+        $val = (Get-ItemProperty -Path $key -Name 'DefaultAssociationsConfiguration' -ErrorAction SilentlyContinue).DefaultAssociationsConfiguration
+        if (-not $val) {
+          Write-Error 'FAIL — DefaultAssociationsConfiguration value absent (MSI did not set policy)'
+          exit 1
+        }
+        Write-Host "POLICY_XML_PATH=$val"
+        # Persist to a tempfile so subsequent step2b can read it without re-querying.
+        [System.IO.File]::WriteAllText("$env:TEMP\rc_policy_xml_path.txt", $val, [System.Text.UTF8Encoding]::new($false))
+        Write-Host 'STEP2_POLICY_QUERIED_OK'
+
+  - label: "QA-011-step2b: verify policy path points to RC resources (not double-resources)"
+    shell: |
+        $val = Get-Content "$env:TEMP\rc_policy_xml_path.txt" -Raw -ErrorAction Stop
+        $val = $val.Trim()
+        # Spec failure-signal #1: 'Registry path contains resources\resources'
+        if ($val -match 'resources\\resources') {
+          Write-Error "FAIL — policy path exhibits double-resources failure signal: $val"
+          exit 1
+        }
+        # Spec hypothesis: path under install resources/
+        if ($val -notmatch '(?i)resources') {
+          Write-Error "FAIL — policy path does not reference resources/: $val"
+          exit 1
+        }
+        if ($val -notmatch '(?i)rocket') {
+          Write-Error "FAIL — policy path does not reference Rocket: $val"
+          exit 1
+        }
+        Write-Host "POLICY_PATH_VALID=$val"
+
+  # ── QA-011-step3: Check the XML path exists ──────────────────────────────
+  # Spec step 3 verbatim: "RocketChatDefaultAppAssociations.xml exists at the
+  # registry path." Test-Path on the path captured in step 2.
+  - label: "QA-011-step3: verify DefaultAssociations XML file exists"
+    shell: |
+        $val = Get-Content "$env:TEMP\rc_policy_xml_path.txt" -Raw -ErrorAction Stop
+        $val = $val.Trim()
+        if (-not (Test-Path $val)) {
+          Write-Error "FAIL — XML at policy path does not exist (spec failure-signal #2): $val"
+          exit 1
+        }
+        # Optional content sanity: the XML should contain tel and callto entries.
+        $xml = Get-Content $val -Raw -ErrorAction SilentlyContinue
+        if ($xml -notmatch '(?i)tel' -or $xml -notmatch '(?i)callto') {
+          Write-Host "WARN — XML does not reference tel/callto explicitly; contents:"
+          Write-Host $xml
+        } else {
+          Write-Host 'XML_CONTAINS_TEL_AND_CALLTO'
+        }
+        Write-Host "XML_EXISTS=$val"
+
+  # ── QA-011-step4: Sign out / sign back in (deferred — would kill agent) ──
+  # Spec step 4: "Sign out and sign back in after install. → Windows applies
+  # defaults." A real logoff/logon in mid-test would tear down the test
+  # session. We document this as a manual prerequisite for the assertions
+  # that follow (steps 5-7 implicitly assume the logon cycle already ran on
+  # the test bench during provisioning).
+  - label: "QA-011-step4: sign-out/sign-in step DEFERRED (would kill test agent session)"
+    shell: |
+      powershell -Command "Write-Host 'STEP4_DEFERRED — assertions in step 5-7 assume the test bench already completed a logon cycle since MSI install'"
+
+  # ── QA-011-step5: Pre-stage userData + launch RC + toggle Telephony ON ───
+  - label: "QA-011-step5a: pre-stage userData (2 servers, telephony OFF)"
+    shell: |
+        $userDataDirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $userDataDirs) {
+          if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
+          $serversKv = @{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversKv, [System.Text.UTF8Encoding]::new($false))
+
+          $firstUrl = '{{ workspace_url }}'
+          if (-not $firstUrl.EndsWith('/')) { $firstUrl += '/' }
+          $mobileUrl = '{{ mobile_url }}'
+          if (-not $mobileUrl.EndsWith('/')) { $mobileUrl += '/' }
+
+          $config = @{
+            servers = @(
+              @{ url = $firstUrl; title = 'Workspace' },
+              @{ url = $mobileUrl; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $firstUrl }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $firstUrl
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $config, [System.Text.UTF8Encoding]::new($false))
+
+          $overrides = @{
+            isTelephonyEnabled = $false
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overrides, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_TEL_OFF'
+
+  - routine: launch-rocketchat
+
+  - label: "QA-011-step5b: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-011-step5c: wait_for kebab (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-011-step5d: click kebab"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-011-step5e: wait_for Settings menu item"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-011-step5f: click Settings menu item (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-011-step5g: verify Settings General tab visible"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-011-step5h: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-011-step5i: wait_for Telephony section anchor"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 15}
+    retries: 1
+
+  - label: "QA-011-step5j: enable Telephony (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 1
+
+  - label: "QA-011-step5k: wait_for Got it prompt (OFF→ON one-shot)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-011-step5l: dismiss Got it prompt"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  - wait: 2
+
+  # ── QA-011-step6: Open diagnostics → isDefault.tel + .callto pass ────────
+  # Spec step 6: "isDefault.tel and isDefault.callto pass when policy applied."
+  # The diagnostics readout reflects whether Windows applied the policy XML
+  # during the logon cycle. If the assertions fail here, the policy XML may
+  # be present but not yet applied (step 4 deferred) — the failure tells us
+  # which side of the bridge is broken.
+  - label: "QA-011-step6a: wait_for diagnostics trigger label"
+    wait_for:
+      any:
+        - {role: "push button", name_substr: "iagnostic"}
+        - {role: "toggle button", name_substr: "iagnostic"}
+        - {role: "label", name_substr: "iagnostic"}
+        - {role: "section", name_substr: "iagnostic"}
+      timeout: 10
+    retries: 1
+
+  - label: "QA-011-step6b: expand diagnostics section"
+    atspi:
+      role: "push button"
+      name_substr: "iagnostic"
+      app_filter: "rocket"
+    retries: 2
+
+  - wait: 1
+
+  - label: "QA-011-step6c: verify isDefault.tel pass indicator visible"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "isDefault.tel"}
+        - {role: "label", name_substr: "tel: default"}
+        - {role: "label", name_substr: "Default for tel"}
+      timeout: 10
+    retries: 2
+
+  - label: "QA-011-step6d: verify isDefault.callto pass indicator visible"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "isDefault.callto"}
+        - {role: "label", name_substr: "callto: default"}
+        - {role: "label", name_substr: "Default for callto"}
+      timeout: 10
+    retries: 2
+
+  # ── QA-011-step7: Click valid links → RC handles both protocols ──────────
+  # Spec step 7: Start-Process is the Windows equivalent of the test-links
+  # HTML click. Both schemes should route to RC and surface the picker
+  # (multi-workspace pre-stage).
+  - label: "QA-011-step7a: Start-Process 'tel:{{ test_number }}'"
+    shell: |
+      powershell -Command "Start-Process 'tel:{{ test_number }}'"
+
+  - label: "QA-011-step7b: wait_for picker surface (tel: routed to RC)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - key: Escape
+  - wait: 2
+
+  - label: "QA-011-step7c: Start-Process 'callto:{{ test_number }}'"
+    shell: |
+      powershell -Command "Start-Process 'callto:{{ test_number }}'"
+
+  - label: "QA-011-step7d: wait_for picker surface (callto: routed to RC)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  - label: "QA-011-step7e: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ── QA-011-step8: Uninstall hygiene — document sentinel state ────────────
+  # Spec step 8: "Installer removes policy only if it owns the sentinel."
+  # We do NOT uninstall here (would invalidate downstream tests and require
+  # re-install). We surface the current sentinel state so the human reviewer
+  # can confirm the install op wrote the sentinel and the uninstall will
+  # cleanly revert it. Sentinel convention (per common MSI patterns): a
+  # value alongside DefaultAssociationsConfiguration that marks ownership.
+  - label: "QA-011-step8: surface uninstall sentinel state (no destructive uninstall)"
+    shell: |
+        $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
+        if (Test-Path $key) {
+          $props = Get-ItemProperty -Path $key
+          Write-Host 'POLICY_KEY_PROPERTIES:'
+          $props.PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
+            Write-Host "  $($_.Name) = $($_.Value)"
+          }
+        }
+        # Common sentinel naming: RocketChat-owned, RCDefaultsOwner, or a
+        # value matching the install GUID alongside DefaultAssociationsConfiguration.
+        Write-Host 'STEP8_SENTINEL_STATE_DOCUMENTED — review properties above for sentinel ownership marker'
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

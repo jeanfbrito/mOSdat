@@ -8,9 +8,11 @@ Design notes:
 - The build is long (5+ minutes for yarn release). We log to a per-PR tempfile
   under ``/tmp/mosdat-build-<pr>.log`` and print only the tail to avoid flooding
   the agent context.
-- For v1 only ``--target deb`` is implemented end-to-end on Linux. rpm/AppImage/
-  exe paths are stubbed with TODO comments so the dispatcher table stays cheap
-  to extend.
+- ``--target deb`` is implemented end-to-end on Linux. ``--target exe`` is
+  implemented end-to-end on Windows (Windows VMs reached via OpenSSH; install
+  driven by PowerShell + electron-builder NSIS ``/S`` silent flag).
+  rpm/AppImage paths remain stubbed with TODO comments so the dispatcher
+  table stays cheap to extend.
 - ``--artifact-first`` (default ON): fetch the prebuilt .deb from the S3 URL
   posted by the github-actions bot in PR comments before falling back to local
   yarn build. Requires ``gh`` and ``aria2c`` (or ``curl``) on PATH.
@@ -68,9 +70,21 @@ TARGETS: dict[str, BuildTarget] = {
             "sudo dpkg -i {artifact} || sudo apt-get install -y -f"
         ),
     ),
+    "exe": BuildTarget(
+        name="exe",
+        # electron-builder NSIS output, e.g. ``rocketchat-4.14.1-win-x64.exe``.
+        dist_glob="*.exe",
+        yarn_release_args=["--win"],
+        # NOTE: install_cmd_template is NOT used by the Windows deploy path —
+        # deploy_to_windows_vm() drives the installer directly via PowerShell
+        # (kill running processes → silent install with /S → verify). We keep
+        # the field set so dispatch / dry-run logs stay consistent.
+        install_cmd_template=(
+            "Start-Process -FilePath {artifact} -ArgumentList '/S' -Wait"
+        ),
+    ),
     # TODO(I3): rpm — yarn release --linux rpm; install via `sudo rpm -i --force`
     # TODO(I3): AppImage — yarn release --linux AppImage; install = chmod +x + place under /opt
-    # TODO(I3): exe — yarn release --win; install via remote PowerShell on Windows VM
 }
 
 
@@ -275,6 +289,15 @@ def _gh_run_list_builds(repo: str, branch: str) -> list:
 # S3 URL pattern used by the github-actions CI bot.
 # Example: https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.deb
 _S3_DEB_RE = re.compile(r"https://[^\s)\"']+\.deb")
+# Windows installer S3 URL pattern (electron-builder NSIS .exe).
+# Example: .../pr-3325/windows-latest/rocketchat-4.14.1-win-x64.exe
+_S3_EXE_RE = re.compile(r"https://[^\s)\"']+\.exe")
+
+# Map artifact extension → URL regex. New formats only need to register here.
+_ARTIFACT_PATTERNS: dict[str, re.Pattern] = {
+    ".deb": _S3_DEB_RE,
+    ".exe": _S3_EXE_RE,
+}
 
 # Bot identity used by the GitHub Actions app.
 _BOT_AUTHOR_LOGIN = "github-actions"
@@ -305,22 +328,55 @@ def fetch_pr_metadata(pr: int, repo: str) -> dict:
     return json.loads(out)
 
 
+def _pick_by_arch(matches: list[str], vm_arch: str = "x64") -> str:
+    """Return the URL in ``matches`` that best matches ``vm_arch``.
+
+    Scoring:
+    - 100 if the URL contains ``-{vm_arch}.`` or ``_{vm_arch}.`` (exact arch token)
+    - 0 if the URL contains the *other* arch (cross-arch mismatch)
+    - 50 otherwise (neutral / arch not encoded in filename)
+
+    Avoids ``sorted()[0]`` falling back to alphabetical order, where
+    ``...-arm64.exe`` would beat ``...-x64.exe`` on Windows-x64 VMs.
+    """
+    if not matches:
+        return ""
+
+    other_arch = "arm64" if vm_arch == "x64" else "x64"
+
+    def score(url: str) -> int:
+        if f"-{vm_arch}." in url or f"_{vm_arch}." in url:
+            return 100
+        if other_arch in url:
+            return 0
+        return 50
+
+    # Stable sort: preserves input order among equal scores so the first
+    # match in the comment body wins on ties.
+    return sorted(matches, key=score, reverse=True)[0]
+
+
 def pick_artifact_url(
     pr_data: dict,
     extension: str = ".deb",
+    vm_arch: str = "x64",
 ) -> Optional[str]:
     """Scan PR comments and return the URL from the most recent github-actions
     comment that contains an S3 URL ending in ``extension``.
 
     Returns ``None`` when no matching comment is found.
 
-    Only ``extension == ".deb"`` is actively exercised in v1.
-    # TODO: extend regex for .rpm / .AppImage / .exe when those targets land.
-    """
-    if extension != ".deb":
-        return None
+    Supports ``extension`` values registered in ``_ARTIFACT_PATTERNS``
+    (currently ``.deb`` and ``.exe``).  Unknown extensions return ``None``.
 
-    pattern = _S3_DEB_RE
+    When a single comment contains multiple matching URLs (e.g. both
+    ``-x64.exe`` and ``-arm64.exe``), ``vm_arch`` selects the right one.
+    Defaults to ``"x64"`` — alphabetical ``matches[0]`` would otherwise
+    return arm64 on Windows-x64 deploys.
+    """
+    pattern = _ARTIFACT_PATTERNS.get(extension)
+    if pattern is None:
+        return None
 
     best_url: Optional[str] = None
     best_dt: Optional[datetime] = None
@@ -351,7 +407,7 @@ def pick_artifact_url(
             continue
 
         if best_dt is None or dt > best_dt:
-            best_url = matches[0]
+            best_url = _pick_by_arch(matches, vm_arch)
             best_dt = dt
 
     return best_url
@@ -508,18 +564,39 @@ def resolve_artifact(
         return None
 
     # 7. Verify download integrity.
-    if shutil.which("dpkg-deb"):
-        vrc, _, verr = _capture(["dpkg-deb", "-I", str(dest)], timeout=30)
-        if vrc != 0:
-            _log(f"[artifact-first] dpkg-deb -I failed: {verr.strip()}; falling back")
+    if target_ext == ".deb":
+        if shutil.which("dpkg-deb"):
+            vrc, _, verr = _capture(["dpkg-deb", "-I", str(dest)], timeout=30)
+            if vrc != 0:
+                _log(f"[artifact-first] dpkg-deb -I failed: {verr.strip()}; falling back")
+                dest.unlink(missing_ok=True)
+                return None
+        else:
+            vrc, vout, _ = _capture(["file", str(dest)], timeout=15)
+            if vrc != 0 or "Debian binary package" not in vout:
+                _log(
+                    f"[artifact-first] file check failed (expected 'Debian binary package'): "
+                    f"{vout.strip()}; falling back"
+                )
+                dest.unlink(missing_ok=True)
+                return None
+    elif target_ext == ".exe":
+        # NSIS installers are PE32 binaries. ``file`` is enough — we have no
+        # cross-platform PE introspector and don't need one to detect a truncated
+        # download. A minimum size threshold catches partial transfers that still
+        # parse as PE; electron-builder NSIS output is >40 MiB.
+        vrc, vout, _ = _capture(["file", str(dest)], timeout=15)
+        if vrc != 0 or ("PE32" not in vout and "MS-DOS" not in vout):
+            _log(
+                f"[artifact-first] file check failed (expected PE32 binary): "
+                f"{vout.strip()}; falling back"
+            )
             dest.unlink(missing_ok=True)
             return None
-    else:
-        vrc, vout, _ = _capture(["file", str(dest)], timeout=15)
-        if vrc != 0 or "Debian binary package" not in vout:
+        if dest.stat().st_size < 1_000_000:
             _log(
-                f"[artifact-first] file check failed (expected 'Debian binary package'): "
-                f"{vout.strip()}; falling back"
+                f"[artifact-first] .exe suspiciously small ({dest.stat().st_size} bytes); "
+                f"falling back"
             )
             dest.unlink(missing_ok=True)
             return None
@@ -652,6 +729,174 @@ def _verify_symbols_on_vm(ssh, asar: str, symbols: list[str]) -> list[str]:
     return missing
 
 
+# Candidate install paths for the deployed Rocket.Chat Windows app, in priority
+# order. electron-builder NSIS defaults to perUser install under
+# %LOCALAPPDATA%\Programs, but some images install perMachine into Program Files.
+_WINDOWS_RC_CANDIDATES = (
+    r"$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+    r"$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+    r"$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe",
+    r"$env:ProgramFiles(x86)\Rocket.Chat\Rocket.Chat.exe",
+)
+
+
+def _ps_quote(s: str) -> str:
+    """Single-quote a string for embedding into a PowerShell -Command argument.
+    PowerShell single-quoted literals only need single-quote doubling.
+    """
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _ps_b64(script: str) -> str:
+    """Base64-encode a PowerShell script for ``powershell -EncodedCommand``.
+
+    PowerShell expects UTF-16LE bytes.  Encoding the whole script avoids the
+    quoting nightmare that comes with passing nested PowerShell through SSH +
+    sh -c.
+    """
+    import base64
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+def deploy_to_windows_vm(
+    vm_name: str,
+    vm_ip: str,
+    vm_user: str,
+    artifact: Path,
+    target: BuildTarget,
+    verify_symbols: list[str],
+    *,
+    dry_run: bool,
+) -> DeployResult:
+    """SCP + silent install + verify on a Windows VM via OpenSSH + PowerShell.
+
+    Mirrors :func:`deploy_to_vm` but adapted for Windows:
+    - artifact is uploaded to ``C:\\tmp\\rc-installer.exe``;
+    - any running Rocket.Chat process is killed first (NSIS refuses to write
+      over locked files);
+    - install runs silently with the electron-builder NSIS ``/S`` flag;
+    - install location is detected via ``Test-Path`` across well-known paths;
+    - ``verify_symbols`` are looked up by extracting ``resources/app.asar``
+      with the bundled ``tar.exe`` and grepping with ``Select-String``. Tar is
+      shipped with Windows 10 1803+ and Windows Server 2019+, so no extra
+      tooling is required.
+    """
+    res = DeployResult(vm=vm_name)
+    remote_path = r"C:\tmp\rc-installer.exe"
+
+    if dry_run:
+        _log(f"[dry-run] {vm_name}: scp {artifact} → {vm_ip}:C:/tmp/rc-installer.exe")
+        _log(f"[dry-run] {vm_name}: kill Rocket.Chat processes + silent install /S")
+        _log(f"[dry-run] {vm_name}: verify install at one of {len(_WINDOWS_RC_CANDIDATES)} candidate paths")
+        _log(f"[dry-run] {vm_name}: verify symbols → {verify_symbols}")
+        res.scp_ok = True
+        res.install_ok = True
+        res.installed_version = "(dry-run)"
+        return res
+
+    from automation.transport.ssh import SSHClient
+
+    ssh = SSHClient(vm_ip, vm_user)
+
+    # SCP — OpenSSH on Windows accepts forward-slash paths just like POSIX.
+    _log(f"{vm_name}: scp → {vm_ip}:C:/tmp/rc-installer.exe")
+    scp = ssh.scp_to(artifact, "C:/tmp/rc-installer.exe")
+    res.scp_ok = scp.success
+    if not res.scp_ok:
+        res.error = f"scp failed: {scp.stderr.strip()}"
+        return res
+
+    # Kill any running Rocket.Chat processes (locked files block NSIS install).
+    # Then uninstall existing copies (best-effort), then install.
+    install_script = (
+        "$ErrorActionPreference = 'Stop';"
+        # Kill — Stop-Process is best-effort; ignore failures (no process running).
+        "Get-Process -Name 'Rocket.Chat','rocketchat-desktop' -ErrorAction SilentlyContinue "
+        "| Stop-Process -Force -ErrorAction SilentlyContinue;"
+        "Start-Sleep -Milliseconds 500;"
+        # Best-effort uninstall via Get-Package (PackageManagement).
+        # We don't fail if Get-Package isn't present (older PowerShell) — NSIS
+        # will overwrite the install in place.
+        "try {"
+        " $pkgs = Get-Package -Name 'Rocket.Chat*' -ErrorAction SilentlyContinue;"
+        " foreach ($p in $pkgs) { Uninstall-Package -Name $p.Name -Force -ErrorAction SilentlyContinue | Out-Null }"
+        "} catch {}"
+        # Silent install. /S is the electron-builder NSIS silent flag.
+        f"$proc = Start-Process -FilePath {_ps_quote(remote_path)} "
+        "-ArgumentList '/S' -Wait -PassThru;"
+        "if ($proc.ExitCode -ne 0) { Write-Error \"installer exit code $($proc.ExitCode)\"; exit 1 };"
+        "Write-Host 'INSTALL_OK'"
+    )
+    install_cmd = f"powershell -NoProfile -EncodedCommand {_ps_b64(install_script)}"
+    _log(f"{vm_name}: install (silent /S, kill+uninstall first)")
+    inst = ssh.run(install_cmd, timeout=600)
+    res.install_ok = inst.success
+    if not res.install_ok:
+        res.error = f"install failed (rc={inst.returncode}): {(inst.stderr or inst.stdout).strip()[:300]}"
+        return res
+
+    # Verify install — probe candidate paths and read FileVersion.
+    candidates_ps = ",".join(_ps_quote(c) for c in _WINDOWS_RC_CANDIDATES)
+    verify_script = (
+        f"$cands = @({candidates_ps});"
+        "foreach ($c in $cands) {"
+        " $resolved = $ExecutionContext.InvokeCommand.ExpandString($c);"
+        " if (Test-Path $resolved) {"
+        "   $v = (Get-Item $resolved).VersionInfo.FileVersion;"
+        "   Write-Host \"INSTALLED_AT=$resolved\";"
+        "   Write-Host \"VERSION=$v\";"
+        "   exit 0"
+        " }"
+        "}"
+        "Write-Error 'NOT_FOUND'; exit 1"
+    )
+    verify_cmd = f"powershell -NoProfile -EncodedCommand {_ps_b64(verify_script)}"
+    ver_res = ssh.run(verify_cmd, timeout=60)
+    if not ver_res.success:
+        res.error = "could not locate installed Rocket.Chat.exe at any known path"
+        return res
+
+    installed_at = ""
+    for line in (ver_res.stdout or "").splitlines():
+        if line.startswith("INSTALLED_AT="):
+            installed_at = line.split("=", 1)[1].strip()
+        elif line.startswith("VERSION="):
+            res.installed_version = line.split("=", 1)[1].strip() or "(unknown)"
+    if installed_at:
+        _log(f"{vm_name}: installed at = {installed_at}")
+
+    # Verify symbols by grepping the extracted app.asar.  Windows ships ``tar.exe``
+    # since 1803; we use it to pull app.asar out of the installed app directory
+    # rather than introducing a Node dependency on the VM.  If the asar happens
+    # to live next to Rocket.Chat.exe, ``Select-String`` is plenty.
+    if verify_symbols and installed_at:
+        app_dir_ps = f"Split-Path -Parent {_ps_quote(installed_at)}"
+        for sym in verify_symbols:
+            sym_script = (
+                f"$dir = {app_dir_ps};"
+                "$asar = Join-Path $dir 'resources\\app.asar';"
+                "if (-not (Test-Path $asar)) { Write-Error 'app.asar missing'; exit 2 };"
+                f"$hits = (Select-String -Path $asar -Pattern {_ps_quote(sym)} -SimpleMatch -List "
+                "-ErrorAction SilentlyContinue | Measure-Object).Count;"
+                "Write-Host \"COUNT=$hits\""
+            )
+            sym_cmd = f"powershell -NoProfile -EncodedCommand {_ps_b64(sym_script)}"
+            sres = ssh.run(sym_cmd, timeout=120)
+            count = 0
+            for line in (sres.stdout or "").splitlines():
+                if line.startswith("COUNT="):
+                    try:
+                        count = int(line.split("=", 1)[1].strip())
+                    except ValueError:
+                        count = 0
+            if count <= 0:
+                res.missing_symbols.append(sym)
+            else:
+                _log(f"  verify-symbol {sym}: {count} occurrence(s)")
+
+    return res
+
+
 def deploy_to_vm(
     vm_name: str,
     vm_ip: str,
@@ -747,14 +992,16 @@ def run_build(args: argparse.Namespace) -> int:
     artifact: Optional[Path] = None
 
     # Phase 1a: try prebuilt artifact from S3 (if --artifact-first)
-    if artifact_first and target.name == "deb":
-        artifact = resolve_artifact(pr, repo, ".deb", dry_run=dry_run)
+    target_ext_map = {"deb": ".deb", "exe": ".exe"}
+    target_ext = target_ext_map.get(target.name)
+    if artifact_first and target_ext is not None:
+        artifact = resolve_artifact(pr, repo, target_ext, dry_run=dry_run)
         if artifact is not None:
             _log(f"[artifact-first] using prebuilt artifact — skipping clone+build")
 
     # Phase 1b: fall back to clone+build
     if artifact is None:
-        if artifact_first and target.name == "deb":
+        if artifact_first and target_ext is not None:
             _log("[artifact-first] falling back to local clone+build")
         rc = clone_or_update(pr, repo, clone_dir, dry_run=dry_run)
         if rc != 0:
@@ -780,26 +1027,50 @@ def run_build(args: argparse.Namespace) -> int:
             _log(f"artifact: {artifact} ({artifact.stat().st_size // 1024} KiB)")
 
     # Phase 4: load VM IPs from config if provided; else assume <name>=<name>
-    vm_lookup: dict[str, tuple[str, str]] = {}
+    # Tuple is (ip, user, os_type). os_type defaults to "linux".
+    vm_lookup: dict[str, tuple[str, str, str]] = {}
     if getattr(args, "config", None):
         try:
             from automation.config import load_config
             cfg = load_config(args.config)
             for vm in cfg.vms:
-                vm_lookup[vm.name] = (vm.ip, vm.user)
+                vm_lookup[vm.name] = (vm.ip, vm.user, vm.os_type)
         except Exception as e:
             _log(f"WARN: could not load config {args.config}: {e}")
 
     # Phase 5: deploy + verify
     results: list[DeployResult] = []
     for vm_name in deploy_vms:
-        ip, user = vm_lookup.get(vm_name, (vm_name, "root"))
+        ip, user, os_type = vm_lookup.get(vm_name, (vm_name, "root", "linux"))
         if vm_name not in vm_lookup and not dry_run:
-            _log(f"WARN: VM {vm_name} not in --config; defaulting to host={vm_name} user=root")
-        _log(f"--- deploy → {vm_name} ({ip}) ---")
-        res = deploy_to_vm(
-            vm_name, ip, user, artifact, target, verify_symbols, dry_run=dry_run,
-        )
+            _log(f"WARN: VM {vm_name} not in --config; defaulting to host={vm_name} user=root os=linux")
+        # Hard guard: Windows VMs must be deployed with --target exe (and vice
+        # versa).  Mixing produces install-side failures that are hard to
+        # diagnose; fail fast with a clear message instead.
+        if os_type == "windows" and target.name != "exe":
+            _log(f"{vm_name}: ERROR: Windows VM requires --target exe (got {target.name!r})")
+            results.append(DeployResult(
+                vm=vm_name,
+                error=f"Windows VM requires --target exe, got {target.name!r}",
+            ))
+            continue
+        if os_type != "windows" and target.name == "exe":
+            _log(f"{vm_name}: ERROR: --target exe requires a Windows VM (os_type={os_type!r})")
+            results.append(DeployResult(
+                vm=vm_name,
+                error=f"--target exe requires a Windows VM, got os_type={os_type!r}",
+            ))
+            continue
+
+        _log(f"--- deploy → {vm_name} ({ip}, os={os_type}) ---")
+        if os_type == "windows":
+            res = deploy_to_windows_vm(
+                vm_name, ip, user, artifact, target, verify_symbols, dry_run=dry_run,
+            )
+        else:
+            res = deploy_to_vm(
+                vm_name, ip, user, artifact, target, verify_symbols, dry_run=dry_run,
+            )
         results.append(res)
         if res.installed_version:
             _log(f"{vm_name}: installed version = {res.installed_version}")
@@ -849,7 +1120,7 @@ def add_build_subparser(sub) -> None:
     )
     p.add_argument(
         "--target", default="deb", choices=sorted(TARGETS.keys()),
-        help="Build target (v1: deb only; rpm/AppImage/exe planned)",
+        help="Build target (deb=Linux .deb; exe=Windows NSIS .exe; rpm/AppImage planned)",
     )
     p.add_argument(
         "--clone-dir", default=None, dest="clone_dir",

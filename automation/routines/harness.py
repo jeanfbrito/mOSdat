@@ -298,15 +298,17 @@ def run_routine_test(
         with VncClient(proxmox, vmid=vm.vmid) as vnc:
             screenshotter = Screenshotter(vnc)
             injector = InputInjector(vnc, ssh, vm.is_windows)
-            # Stage 3c: dedicated persistent SSH for AT-SPI (ControlMaster
-            # multiplexing). Shell `ssh` stays non-persistent.
+            # Stage 3c / Stage 4: per-OS coordinate-free driver shares one
+            # persistent SSHClient. AtspiClient on Linux, UiaClient on Windows.
             from automation.atspi import AtspiClient as _AtspiClient
-            _ssh_atspi = (
-                SSHClient(vm_ip, vm_user, connect_timeout=10, persistent=True)
-                if not vm.is_windows
-                else None
-            )
-            _atspi_client = _AtspiClient(ssh=_ssh_atspi) if _ssh_atspi is not None else None
+            from automation.uia import UiaClient as _UiaClient
+            _ssh_atspi = SSHClient(vm_ip, vm_user, connect_timeout=10, persistent=True)
+            _atspi_client = None
+            _uia_client = None
+            if vm.is_windows:
+                _uia_client = _UiaClient(ssh=_ssh_atspi)
+            else:
+                _atspi_client = _AtspiClient(ssh=_ssh_atspi)
             try:
                 runner = FunctionalRunner(
                     vlm=vlm,
@@ -315,6 +317,7 @@ def run_routine_test(
                     screenshot_dir=screenshot_dir,
                     log_fn=log,
                     atspi=_atspi_client,
+                    uia=_uia_client,
                 )
                 parsed_steps = [parse_step(s) for s in steps]
                 passed, summary = runner.run_test(parsed_steps, name=routine_name)

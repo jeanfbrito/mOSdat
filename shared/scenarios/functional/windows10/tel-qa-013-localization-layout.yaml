@@ -1,0 +1,329 @@
+# qa_flow: TEL-QA-013
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/13-localization-layout.md
+# Authored 2026-05-23 — Windows 10 variant. Adapted from
+# linux/tel-qa-013-localization-layout.yaml.
+#
+# Mirrors the 5-step QA flow 1:1 (spec lines 35-40):
+#   1. Set app/system locale to English → Telephony copy readable.
+#   2. Check prompt / diagnostics / server picker / shortcut controls — no
+#      clipping or overlap.
+#   3. Repeat in Brazilian Portuguese.
+#   4. Repeat in German.
+#   5. Resize window to a narrow supported width → text wraps/truncates
+#      cleanly.
+#
+# Locale strategy on Windows (single-run constraint, inherited from Linux
+# variant):
+#   The Rocket.Chat Electron wrapper inherits its UI language from the OS
+#   user locale at launch. The Linux variant exports LANG=en_US.UTF-8 via
+#   the shell launch. On Windows the equivalent surfaces are:
+#     - [System.Globalization.CultureInfo]::CurrentUICulture (per-process).
+#     - HKCU:\Control Panel\International\LocaleName (per-user logon-time).
+#     - Get-WinUserLanguageList / Set-WinUserLanguageList (preferred-language).
+#   None of these can swap an Electron app's i18n bundle mid-process; a full
+#   process restart is required.
+#
+#   As on Linux, mOSdat has no in-app locale-override hook (no settings key
+#   isolated for `appLanguage` was observed in the codebase or routines —
+#   see the Linux variant header for the authoring sweep result). Therefore:
+#   this scenario covers the DEFAULT (English) locale on a single live run,
+#   exercising steps 1, 2, and 5. Steps 3 (pt-BR) and 4 (de-DE) are
+#   intentionally documented as deferred — same posture as the Linux
+#   sibling.
+#
+#   To extend to pt-BR / de-DE when a locale-override mechanism lands:
+#     - Add `vars: {ui_locale: "pt-BR"}` and call Set-WinUserLanguageList in
+#       the pre-stage block, restart the user session, then relaunch RC.
+#     - Re-run this scenario three times (en / pt-BR / de-DE) and compare
+#       captured screenshots for clipping regressions.
+#     - German specifically: ~30% longer compounds vs English — that is the
+#       main TEL-QA-013 layout-failure axis to watch for.
+#
+# Brief authoring rules (batch C):
+#   - `routine: cleanup-rocketchat` + `routine: launch-rocketchat` (per-OS
+#     resolver picks the Windows variant).
+#   - Pre-stage userData inline because the Windows launch routine takes no
+#     inputs. Telephony ON pre-staged because TEL-QA-013 requires
+#     telephony_enabled (flow front-matter `requires: [telephony_enabled]`).
+#   - PowerShell pre-stage block — same shape as TEL-QA-010 / TEL-QA-011.
+#   - AT-SPI primitives UNCHANGED (`atspi`, `wait_for`, `verify_atspi`).
+#   - Window resize on Windows uses PowerShell + Win32 user32!SetWindowPos
+#     (or Add-Type wrapper). Equivalent to wmctrl -e on Linux.
+#
+# Live-discovered widget names (mirroring Linux variant; same UI tree above
+# the OS boundary — confirmed by TEL-QA-010 anchoring):
+#   - kebab:       push button "Customize and control app"
+#   - settings:    menu item "Settings"
+#   - tab:         page tab "Voice & Video"
+#   - section:     check box "Telephony" inside Voice & Video
+#   - server pick: combo box / list item under the Telephony section header
+#   - shortcut:    entry / button for the global shortcut accelerator
+#   - diagnostics: label / push button with "iagnostic" substring
+#
+# Layout proof (Step 5 — narrow viewport):
+#   Resize the RC window to a narrow supported width (820 px wide, the
+#   minimum the rootWindowState pre-stage typically uses) via PowerShell
+#   user32!SetWindowPos, then re-verify the Telephony section + key labels
+#   are still findable via AT-SPI. UIA returning the node = the label/role
+#   surface survived the resize; a missing node is the failure signal.
+#
+# AT-SPI/UIA ratio: 100% AT-SPI for the in-app readability assertions; a
+# single PowerShell shell call for the SetWindowPos resize.
+
+name: "tel-qa-013-localization-layout"
+description: |
+  TEL-QA-013 — Localization and layout smoke (Windows 10).
+
+  Verifies Telephony UI labels render readably in the default locale (en)
+  on Windows and that the layout survives a narrow-viewport resize without
+  clipping out the key widgets (Telephony toggle, server picker, shortcut).
+  pt-BR and de-DE coverage is deferred — see header.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  narrow_width: "820"
+  narrow_height: "720"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings, telephony ON) ─────
+  # Mirrors linux/tel-qa-013-localization-layout.yaml line 92-143.
+  # Telephony ON is required by TEL-QA-013 front-matter.
+  - label: "QA-013-step1prep: pre-stage userData (2 servers, telephony ON)"
+    shell: |
+        $userDataDirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $userDataDirs) {
+          if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
+          $serversKv = @{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversKv, [System.Text.UTF8Encoding]::new($false))
+
+          $firstUrl = '{{ workspace_url }}'
+          if (-not $firstUrl.EndsWith('/')) { $firstUrl += '/' }
+          $mobileUrl = '{{ mobile_url }}'
+          if (-not $mobileUrl.EndsWith('/')) { $mobileUrl += '/' }
+
+          $config = @{
+            servers = @(
+              @{ url = $firstUrl; title = 'Workspace' },
+              @{ url = $mobileUrl; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $firstUrl }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $firstUrl
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $config, [System.Text.UTF8Encoding]::new($false))
+
+          $overrides = @{
+            isTelephonyEnabled = $true
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overrides, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_TEL_ON'
+
+  # ── QA-013-step1: Document active locale, launch RC ──────────────────────
+  # Windows analog of `LANG=en_US.UTF-8`. We surface (not enforce) the
+  # current user culture; the launch itself is via the Windows routine which
+  # does not currently inject a culture override.
+  - label: "QA-013-step1: document active OS locale (English default expected)"
+    shell: |
+        $cur = [System.Globalization.CultureInfo]::CurrentUICulture
+        Write-Host "CURRENT_UI_CULTURE=$($cur.Name)"
+        Write-Host "DISPLAY_NAME=$($cur.DisplayName)"
+        # We do not abort on non-en here — the deferred pt-BR/de-DE steps
+        # are explicitly documented; mismatch with en is logged for review.
+        if ($cur.Name -notmatch '^en') {
+          Write-Host "NOTE — running on non-English UI culture: $($cur.Name)"
+        }
+
+  - routine: launch-rocketchat
+
+  - label: "QA-013-step1: wait_for main window frame (English locale)"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # ── QA-013-step1: Navigate to Settings → Voice & Video ───────────────────
+  - label: "QA-013-step1: wait_for kebab button"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-013-step1: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-013-step1: wait_for Settings menu item"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-013-step1: click Settings menu item (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-013-step1: verify Settings screen opened (General tab)"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-013-step1: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-013-step1: wait_for Telephony section (Voice & Video opened)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 15}
+    retries: 1
+
+  # ── QA-013-step2: Check prompt / diagnostics / picker / shortcut surfaces
+  # (per spec line 37). Each surface gets an explicit verify_atspi anchor;
+  # a missing widget in the default locale is a hard fail.
+
+  - label: "QA-013-step2a: verify Telephony section label visible (en)"
+    verify_atspi: {role: "check box", name: "Telephony"}
+    retries: 1
+
+  - label: "QA-013-step2b: verify Voice & Video tab label readable (en)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-013-step2c: verify server picker surface visible"
+    wait_for:
+      any:
+        - {role: "combo box", name_substr: "server"}
+        - {role: "label", name_substr: "Preferred"}
+        - {role: "label", name_substr: "server"}
+      timeout: 10
+    retries: 1
+
+  - label: "QA-013-step2d: verify shortcut control surface visible"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "shortcut"}
+        - {role: "label", name_substr: "Shortcut"}
+        - {role: "entry", name_substr: "shortcut"}
+        - {role: "check box", name_substr: "shortcut"}
+      timeout: 10
+    retries: 1
+
+  - label: "QA-013-step2e: verify diagnostics trigger label visible"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "iagnostic"}
+        - {role: "push button", name_substr: "iagnostic"}
+        - {role: "toggle button", name_substr: "iagnostic"}
+        - {role: "section", name_substr: "iagnostic"}
+      timeout: 10
+    retries: 1
+
+  # ── QA-013-step3 (pt-BR): DEFERRED — single-locale constraint ────────────
+  # Same posture as the Linux variant. Re-running with Set-WinUserLanguageList
+  # 'pt-BR' + a logoff/logon cycle is the Windows equivalent of LANG=pt_BR.UTF-8.
+  - label: "QA-013-step3: pt-BR coverage deferred (single-locale constraint)"
+    shell: |
+      powershell -Command "Write-Host 'TEL-QA-013 step 3 (pt-BR) NOT RUN on this scenario invocation.'; Write-Host 'Re-run after Set-WinUserLanguageList pt-BR + logon cycle once a locale-override hook exists.'"
+
+  # ── QA-013-step4 (de-DE): DEFERRED — single-locale constraint ────────────
+  - label: "QA-013-step4: de-DE coverage deferred (single-locale constraint)"
+    shell: |
+      powershell -Command "Write-Host 'TEL-QA-013 step 4 (de-DE) NOT RUN on this scenario invocation.'; Write-Host 'Re-run after Set-WinUserLanguageList de-DE + logon cycle once a locale-override hook exists.'; Write-Host 'Watch German specifically for long-compound-word label overflow (~30% expansion vs en).'"
+
+  # ── QA-013-step5: Resize window to a narrow supported width ──────────────
+  # Windows equivalent of `wmctrl -e GRAVITY,X,Y,W,H`. We use Add-Type to
+  # P/Invoke user32!FindWindow + SetWindowPos. The window title may be
+  # "Rocket.Chat" or "Rocket.Chat - <workspace>" depending on the active
+  # workspace state, so we use FindWindow with a partial title via
+  # EnumWindows fallback.
+  # Implementation note: we avoid a multi-line PowerShell here-string (@'...'@)
+  # because PowerShell requires the closing '@ to sit at column 0, which is
+  # incompatible with a YAML `|` block scalar (column 0 terminates the block).
+  # Instead we use Add-Type -MemberDefinition with a single-quoted -join'd
+  # C# member-definition string — same P/Invoke surface, YAML-safe indentation.
+  - label: "QA-013-step5a: resize RC window to narrow {{ narrow_width }}x{{ narrow_height }}"
+    shell: |
+        $sig = @(
+          '[DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);',
+          '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'
+        ) -join ' '
+        $api = Add-Type -MemberDefinition $sig -Name WinApi -Namespace Native -PassThru
+        $rc = Get-Process -Name 'Rocket.Chat','rocketchat-desktop' -ErrorAction SilentlyContinue | Where-Object MainWindowHandle | Select-Object -First 1
+        if (-not $rc) {
+          Write-Error 'FAIL — could not find Rocket.Chat process with MainWindowHandle'
+          exit 1
+        }
+        $hwnd = $rc.MainWindowHandle
+        # SW_RESTORE = 9 (un-maximize before resize).
+        $api::ShowWindow($hwnd, 9) | Out-Null
+        # SetWindowPos: HWND_TOP=IntPtr.Zero, SWP_NOZORDER=0x0004.
+        $api::SetWindowPos($hwnd, [IntPtr]::Zero, 80, 80, {{ narrow_width }}, {{ narrow_height }}, 0x0004) | Out-Null
+        Start-Sleep -Seconds 1
+        Write-Host "WIN_HWND=$($hwnd.ToInt64()) NEW_SIZE={{ narrow_width }}x{{ narrow_height }}"
+
+  - label: "QA-013-step5b: wait_for layout settle (frame still present)"
+    wait_for: {any: [{role: "frame"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-013-step5c: verify Telephony section survives narrow viewport"
+    verify_atspi: {role: "check box", name: "Telephony"}
+    retries: 2
+
+  - label: "QA-013-step5d: verify Voice & Video tab survives narrow viewport"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 2
+
+  - label: "QA-013-step5e: verify server picker surface survives narrow viewport"
+    wait_for:
+      any:
+        - {role: "combo box", name_substr: "server"}
+        - {role: "label", name_substr: "Preferred"}
+        - {role: "label", name_substr: "server"}
+      timeout: 10
+    retries: 2
+
+  - label: "QA-013-step5f: verify shortcut surface survives narrow viewport"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "shortcut"}
+        - {role: "label", name_substr: "Shortcut"}
+        - {role: "entry", name_substr: "shortcut"}
+        - {role: "check box", name_substr: "shortcut"}
+      timeout: 10
+    retries: 2
+
+  - label: "QA-013-step5g: verify diagnostics surface survives narrow viewport"
+    wait_for:
+      any:
+        - {role: "label", name_substr: "iagnostic"}
+        - {role: "push button", name_substr: "iagnostic"}
+        - {role: "toggle button", name_substr: "iagnostic"}
+        - {role: "section", name_substr: "iagnostic"}
+      timeout: 10
+    retries: 2
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

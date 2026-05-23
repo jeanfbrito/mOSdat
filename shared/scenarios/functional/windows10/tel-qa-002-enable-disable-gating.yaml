@@ -1,0 +1,342 @@
+# qa_flow: TEL-QA-002
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/02-enable-disable-gating.md
+# Windows 10 variant. Adapted 2026-05-23 from
+# shared/scenarios/functional/linux/tel-qa-002-enable-disable-gating.yaml.
+#
+# Mirrors the 7-step QA flow 1:1:
+#   1. Fresh launch, Telephony NOT enabled → trigger tel: → RC does NOT handle.
+#   2. Navigate kebab → Settings → Voice & Video → find Telephony section.
+#   3. Ensure toggle is OFF.
+#   4. Trigger callto:+15551234567 → RC does NOT handle.
+#   5. Switch Telephony toggle ON (probe-by-modal: "Got it" only OFF→ON).
+#   6. Trigger tel:+15551234567 → RC opens the telephony dialpad.
+#   7. Trigger callto:+15551234567 → RC opens the telephony dialpad.
+#
+# Windows adaptations from linux source:
+#   - Inline shell launch + XAUTH → `routine: launch-rocketchat`.
+#   - `xdg-open tel:` → `powershell -Command "Start-Process 'tel:...'"`.
+#   - `xdg-mime query default x-scheme-handler/tel` →
+#     `Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\tel\UserChoice' -Name ProgId`
+#     (returns the ProgID currently bound to the `tel:` URL scheme — on a
+#     fresh Windows profile with Telephony OFF this should NOT be a
+#     Rocket.Chat ProgID. The HKCU UserChoice key is absent if the user
+#     has never picked a default → `-ErrorAction SilentlyContinue` returns
+#     `$null` ProgId, which we treat as "not bound to RC").
+#   - AT-SPI/UIA primitives unchanged; runner routes to UiaClient.
+#   - Worker path: `/tmp/mosdat_atspi_worker.py` → `C:\tmp\mosdat_uia_worker.py`.
+#   - `via: hint` on Fuselage ToggleSwitch — KEPT (UIA worker zero-extent walk).
+#
+# UI Variation note: Default-handler picker on Windows uses the OS "Choose an
+# app" sheet rather than xdg-mime. The internal RC routing (in-app dialpad /
+# server picker modal) is identical across platforms — same Fuselage widgets,
+# same AT-SPI/UIA names. Assertions therefore unchanged from linux.
+
+name: "tel-qa-002-enable-disable-gating"
+description: |
+  TEL-QA-002 — Enable/disable gating for tel: and callto: (Windows 10).
+
+  Fresh-launch-disabled → tel: ignored → callto: ignored → enable toggle →
+  tel: routes → callto: routes. Cycles master toggle, asserts both sides.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  test_number: "+15551234567"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings with telephony OFF) ─
+  - shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first += '/' }
+        $mobile = '{{ mobile_url }}'
+        if (-not $mobile.EndsWith('/')) { $mobile += '/' }
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          New-Item -Path $d -ItemType Directory -Force | Out-Null
+          $serversJson = @{ Workspace = '{{ workspace_url }}'; 'Mobile RC' = '{{ mobile_url }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = @{
+            servers = @(
+              @{ url = $first;  title = 'Workspace' },
+              @{ url = $mobile; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false;
+              minimized = $false; fullscreen = $false; normal = $true;
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = @{
+            isTelephonyEnabled = $false
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED'
+
+  # ── QA-002-step1: Fresh launch BEFORE enabling Telephony ─────────────────
+  - label: "QA-002-step1a: launch Rocket.Chat (fresh, telephony OFF pre-staged)"
+    routine: launch-rocketchat
+
+  - label: "QA-002-step1b: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-002-step1c: wait for workspace to fully load (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # Assert tel:/callto: protocol is NOT bound to Rocket.Chat ProgID.
+  # Reads HKCU UserChoice — absent (fresh profile) OR non-RC ProgID is PASS.
+  - label: "QA-002-step1d: assert tel: protocol NOT bound to Rocket.Chat (registry probe)"
+    shell: |
+        function Get-SchemeProgId($scheme) {
+          $key = "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\$scheme\UserChoice"
+          (Get-ItemProperty -Path $key -Name ProgId -ErrorAction SilentlyContinue).ProgId
+        }
+        $tel    = Get-SchemeProgId 'tel'
+        $callto = Get-SchemeProgId 'callto'
+        Write-Host "tel handler:    [$tel]"
+        Write-Host "callto handler: [$callto]"
+        if ($tel -and $tel -match 'RocketChat|Rocket\.Chat|rocketchat') {
+          Write-Error 'FAIL — tel: is bound to Rocket.Chat while Telephony OFF'
+          exit 1
+        }
+        if ($callto -and $callto -match 'RocketChat|Rocket\.Chat|rocketchat') {
+          Write-Error 'FAIL — callto: is bound to Rocket.Chat while Telephony OFF'
+          exit 1
+        }
+        Write-Host 'PROTOCOLS_NOT_BOUND_TO_RC_OK'
+
+  # Dispatch tel: via Start-Process and assert no telephony surface paints
+  # in RC. If RC is not the registered handler, Windows shows its own
+  # "Choose an app" picker (which never spawns an RC dialog/check box).
+  - label: "QA-002-step1e: Start-Process tel:{{ test_number }} (should NO-OP for RC)"
+    shell: |
+        try { Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue } catch {}
+        Start-Sleep -Seconds 2
+        Write-Host 'TEL_DISPATCHED'
+
+  - wait: 2
+
+  - label: "QA-002-step1f: verify NO telephony surface painted in RC (BLOCKED)"
+    shell: |
+        $probe = '{"ops":[' +
+          '{"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},' +
+          '{"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},' +
+          '{"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}' +
+          ']}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        Write-Host $res
+        $obj = $res | ConvertFrom-Json
+        $hits = @()
+        foreach ($k in 'got_it','call_btn','remember') {
+          if ($obj.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Host 'TEL_PROTOCOL_BLOCKED_OK (no telephony surface)'
+          exit 0
+        }
+        Write-Error "FAIL — telephony surface painted while telephony OFF: $($hits -join ',')"
+        exit 1
+
+  # ── QA-002-step2: Navigate kebab → Settings → Voice & Video ──────────────
+  - label: "QA-002-step2a: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-002-step2b: wait_for Settings menu item in kebab popup"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-002-step2c: click Settings menu item (UIA primary, VLM fallback)"
+    atspi: {role: "menu item", name: "Settings"}
+    localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
+    retries: 1
+
+  - label: "QA-002-step2d: wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-002-step2e: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-002-step2f: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-002-step2g: wait_for Telephony section (checkbox is the anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  # ── QA-002-step3: Ensure toggle is OFF (pre-stage already set it OFF) ────
+  - label: "QA-002-step3: verify toggle currently OFF (no Got it prompt visible)"
+    shell: |
+        $probe = '{"ops":[{"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}]}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        if (-not $obj.results.f.ok) {
+          Write-Host 'TELEPHONY_TOGGLE_OFF_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — Got it prompt visible; toggle is unexpectedly ON'
+        exit 1
+
+  - wait: 1
+
+  # ── QA-002-step4: Trigger callto: while disabled → must be ignored ───────
+  - label: "QA-002-step4a: Start-Process callto:{{ test_number }} (should NO-OP for RC)"
+    shell: |
+        try { Start-Process 'callto:{{ test_number }}' -ErrorAction SilentlyContinue } catch {}
+        Start-Sleep -Seconds 2
+        Write-Host 'CALLTO_DISPATCHED'
+
+  - wait: 2
+
+  - label: "QA-002-step4b: verify NO telephony surface painted in RC (BLOCKED, callto)"
+    shell: |
+        $probe = '{"ops":[' +
+          '{"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},' +
+          '{"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},' +
+          '{"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}' +
+          ']}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        $hits = @()
+        foreach ($k in 'got_it','call_btn','remember') {
+          if ($obj.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Host 'CALLTO_PROTOCOL_BLOCKED_OK'
+          exit 0
+        }
+        Write-Error "FAIL — telephony surface painted from callto while OFF: $($hits -join ',')"
+        exit 1
+
+  # ── QA-002-step5: Switch Telephony toggle ON ─────────────────────────────
+  # `via: hint` for the Fuselage ToggleSwitch zero-extent widget. The UIA
+  # worker supports the same ancestor-walk semantics as the AT-SPI worker.
+  # See docs/KNOWN_ISSUES.md "Fuselage ToggleSwitch AT-SPI action drift".
+  - label: "QA-002-step5a: invoke Telephony toggle ON (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 1
+
+  - label: "QA-002-step5b: wait_for Got it modal (confirms OFF→ON)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-002-step5c: dismiss the one-shot default-handler prompt"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  - wait: 2
+
+  # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
+  - label: "QA-002-step6a: Start-Process tel:{{ test_number }} (should ROUTE to RC)"
+    shell: |
+        Start-Process 'tel:{{ test_number }}'
+        Start-Sleep -Seconds 1
+        Write-Host 'TEL_DISPATCHED_ENABLED'
+
+  # wait_for a telephony surface to paint. With 2 workspaces and no
+  # preferred server, the server picker modal appears.
+  - label: "QA-002-step6b: wait_for telephony dispatch surface (tel: ROUTED)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ── QA-002-step7: callto: link also routes ───────────────────────────────
+  - label: "QA-002-step7a: Start-Process callto:{{ test_number }} (should ROUTE to RC)"
+    shell: |
+        Start-Process 'callto:{{ test_number }}'
+        Start-Sleep -Seconds 1
+        Write-Host 'CALLTO_DISPATCHED_ENABLED'
+
+  - label: "QA-002-step7b: wait_for telephony dispatch surface (callto: ROUTED)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+
+  # ── Round-trip: toggle OFF again and re-verify protocol is BLOCKED ───────
+  - label: "QA-002-roundtrip: click Telephony checkbox to disable"
+    atspi: {role: "check box", name: "Telephony"}
+    retries: 1
+
+  - wait: 2
+
+  - label: "QA-002-roundtrip: Start-Process tel:{{ test_number }} after OFF (should NO-OP)"
+    shell: |
+        try { Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue } catch {}
+        Start-Sleep -Seconds 2
+        Write-Host 'TEL_DISPATCHED_AFTER_DISABLE'
+
+  - wait: 2
+
+  - label: "QA-002-roundtrip: verify protocol BLOCKED again after toggling OFF"
+    shell: |
+        $probe = '{"ops":[' +
+          '{"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},' +
+          '{"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}' +
+          ']}'
+        $res = python C:\tmp\mosdat_uia_worker.py $probe 2>&1 | Out-String
+        $obj = $res | ConvertFrom-Json
+        $hits = @()
+        foreach ($k in 'call_btn','remember') {
+          if ($obj.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Host 'PROTOCOL_BLOCKED_AGAIN_AFTER_DISABLE_OK'
+          exit 0
+        }
+        Write-Error "FAIL — telephony surface still paints after disabling: $($hits -join ',')"
+        exit 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

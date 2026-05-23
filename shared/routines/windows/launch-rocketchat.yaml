@@ -1,0 +1,56 @@
+name: launch-rocketchat
+description: Launch Rocket.Chat Desktop on Windows with a11y flag via schtasks InteractiveToken (Session 1).
+schema_version: v1
+tags: [setup, launch, rocketchat, windows]
+
+inputs:
+  servers:
+    name: servers
+    type: list
+    required: false
+    default: []
+
+steps:
+  # SSH runs in Session 0; GUI lives in Session 1. Use schtasks InteractiveToken
+  # so Rocket.Chat appears on the logged-in user's desktop and is visible to UIA.
+  - shell: |
+      $ProgressPreference='SilentlyContinue'
+      $candidates = @(
+        '%LOCALAPPDATA%\Programs\rocketchat-desktop\Rocket.Chat.exe',
+        '%LOCALAPPDATA%\Programs\Rocket.Chat\Rocket.Chat.exe',
+        '%ProgramFiles%\Rocket.Chat\Rocket.Chat.exe'
+      )
+      $rcExe = $null
+      foreach ($c in $candidates) {
+        $c = [System.Environment]::ExpandEnvironmentVariables($c)
+        if (Test-Path $c) { $rcExe = $c; break }
+      }
+      if (-not $rcExe) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+      Write-Host "RC_EXE=$rcExe"
+
+      # Build encoded inner PS that starts RC with the a11y flag.
+      $inner = "Start-Process -FilePath '$rcExe' -ArgumentList '--force-renderer-accessibility'"
+      $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inner))
+
+      $null = New-Item -Force -ItemType Directory C:\tmp 2>$null
+      $xml = @"
+      <?xml version="1.0" encoding="UTF-16"?>
+      <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+        <Principals><Principal id="A"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+        <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
+        <Actions Context="A"><Exec><Command>powershell.exe</Command><Arguments>-ExecutionPolicy Bypass -EncodedCommand $enc</Arguments></Exec></Actions>
+      </Task>
+      "@
+      [System.IO.File]::WriteAllText('C:\tmp\mosdat_rc_launch.xml', $xml, [System.Text.Encoding]::Unicode)
+      schtasks /Delete /F /TN "mosdat-rc-launch" 2>$null | Out-Null
+      schtasks /Create /F /TN "mosdat-rc-launch" /XML 'C:\tmp\mosdat_rc_launch.xml' | Out-Null
+      schtasks /Run /TN "mosdat-rc-launch" | Out-Null
+      Start-Sleep -Seconds 2
+      schtasks /Delete /F /TN "mosdat-rc-launch" 2>$null | Out-Null
+
+      # Brief wait, then signal back. The scenario's subsequent wait_for handles
+      # the actual readiness gate (window enumeration via UIA).
+      Start-Sleep -Seconds 4
+      $procs = Get-Process -Name 'Rocket.Chat' -ErrorAction SilentlyContinue
+      Write-Host "RC_PROCS=$($procs.Count)"
+      exit 0

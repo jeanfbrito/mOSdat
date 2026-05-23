@@ -420,6 +420,7 @@ def test_3325_master_toggle_loads_with_default_cursor_motion():
         / "shared"
         / "scenarios"
         / "functional"
+        / "linux"
         / "3325-master-toggle.yaml"
     )
     if not scenario_path.exists():

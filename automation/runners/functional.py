@@ -18,6 +18,7 @@ from automation.vlm.screenshot import Screenshotter
 from typing import TYPE_CHECKING as _TC
 if _TC:
     from automation.atspi import AtspiClient as _AtspiClient  # noqa: F401
+    from automation.uia import UiaClient as _UiaClient  # noqa: F401
 from automation.runners.scenario_loader import (
     FunctionalStep,
     load_test_yaml,
@@ -81,6 +82,7 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         x11_mode: str = "off",
         app_process_name: str = "",
         atspi: "Optional[_AtspiClient]" = None,
+        uia: "Optional[_UiaClient]" = None,
     ):
         self.vlm = vlm
         self.screenshotter = screenshotter
@@ -88,6 +90,11 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         # Stage 1D: coordinate-free dispatch driver. None = AT-SPI disabled;
         # any step.atspi/step.verify_atspi will RuntimeError loudly.
         self.atspi = atspi
+        # Windows analog of AT-SPI. Mutually exclusive in practice (a VM is
+        # either Linux or Windows), but the runner accepts both kwargs so the
+        # 5 wiring sites pass whichever matches the VM's os_type. See
+        # self.a11y for the unified accessor used by step dispatch.
+        self.uia = uia
         self._app_process_name = app_process_name
         self.screenshot_dir = screenshot_dir
         self.log = log_fn
@@ -115,6 +122,34 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         # CLI overrides for click-verify and canary modes
         self._click_verify_override = click_verify_override
         self._canary_override = canary_override
+
+    @property
+    def a11y(self):
+        """Active accessibility driver — UiaClient on Windows VMs, AtspiClient
+        on Linux VMs. Returns None when neither was wired; step dispatch raises
+        a RuntimeError naming both clients in that case.
+
+        Both clients expose the same public API (find/click/verify/wait_for/
+        tree_dump). Callers pass `input_injector=self.injector` for symmetry;
+        UiaClient accepts the kwarg and ignores it (VM-side pointer mode).
+        """
+        return self.uia or self.atspi
+
+    def _require_a11y(self, field_name: str):
+        """Return the active a11y driver or raise a RuntimeError that names
+        both possible clients. Centralized so the four call-sites
+        (step.atspi / step.verify_atspi / step.wait_for) report identical
+        wiring hints.
+        """
+        drv = self.a11y
+        if drv is None:
+            raise RuntimeError(
+                f"step.{field_name} is set but FunctionalRunner was constructed "
+                "without an AtspiClient or UiaClient — wire it via "
+                "FunctionalRunner(..., atspi=...) for Linux VMs or "
+                "FunctionalRunner(..., uia=...) for Windows VMs"
+            )
+        return drv
 
 
     def _save_screenshot(self, img: Image.Image, label: str) -> None:

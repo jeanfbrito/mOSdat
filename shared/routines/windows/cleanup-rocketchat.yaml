@@ -1,0 +1,29 @@
+name: cleanup-rocketchat
+description: Kill all Rocket.Chat processes and wipe user data (Windows).
+schema_version: v1
+tags: [setup, cleanup, rocketchat, windows]
+
+steps:
+  - shell: |
+        $procs = @('Rocket.Chat','Rocket.Chat (development)','rocketchat-desktop')
+        foreach ($p in $procs) {
+          Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+        # belt-and-braces taskkill fallback
+        taskkill /F /IM 'Rocket.Chat.exe' 2>$null
+        taskkill /F /IM 'rocketchat-desktop.exe' 2>$null
+        exit 0
+
+  - shell: |
+        $paths = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)",
+          "$env:LOCALAPPDATA\Rocket.Chat",
+          "$env:LOCALAPPDATA\Rocket.Chat (development)"
+        )
+        foreach ($p in $paths) {
+          if (Test-Path $p) { Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue }
+          New-Item -Path $p -ItemType Directory -Force | Out-Null
+        }
+        Write-Host 'WIPE_DONE'

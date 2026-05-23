@@ -1,0 +1,578 @@
+# qa_flow: TEL-QA-014
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/14-negative-cases.md
+# Authored 2026-05-23 — Windows 10 variant. Adapted from
+# linux/tel-qa-014-negative-cases.yaml.
+#
+# Mirrors the 7-step QA flow 1:1 (spec lines 36-42):
+#   1. Disable Telephony, click a valid phone link → no call placed.
+#   2. Fresh profile, zero workspaces, enable Telephony, click a phone link
+#      → no crash, no call placed. [SKIPPED — see comment block]
+#   3. Click empty `tel:` → no call placed (malformed input gracefully
+#      rejected).
+#   4. Click `callto:?subject=empty` → no call placed (query-only rejected).
+#   5. Multi-workspace picker opens → user CANCELS via Escape → no call.
+#   6. Two phone links in quick succession → app avoids duplicate modal
+#      failures, does not crash.
+#   7. Stale remembered workspace → picker opens instead of silently failing.
+#
+# Brief authoring rules (batch C):
+#   - `routine: cleanup-rocketchat` + `routine: launch-rocketchat` per-OS.
+#   - PowerShell `Start-Process 'tel:...'` and `Start-Process 'callto:...'`
+#     replace `xdg-open`. Same fire-and-forget semantics; the assertion is
+#     always on the RC AT-SPI surface, not on the dispatch exit code.
+#   - userData path on Windows: $env:APPDATA\Rocket.Chat. Pre-stage inline
+#     via PowerShell ConvertTo-Json.
+#   - Absence-check (no-surface-painted) pattern carried over: a PowerShell
+#     wrapper around the same /tmp/mosdat_atspi_worker.py probe used on
+#     Linux. The worker is OS-agnostic (Python + pyatspi/UIA), so the JSON
+#     contract is identical; we change only the dispatcher and the
+#     conditional that maps "not found" → "OK".
+#   - AT-SPI primitives (`atspi`, `wait_for`, `verify_atspi`) UNCHANGED.
+#   - `key: Escape` UNCHANGED.
+#
+# STEP 2 SKIP — upstream PR #3325 zero-workspaces TypeError:
+#   Per the batch C brief: "For Windows, do the same SKIP unless the bug is
+#   platform-specific (it's a setupServers null-deref — should reproduce on
+#   Windows too)." The bug is in
+#     /opt/Rocket.Chat/resources/app.asar/app/main.js:6581:26
+#   (TypeError: Cannot read properties of null reading 'url' in
+#    setupServers). The .asar bundle is the same on Windows; only the path
+#   prefix changes
+#     $env:LOCALAPPDATA\Programs\Rocket.Chat\resources\app.asar\app\main.js
+#   The JS logic (select() on empty servers array) is platform-agnostic, so
+#   the crash reproduces. SKIP per brief. The sub-scenario steps 2a-2p are
+#   preserved verbatim as commented placeholders so re-enable is uncomment-
+#   only. See docs/KNOWN_ISSUES.md for the Linux variant context.
+#
+# Absence-check worker on Windows:
+#   The Linux variant uses /tmp/mosdat_atspi_worker.py. On Windows the
+#   equivalent path is %TEMP%\mosdat_atspi_worker.py. We invoke it via
+#   `python3` (assumed on PATH per the test bench provisioning) and parse
+#   the JSON output identically. If the worker is absent we fail the step;
+#   the runner provisioning is expected to drop the worker on both OSes.
+#
+# AT-SPI/UIA ratio: 100% AT-SPI (assertions). PowerShell only as the
+# dispatch + pre-stage transport. No VLM fallback.
+
+name: "tel-qa-014-negative-cases"
+description: |
+  TEL-QA-014 — Negative and edge cases for tel:/callto: deeplinks
+  (Windows 10).
+
+  Disabled-state ignore → fresh-profile zero-workspaces (SKIPPED, upstream
+  bug) → malformed inputs (empty tel:, query-only callto:) gracefully
+  rejected → cancel picker without dispatch → rapid-fire dedupe → stale
+  remembered workspace recovery. Every assertion is AT-SPI based; no VLM.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  stale_url: "https://stale-removed.example.invalid"
+  test_number: "+15551234567"
+  test_number_b: "+15557654321"
+  test_number_c: "+15550009999"
+
+steps:
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 1 — Step 1: Telephony DISABLED → valid tel: link is ignored
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - routine: cleanup-rocketchat
+
+  # Pre-stage userData with two workspaces but Telephony OFF.
+  - label: "QA-014-step1a: pre-stage userData (2 servers, telephony OFF)"
+    shell: |
+        $userDataDirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $userDataDirs) {
+          if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
+          $serversKv = @{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversKv, [System.Text.UTF8Encoding]::new($false))
+
+          $firstUrl = '{{ workspace_url }}'
+          if (-not $firstUrl.EndsWith('/')) { $firstUrl += '/' }
+          $mobileUrl = '{{ mobile_url }}'
+          if (-not $mobileUrl.EndsWith('/')) { $mobileUrl += '/' }
+
+          $config = @{
+            servers = @(
+              @{ url = $firstUrl; title = 'Workspace' },
+              @{ url = $mobileUrl; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $firstUrl }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $firstUrl
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $config, [System.Text.UTF8Encoding]::new($false))
+
+          $overrides = @{
+            isTelephonyEnabled = $false
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overrides, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_TEL_OFF'
+
+  - routine: launch-rocketchat
+
+  - label: "QA-014-step1c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-014-step1d: wait for workspace to fully load (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-014-step1e: Start-Process 'tel:{{ test_number }}' while Telephony OFF"
+    shell: |
+        Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Write-Host 'START_PROCESS_TEL_OFF_DISPATCHED'
+
+  - wait: 2
+
+  - label: "QA-014-step1f: verify NO call request placed (no telephony surface)"
+    shell: |
+        $probe = '{ "ops": [ {"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}, {"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"}, {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"} ] }'
+        $worker = "$env:TEMP\mosdat_atspi_worker.py"
+        if (-not (Test-Path $worker)) {
+          Write-Error "FAIL — worker not found at $worker"
+          exit 1
+        }
+        $res = python3 $worker $probe 2>&1 | Out-String
+        $parsed = $res | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $parsed) {
+          Write-Error "FAIL — worker did not return JSON: $res"
+          exit 1
+        }
+        $hits = @()
+        foreach ($k in @('got_it','call_btn','remember')) {
+          if ($parsed.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Host 'STEP1_NO_CALL_PLACED_OK'
+          exit 0
+        }
+        Write-Error "FAIL — telephony surface painted while telephony OFF: $($hits -join ',')"
+        exit 1
+
+  - label: "QA-014-step1g: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 2 — Step 2: Fresh profile, ZERO workspaces, enable Telephony, click
+  #          a phone link → no crash, no call placed.
+  #
+  # SKIPPED 2026-05-23 — same upstream PR #3325 (feat/telephony-deeplink)
+  # zero-workspaces TypeError affects Windows. The bug is in app.asar/app/
+  # main.js setupServers — the .asar bundle is shipped identically across
+  # platforms; only the install-root prefix changes. The setupServers
+  # null-deref reproduces on Windows.
+  #
+  # On Windows the install path is
+  #   $env:LOCALAPPDATA\Programs\Rocket.Chat\resources\app.asar
+  # The JS logic ("select() on empty servers array, expects ≥1 element,
+  # null returned, .url throws") is platform-agnostic.
+  #
+  # Re-enable when PR #3325 fixes the zero-workspaces edge case. See the
+  # Linux variant for the full sub-scenario.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step2: SKIPPED — upstream PR #3325 bug (zero-workspaces TypeError, cross-platform)"
+    shell: |
+      powershell -Command "Write-Host 'SKIPPED — PR feat/telephony-deeplink crashes on zero-workspaces.'; Write-Host 'TypeError: Cannot read properties of null (reading url) at setupServers (main.js:6581)'; Write-Host '.asar bundle is platform-agnostic; bug reproduces on Windows. See linux/tel-qa-014-negative-cases.yaml for sub-scenario.'"
+
+  # --- BEGIN SKIPPED step2 sub-scenario (re-enable when PR #3325 is fixed) ---
+  # See shared/scenarios/functional/linux/tel-qa-014-negative-cases.yaml
+  # lines 226-397 for the verbatim sub-scenario. Windows equivalents:
+  #   - rm -rf "$HOME/.config/Rocket.Chat" → Remove-Item -Recurse -Force
+  #     "$env:APPDATA\Rocket.Chat"
+  #   - xdg-open 'tel:...' → Start-Process 'tel:...'
+  #   - All AT-SPI probes UNCHANGED (atspi/wait_for/verify_atspi).
+  #   - kebab→Settings→Voice & Video→Telephony toggle path UNCHANGED.
+  # --- END SKIPPED step2 sub-scenario ---
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 3 — Step 3: Empty `tel:` rejected. Re-stage profile with 2
+  # workspaces + Telephony ENABLED so we are past the "feature gated"
+  # state — this is purely about malformed inputs.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - routine: cleanup-rocketchat
+
+  - label: "QA-014-step3a: pre-stage userData (2 servers, telephony ON)"
+    shell: |
+        $userDataDirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $userDataDirs) {
+          if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
+          $serversKv = @{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversKv, [System.Text.UTF8Encoding]::new($false))
+
+          $firstUrl = '{{ workspace_url }}'
+          if (-not $firstUrl.EndsWith('/')) { $firstUrl += '/' }
+          $mobileUrl = '{{ mobile_url }}'
+          if (-not $mobileUrl.EndsWith('/')) { $mobileUrl += '/' }
+
+          $config = @{
+            servers = @(
+              @{ url = $firstUrl; title = 'Workspace' },
+              @{ url = $mobileUrl; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $firstUrl }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $firstUrl
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $config, [System.Text.UTF8Encoding]::new($false))
+
+          $overrides = @{
+            isTelephonyEnabled = $true
+            telephonyPreferredServer = $null
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overrides, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_TEL_ON'
+
+  - routine: launch-rocketchat
+
+  - label: "QA-014-step3c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-014-step3d: wait for kebab present (workspace loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # Empty tel: — scheme with no payload.
+  - label: "QA-014-step3e: Start-Process 'tel:' (malformed, empty payload)"
+    shell: |
+        Start-Process 'tel:' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Write-Host 'START_PROCESS_TEL_EMPTY'
+
+  - wait: 3
+
+  - label: "QA-014-step3f: verify empty tel: rejected — no picker/dialpad painted"
+    shell: |
+        $probe = '{ "ops": [ {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}, {"id":"ws1","op":"find","role":"push button","name":"rocketchat","name_substr":true,"app_filter":"rocket"}, {"id":"phone","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"} ] }'
+        $worker = "$env:TEMP\mosdat_atspi_worker.py"
+        $res = python3 $worker $probe 2>&1 | Out-String
+        $parsed = $res | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $parsed) { Write-Error "FAIL — worker JSON parse: $res"; exit 1 }
+        $hits = @()
+        foreach ($k in @('remember','ws1','phone')) {
+          if ($parsed.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Host 'STEP3_EMPTY_TEL_REJECTED_OK'
+          exit 0
+        }
+        Write-Error "FAIL — empty tel: surfaced a telephony UI: $($hits -join ',')"
+        exit 1
+
+  - label: "QA-014-step3g: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 4 — Step 4: callto:?subject=empty (query-only) rejected.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step4a: Start-Process 'callto:?subject=empty' (query-only)"
+    shell: |
+        Start-Process 'callto:?subject=empty' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Write-Host 'START_PROCESS_CALLTO_QUERY_ONLY'
+
+  - wait: 3
+
+  - label: "QA-014-step4b: verify query-only callto: rejected — no surface painted"
+    shell: |
+        $probe = '{ "ops": [ {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}, {"id":"ws1","op":"find","role":"push button","name":"rocketchat","name_substr":true,"app_filter":"rocket"}, {"id":"phone","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"} ] }'
+        $worker = "$env:TEMP\mosdat_atspi_worker.py"
+        $res = python3 $worker $probe 2>&1 | Out-String
+        $parsed = $res | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $parsed) { Write-Error "FAIL — worker JSON parse: $res"; exit 1 }
+        $hits = @()
+        foreach ($k in @('remember','ws1','phone')) {
+          if ($parsed.results.$k.ok) { $hits += $k }
+        }
+        if ($hits.Count -eq 0) {
+          Write-Host 'STEP4_QUERY_ONLY_CALLTO_REJECTED_OK'
+          exit 0
+        }
+        Write-Error "FAIL — query-only callto: surfaced a telephony UI: $($hits -join ',')"
+        exit 1
+
+  - label: "QA-014-step4c: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 5 — Step 5: Multi-workspace picker opens, user CANCELS via Escape.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step5a: Start-Process 'tel:{{ test_number }}' (should open picker)"
+    shell: |
+        Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        Write-Host 'START_PROCESS_TEL_MULTIWS'
+
+  - label: "QA-014-step5b: wait_for server picker (any picker surface)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-014-step5c: cancel picker via Escape"
+    key: Escape
+
+  - wait: 1
+
+  - label: "QA-014-step5d: verify picker dismissed (no Remember checkbox visible)"
+    shell: |
+        $probe = '{ "ops": [ {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"} ] }'
+        $worker = "$env:TEMP\mosdat_atspi_worker.py"
+        $res = python3 $worker $probe 2>&1 | Out-String
+        $parsed = $res | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $parsed) { Write-Error "FAIL — worker JSON parse: $res"; exit 1 }
+        if (-not $parsed.results.remember.ok) {
+          Write-Host 'STEP5_PICKER_DISMISSED_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — Remember-for-future-calls still visible after Escape'
+        exit 1
+
+  - label: "QA-014-step5e: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 6 — Step 6: Two phone links in quick succession. Duplicate IPC
+  #          listener dedupe (commit ab816c0db). At most ONE picker.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step6a: rapid-fire two tel: links via Start-Process"
+    shell: |
+        Start-Process 'tel:{{ test_number }}' -ErrorAction SilentlyContinue
+        Start-Process 'tel:{{ test_number_b }}' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        Write-Host 'TEL_RAPID_FIRE_DISPATCHED'
+
+  - label: "QA-014-step6b: wait_for picker surface (at least one)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-014-step6c: verify NO duplicate modal + app alive"
+    shell: |
+        $probe = '{ "ops": [ {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"} ] }'
+        $worker = "$env:TEMP\mosdat_atspi_worker.py"
+        $res = python3 $worker $probe 2>&1 | Out-String
+        $parsed = $res | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $parsed) { Write-Error "FAIL — worker JSON parse: $res"; exit 1 }
+        if ($parsed.results.remember.ok) {
+          Write-Host 'STEP6_AT_LEAST_ONE_MODAL_OK'
+        } else {
+          Write-Error 'FAIL — no picker surface after rapid-fire dispatch'
+          exit 1
+        }
+        # App-alive sanity: RC process present.
+        $rc = Get-Process -Name 'Rocket.Chat','rocketchat-desktop' -ErrorAction SilentlyContinue
+        if ($rc) {
+          Write-Host 'STEP6_APP_ALIVE_OK'
+        } else {
+          Write-Error 'FAIL — RC process not running after rapid-fire'
+          exit 1
+        }
+
+  - label: "QA-014-step6d: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 7 — Step 7: Stale remembered workspace. preferred_server points at
+  #          a workspace not in the server list → picker opens (graceful
+  #          fallback) instead of silently routing somewhere unintended.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - routine: cleanup-rocketchat
+
+  - label: "QA-014-step7a: pre-stage stale telephonyPreferredServer + 2 real servers"
+    shell: |
+        $userDataDirs = @(
+          "$env:APPDATA\Rocket.Chat",
+          "$env:APPDATA\Rocket.Chat (development)"
+        )
+        foreach ($d in $userDataDirs) {
+          if (-not (Test-Path $d)) { New-Item -Path $d -ItemType Directory -Force | Out-Null }
+          $serversKv = @{
+            'Workspace' = '{{ workspace_url }}'
+            'Mobile RC' = '{{ mobile_url }}'
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversKv, [System.Text.UTF8Encoding]::new($false))
+
+          $firstUrl = '{{ workspace_url }}'
+          if (-not $firstUrl.EndsWith('/')) { $firstUrl += '/' }
+          $mobileUrl = '{{ mobile_url }}'
+          if (-not $mobileUrl.EndsWith('/')) { $mobileUrl += '/' }
+          $staleUrl = '{{ stale_url }}'
+          if (-not $staleUrl.EndsWith('/')) { $staleUrl += '/' }
+
+          $config = @{
+            servers = @(
+              @{ url = $firstUrl; title = 'Workspace' },
+              @{ url = $mobileUrl; title = 'Mobile RC' }
+            )
+            currentView = @{ url = $firstUrl }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false
+              minimized = $false; fullscreen = $false; normal = $true
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $firstUrl
+            '__internal__' = @{ migrations = @{ version = '4.14.1' } }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $config, [System.Text.UTF8Encoding]::new($false))
+
+          $overrides = @{
+            isTelephonyEnabled = $true
+            # STALE: preferred server URL not present in `servers`.
+            telephonyPreferredServer = $staleUrl
+            telephonyGlobalShortcutConfig = @{ enabled = $false; accelerator = $null }
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          } | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overrides, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'STALE_PREFERRED_SERVER_STAGED'
+
+  - routine: launch-rocketchat
+
+  - label: "QA-014-step7c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-014-step7d: wait for kebab present (workspace loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-014-step7e: Start-Process 'tel:{{ test_number_c }}' with stale preferred server"
+    shell: |
+        Start-Process 'tel:{{ test_number_c }}' -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        Write-Host 'START_PROCESS_TEL_STALE_PREFERRED'
+
+  # Expected: stale preferred is detected → picker opens with the REAL
+  # workspaces (graceful fallback). Silent failure would also fail this.
+  - label: "QA-014-step7f: wait_for picker to appear (graceful fallback)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-014-step7g: verify stale-URL workspace NOT offered as dispatch target"
+    shell: |
+        $probe = '{ "ops": [ {"id":"stale","op":"find","role":"push button","name":"stale-removed.example.invalid","name_substr":true,"app_filter":"rocket"} ] }'
+        $worker = "$env:TEMP\mosdat_atspi_worker.py"
+        $res = python3 $worker $probe 2>&1 | Out-String
+        $parsed = $res | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if (-not $parsed) { Write-Error "FAIL — worker JSON parse: $res"; exit 1 }
+        if (-not $parsed.results.stale.ok) {
+          Write-Host 'STEP7_STALE_URL_NOT_OFFERED_OK'
+          exit 0
+        }
+        Write-Error 'FAIL — stale removed workspace surfaced as a dispatch target'
+        exit 1
+
+  - label: "QA-014-step7h: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Final cleanup
+  # ═════════════════════════════════════════════════════════════════════════
+  - routine: cleanup-rocketchat
