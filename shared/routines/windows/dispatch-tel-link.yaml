@@ -1,0 +1,83 @@
+name: dispatch-tel-link
+description: "Dispatch a tel: or callto: deep link to the running Windows RC instance from the interactive desktop session"
+schema_version: v1
+tags: [dispatch, deeplink, telephony, rocketchat, windows]
+
+inputs:
+  link:
+    name: link
+    type: string
+    required: false
+    default: ""
+  number:
+    name: number
+    type: string
+    required: false
+    default: ""
+  scheme:
+    name: scheme
+    type: string
+    required: false
+    default: "tel"
+  marker:
+    name: marker
+    type: string
+    required: false
+    default: "DISPATCH_TEL_DONE"
+  settle_seconds:
+    name: settle_seconds
+    type: int
+    required: false
+    default: 0
+
+steps:
+  # SSH runs outside the user's desktop session. Launch the second RC instance
+  # through an InteractiveToken task so Electron delivers the link to the
+  # already-running GUI instance via the second-instance event.
+  - shell: |
+      $ProgressPreference='SilentlyContinue'
+      $link = '{{ link }}'
+      if ([string]::IsNullOrWhiteSpace($link)) {
+        $link = '{{ scheme }}:{{ number }}'
+      }
+      if ([string]::IsNullOrWhiteSpace($link) -or $link -eq ':') {
+        Write-Error 'dispatch-tel-link requires link or scheme+number'
+        exit 1
+      }
+
+      $candidates = @(
+        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
+        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
+        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
+      )
+      $rcExe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $rcExe) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
+
+      $escapedExe = $rcExe.Replace("'", "''")
+      $escapedLink = $link.Replace("'", "''")
+      $inner = "Start-Process -FilePath '$escapedExe' -ArgumentList '$escapedLink'"
+      $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inner))
+
+      $taskName = "mosdat-rc-dispatch-$([Guid]::NewGuid().ToString('N'))"
+      $xmlPath = "C:\tmp\$taskName.xml"
+      $null = New-Item -Force -ItemType Directory C:\tmp 2>$null
+      $xml = @"
+      <?xml version="1.0" encoding="UTF-16"?>
+      <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+        <Principals><Principal id="A"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+        <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
+        <Actions Context="A"><Exec><Command>powershell.exe</Command><Arguments>-ExecutionPolicy Bypass -EncodedCommand $enc</Arguments></Exec></Actions>
+      </Task>
+      "@
+      [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::Unicode)
+      schtasks /Create /F /TN $taskName /XML $xmlPath | Out-Null
+      schtasks /Run /TN $taskName | Out-Null
+      Start-Sleep -Seconds 2
+      schtasks /Delete /F /TN $taskName 2>$null | Out-Null
+      Remove-Item -Path $xmlPath -Force -ErrorAction SilentlyContinue
+
+      $settleSeconds = {{ settle_seconds }}
+      if ($settleSeconds -gt 0) {
+        Start-Sleep -Seconds $settleSeconds
+      }
+      Write-Host '{{ marker }}'

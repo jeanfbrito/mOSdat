@@ -10,7 +10,6 @@ All SSH calls are mocked; no Windows VM and no real UIA tree required.
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -101,8 +100,11 @@ class TestViaRouting:
 
 class TestPointerMode:
 
-    def _setup(self, *, find_extents=True, verify_match="exact",
-               find_path="/0/1/2"):
+    def _setup(
+        self, *, find_extents=True, verify_match="exact",
+        find_path="/0/1/2", at_point_name="x",
+        at_point_role_override=None
+    ):
         """Build a client whose run_batch returns a configurable response.
 
         Uses the new `find_all` candidate-iteration wire shape: one
@@ -137,6 +139,9 @@ class TestPointerMode:
         else:
             raise ValueError(verify_match)
 
+        if at_point_role_override is not None:
+            at_point_role = at_point_role_override
+
         def fake_run_batch(ops, **kwargs):
             # find_all batch (replaces self.find for candidate iteration)
             if len(ops) == 1 and ops[0].get("op") == "find_all":
@@ -153,7 +158,7 @@ class TestPointerMode:
                 v_op = next(o for o in ops if o["id"] == "v")
                 return {"ok": True, "results": {
                     "m": {"ok": True, "x": v_op["x"], "y": v_op["y"]},
-                    "v": {"ok": True, "role": at_point_role, "name": "x",
+                    "v": {"ok": True, "role": at_point_role, "name": at_point_name,
                           "path": at_point_path,
                           "x": v_op["x"], "y": v_op["y"], "under_app": True},
                 }}
@@ -189,6 +194,18 @@ class TestPointerMode:
     def test_via_pointer_ancestor_match_clicks(self):
         client, _ = self._setup(verify_match="ancestor")
         result = client.click("Button", name="Connect")
+        assert result["ok"] is True
+        assert result["verified"] is True
+
+    def test_via_pointer_same_role_honors_name_substr(self):
+        client, _ = self._setup(
+            verify_match="miss",
+            at_point_role_override="Button",
+            at_point_name="Southlogic rocketchat.jeanbrito.com",
+        )
+        result = client.click(
+            "Button", name="rocketchat.jeanbrito.com", name_substr=True
+        )
         assert result["ok"] is True
         assert result["verified"] is True
 

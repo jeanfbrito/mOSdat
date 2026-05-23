@@ -913,6 +913,13 @@ class UiaClient:
             actual_role = v.get("role", "")
             actual_name = v.get("name", "")
 
+            def _name_matches(actual: str, expected: Optional[str]) -> bool:
+                if not expected:
+                    return True
+                if actual == expected:
+                    return True
+                return bool(name_substr and expected in actual)
+
             # Decision per spec:
             # 1. ok=false + no_node_at_point  → skip verify, click this cand.
             # 2. ok=true, empty path+role     → skip verify, click this cand.
@@ -937,8 +944,8 @@ class UiaClient:
                     ok_match = True
                 elif actual_path and expected_path.startswith(actual_path):
                     ok_match = True
-                elif actual_role == role and (
-                    not name or actual_name == name
+                elif actual_role == role and _name_matches(
+                    actual_name, name
                 ) and v.get("under_app"):
                     ok_match = True
                 elif (

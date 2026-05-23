@@ -214,15 +214,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-006-step2a: dispatch tel: link (3-workspace picker should open)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
-      echo TEL_DISPATCHED_1
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "{{ tel_link }}"
+        marker: TEL_DISPATCHED_1
 
   - wait: 2
 
@@ -332,15 +328,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-006-step5a: dispatch callto: link (picker must re-appear)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList '{{ callto_link }}' -WindowStyle Hidden
-      echo CALLTO_DISPATCHED_2
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "{{ callto_link }}"
+        marker: CALLTO_DISPATCHED_2
 
   - wait: 2
 
