@@ -925,6 +925,11 @@ class UiaClient:
                 or (v.get("ok") and not actual_path and not actual_role)
             )
             ok_match = False
+            label_overlay = False
+            _PASSIVE_OVERLAY_ROLES = {
+                "static", "text", "document web", "text area",
+                "image", "pane", "group",
+            }
             if v.get("ok"):
                 if actual_path == expected_path:
                     ok_match = True
@@ -936,6 +941,19 @@ class UiaClient:
                     not name or actual_name == name
                 ) and v.get("under_app"):
                     ok_match = True
+                elif (
+                    role in {"push button", "Button"}
+                    and (actual_role or "").lower() in _PASSIVE_OVERLAY_ROLES
+                ):
+                    # Chromium label-overlay: text/static widget covers the
+                    # button visually. The click coord is inside the target
+                    # button's bbox (find phase chose it) but UIA hit-test
+                    # returns the topmost passive descendant. Worker may fail
+                    # to resolve under_app for the overlay node (no stable
+                    # path) — accept anyway since the target itself was
+                    # confirmed under_app during find.
+                    ok_match = True
+                    label_overlay = True
 
             entry = {
                 "idx": idx, "path": expected_path,
@@ -947,7 +965,7 @@ class UiaClient:
                              "path": actual_path},
             }
             if ok_match:
-                entry["decision"] = "match"
+                entry["decision"] = "label_overlay" if label_overlay else "match"
                 trace.append(entry)
                 chosen = cand
                 chosen_cx, chosen_cy = cx, cy
