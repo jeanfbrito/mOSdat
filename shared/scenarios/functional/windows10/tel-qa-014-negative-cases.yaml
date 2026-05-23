@@ -147,6 +147,22 @@ steps:
     wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
     retries: 1
 
+  - label: "QA-014-step1e-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-014-step1e: Start-Process 'tel:{{ test_number }}' while Telephony OFF"
     shell: |
         $rc = @(
@@ -299,6 +315,22 @@ steps:
     retries: 1
 
   # Empty tel: — scheme with no payload.
+  - label: "QA-014-step3e-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-014-step3e: Start-Process 'tel:' (malformed, empty payload)"
     shell: |
         $rc = @(
@@ -338,6 +370,22 @@ steps:
   # ═════════════════════════════════════════════════════════════════════════
   # PART 4 — Step 4: callto:?subject=empty (query-only) rejected.
   # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step4a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-014-step4a: Start-Process 'callto:?subject=empty' (query-only)"
     shell: |
@@ -414,6 +462,22 @@ steps:
   # PART 5 — Step 5: Multi-workspace picker opens, user CANCELS via Escape.
   # ═════════════════════════════════════════════════════════════════════════
 
+  - label: "QA-014-step5a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-014-step5a: Start-Process 'tel:{{ test_number }}' (should open picker)"
     shell: |
         $rc = @(
@@ -474,6 +538,22 @@ steps:
   # PART 6 — Step 6: Two phone links in quick succession. Duplicate IPC
   #          listener dedupe (commit ab816c0db). At most ONE picker.
   # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step6a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-014-step6a: rapid-fire two tel: links via Start-Process"
     shell: |
@@ -617,6 +697,22 @@ steps:
   - label: "QA-014-step7d: wait for kebab present (workspace loaded)"
     wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
     retries: 1
+
+  - label: "QA-014-step7e-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-014-step7e: Start-Process 'tel:{{ test_number_c }}' with stale preferred server"
     shell: |

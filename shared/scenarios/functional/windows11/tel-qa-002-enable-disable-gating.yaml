@@ -134,6 +134,22 @@ steps:
   # Dispatch tel: via Start-Process and assert no telephony surface paints
   # in RC. If RC is not the registered handler, Windows shows its own
   # "Choose an app" picker (which never spawns an RC dialog/check box).
+  - label: "QA-002-step1e-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-002-step1e: Start-Process tel:{{ test_number }} (should NO-OP for RC)"
     shell: |
         $rc = @(
@@ -215,6 +231,22 @@ steps:
   - wait: 1
 
   # ── QA-002-step4: Trigger callto: while disabled → must be ignored ───────
+  - label: "QA-002-step4a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-002-step4a: Start-Process callto:{{ test_number }} (should NO-OP for RC)"
     shell: |
         $rc = @(
@@ -309,6 +341,22 @@ steps:
         Write-Host 'RC_PROTOCOL_HANDLER_PREREQ_DONE'
 
   # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
+  - label: "QA-002-step6a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-002-step6a: Start-Process tel:{{ test_number }} (should ROUTE to RC)"
     shell: |
         $rc = @(
@@ -350,6 +398,22 @@ steps:
   - wait: 1
 
   # ── QA-002-step7: callto: link also routes ───────────────────────────────
+  - label: "QA-002-step7a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-002-step7a: Start-Process callto:{{ test_number }} (should ROUTE to RC)"
     shell: |
         $rc = @(
@@ -392,6 +456,22 @@ steps:
     click: "left"
 
   - wait: 2
+
+  - label: "QA-002-roundtrip-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-002-roundtrip: Start-Process tel:{{ test_number }} after OFF (should NO-OP)"
     shell: |

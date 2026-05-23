@@ -168,6 +168,22 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   # QA-007-step2: First dispatch — picker MUST open (no preferred server yet)
   # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step2a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
     shell: |
       $rc = @(
@@ -255,6 +271,22 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   # QA-007-step4: Second dispatch — picker MUST be skipped (preference set)
   # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step4a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
     shell: |
       $rc = @(
@@ -329,6 +361,22 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   # QA-007-step6: Dispatch after restart — picker MUST still be skipped
   # ══════════════════════════════════════════════════════════════════════════
+  - label: "QA-007-step6a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
     shell: |
       $rc = @(
@@ -416,6 +464,22 @@ steps:
   - label: "QA-007-step7d: wait_for main window frame after reset"
     wait_for: {any: [{role: "frame"}], timeout: 30}
     retries: 5
+
+  - label: "QA-007-step7e-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
     shell: |

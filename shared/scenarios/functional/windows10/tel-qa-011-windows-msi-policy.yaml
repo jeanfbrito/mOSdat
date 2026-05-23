@@ -400,6 +400,22 @@ steps:
   # Spec step 7: Start-Process is the Windows equivalent of the test-links
   # HTML click. Both schemes should route to RC and surface the picker
   # (multi-workspace pre-stage).
+  - label: "QA-011-step7a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-011-step7a: Start-Process 'tel:{{ test_number }}'"
     shell: |
       $rc = @(
@@ -433,6 +449,22 @@ steps:
 
   - key: Escape
   - wait: 2
+
+  - label: "QA-011-step7c-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-011-step7c: Start-Process 'callto:{{ test_number }}'"
     shell: |

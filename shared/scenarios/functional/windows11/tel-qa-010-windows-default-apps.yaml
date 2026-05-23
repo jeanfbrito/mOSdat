@@ -431,6 +431,22 @@ steps:
   # `Start-Process` invoked via PowerShell. With the multi-workspace
   # pre-stage (Workspace + Mobile RC), the picker should open both times.
 
+  - label: "QA-010-step8a-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
+
   - label: "QA-010-step8a: Start-Process 'tel:{{ test_number }}' (should focus RC + open picker)"
     shell: |
       $rc = @(
@@ -466,6 +482,22 @@ steps:
     key: Escape
 
   - wait: 2
+
+  - label: "QA-010-step8d-close-settings: close Settings before dispatch (RC IPC needs main view)"
+    shell: |
+      powershell -Command "& {
+        Add-Type -AssemblyName System.Windows.Forms
+        $rc = Get-Process -Name Rocket.Chat -EA SilentlyContinue | Where-Object { $_.MainWindowTitle } | Select-Object -First 1
+        if ($rc) {
+          $sig = '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+          Add-Type -MemberDefinition $sig -Name Win32 -Namespace WinAPI -EA SilentlyContinue
+          [void][WinAPI.Win32]::SetForegroundWindow($rc.MainWindowHandle)
+          Start-Sleep -Milliseconds 500
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Milliseconds 800
+        }
+        Write-Host SETTINGS_CLOSED
+      }"
 
   - label: "QA-010-step8d: Start-Process 'callto:{{ test_number }}' (should focus RC + open picker)"
     shell: |
