@@ -250,3 +250,29 @@ class TestProcessRunning:
         with patch("time.sleep"):
             with pytest.raises(StepFailed):
                 runner.run_step(FunctionalStep(launch="/usr/bin/app", wait=1, launch_timeout=1, retries=1), 1)
+
+    def test_dead_process_probe_defaults_to_linux_process_name(self):
+        vlm = MagicMock()
+        ss = MagicMock()
+        inj = MagicMock()
+        inj.is_windows = False
+        inj.process_running.return_value = True
+
+        runner = FunctionalRunner(vlm=vlm, screenshotter=ss, injector=inj,
+                                  screenshot_dir=None, log_fn=lambda m: None)
+        assert runner._fail_if_app_process_dead(1) is False
+
+        inj.process_running.assert_called_once_with("rocketchat-desktop")
+
+    def test_dead_process_probe_defaults_to_windows_process_name(self):
+        vlm = MagicMock()
+        ss = MagicMock()
+        inj = MagicMock()
+        inj.is_windows = True
+        inj.process_running.return_value = True
+
+        runner = FunctionalRunner(vlm=vlm, screenshotter=ss, injector=inj,
+                                  screenshot_dir=None, log_fn=lambda m: None)
+        assert runner._fail_if_app_process_dead(1) is False
+
+        inj.process_running.assert_called_once_with("Rocket.Chat")

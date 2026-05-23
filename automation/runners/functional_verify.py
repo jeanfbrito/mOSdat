@@ -79,6 +79,12 @@ class _VerifyMixin:
         self._emit("popup_sweep", step_num=step_num, dismissed=dismissed)
         return dismissed
 
+    def _default_app_process_name(self) -> str:
+        injector = getattr(self, "injector", None)
+        if getattr(injector, "is_windows", False):
+            return "Rocket.Chat"
+        return "rocketchat-desktop"
+
     def _fail_if_app_process_dead(self, step_num) -> bool:
         """SSH-side check: is the app-under-test process still running?
 
@@ -88,7 +94,10 @@ class _VerifyMixin:
         """
         from automation.runners.functional import AppCrashedError
         try:
-            process_name = getattr(self, "_app_process_name", None) or "rocketchat-desktop"
+            process_name = (
+                getattr(self, "_app_process_name", None)
+                or self._default_app_process_name()
+            )
             t0 = time.perf_counter()
             running = self.injector.process_running(process_name)
             latency_ms = round((time.perf_counter() - t0) * 1000)
@@ -407,9 +416,9 @@ class _VerifyMixin:
                     break
                 t0 = _time.perf_counter()
                 try:
-                    verdict, raw, cache_hit = self.vlm.verify_with_meta(screenshot, prompt)
+                    verdict, raw, _cache_hit = self.vlm.verify_with_meta(screenshot, prompt)
                 except Exception:
-                    verdict, raw, cache_hit = False, "", False
+                    verdict, raw, _cache_hit = False, "", False
                 latency_ms = round((_time.time() - t0) * 1000)
                 answer = "yes" if verdict else "no"
                 self.log(f"    → accept_any[{i}] ({answer}): {prompt[:60]}")
