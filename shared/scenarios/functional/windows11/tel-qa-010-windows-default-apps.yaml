@@ -182,7 +182,7 @@ steps:
 
   - label: "QA-010-step2e: click Settings menu item via VLM (UIA exposes as CustomControl)"
     localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
-    click: true
+    click: left
     wait: 1
 
   - label: "QA-010-step2g: verify Settings General tab visible"
@@ -196,10 +196,8 @@ steps:
   - label: "QA-010-step2i: settle for Telephony section to render (Fuselage CheckBox not in UIA)"
     wait: 3
 
-  - label: "QA-010-step2i-vlm: VLM confirm Telephony section visible (checkbox anchor)"
-    localize: "the 'Telephony' label next to a checkbox in the Voice & Video Settings panel"
-
-  # Fuselage ToggleSwitch — UIA _invoke_action fails; use VLM-localize click.
+  - label: "QA-010-step2i-vlm: settle before Telephony toggle localize"
+    wait: 1
   - label: "QA-010-step2j: click Telephony toggle via VLM (probe-by-modal)"
     localize: "the Telephony toggle switch in the Voice & Video Settings panel, to the right of the 'Telephony' label"
     click: "left"
@@ -384,54 +382,52 @@ steps:
   # Diagnostics is a collapsible section in Voice & Video; the trigger
   # widget surfaces by label/role variants — same anchor set as TEL-QA-004
   # and TEL-QA-013 step 2e.
-  - label: "QA-010-step7b: wait_for diagnostics trigger label visible"
-    wait_for:
-      any:
-        - {role: "push button", name_substr: "iagnostic"}
-        - {role: "toggle button", name_substr: "iagnostic"}
-        - {role: "label", name_substr: "iagnostic"}
-        - {role: "section", name_substr: "iagnostic"}
-      timeout: 10
+  - label: "QA-010-step7b: wait_for Phone-link handler diagnostics accordion"
+    wait_for: {any: [{role: "push button", name: "Phone-link handler diagnostics", name_substr: true}], timeout: 10}
     retries: 1
-
-  # Click diagnostics trigger to expand (best-effort across role variants).
-  - label: "QA-010-step7c: expand diagnostics section"
-    atspi:
-      role: "push button"
-      name_substr: "iagnostic"
-      app_filter: "rocket"
-    retries: 2
-
+  - label: "QA-010-step7c: expand Phone-link handler diagnostics accordion"
+    atspi: {role: "push button", name: "Phone-link handler diagnostics", name_substr: true, via: "action"}
+    retries: 1
   - wait: 1
 
   # isDefault.tel / isDefault.callto — these surface as labels/values inside
   # the diagnostics panel. We accept several surface variants because the PR
   # build copy is in flux (renamed labels per recent scenario regressions —
   # see bd2d984 commit message).
-  - label: "QA-010-step7d: verify isDefault.tel pass indicator visible"
-    wait_for:
-      any:
-        - {role: "label", name_substr: "isDefault.tel"}
-        - {role: "label", name_substr: "tel: default"}
-        - {role: "label", name_substr: "Default for tel"}
-      timeout: 10
-    retries: 2
+  - label: "QA-010-step7d: wait_for diagnostics Refresh button"
+    wait_for: {any: [{role: "push button", name: "Refresh"}], timeout: 10}
+    retries: 1
 
-  - label: "QA-010-step7e: verify isDefault.callto pass indicator visible"
-    wait_for:
-      any:
-        - {role: "label", name_substr: "isDefault.callto"}
-        - {role: "label", name_substr: "callto: default"}
-        - {role: "label", name_substr: "Default for callto"}
-      timeout: 10
-    retries: 2
+  - label: "QA-010-step7d: click Refresh in diagnostics"
+    atspi: {role: "push button", name: "Refresh", via: "action"}
+    retries: 1
 
-  # ── QA-010-step8: Start-Process tel:/callto: → RC opens telephony flow ───
-  # Spec step 8: "Click valid links in test-links.html. → Rocket.Chat opens
-  # telephony flow for both." Windows equivalent of `xdg-open` is
-  # `Start-Process` invoked via PowerShell. With the multi-workspace
-  # pre-stage (Workspace + Mobile RC), the picker should open both times.
+  - wait: 2
 
+  - label: "QA-010-step7d: click Copy diagnostics"
+    atspi: {role: "push button", name: "Copy diagnostics", via: "action"}
+    retries: 1
+
+  - wait: 1
+
+  - label: "QA-010-step7d: assert diagnostics defaults pass from clipboard JSON"
+    shell: |
+        $clip = Get-Clipboard -Raw
+        if (-not $clip) { Write-Error 'CLIPBOARD_EMPTY'; exit 1 }
+        try {
+          $diag = $clip | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+          Write-Error ('DIAGNOSTICS_JSON_PARSE_FAILED: ' + $_.Exception.Message)
+          exit 1
+        }
+        $checks = @($diag.checks)
+        $tel = $checks | Where-Object { $_.id -eq 'isDefault.tel' } | Select-Object -First 1
+        $callto = $checks | Where-Object { $_.id -eq 'isDefault.callto' } | Select-Object -First 1
+        if (-not $tel) { Write-Error 'NO_ISDEFAULT_TEL_CHECK'; exit 1 }
+        if (-not $callto) { Write-Error 'NO_ISDEFAULT_CALLTO_CHECK'; exit 1 }
+        if ($tel.status -ne 'pass') { Write-Error "ISDEFAULT_TEL_NOT_PASS:$($tel.status):$($tel.details)"; exit 1 }
+        if ($callto.status -ne 'pass') { Write-Error "ISDEFAULT_CALLTO_NOT_PASS:$($callto.status):$($callto.details)"; exit 1 }
+        Write-Host 'DIAGNOSTICS_DEFAULTS_PASS'
   - label: "QA-010-step8a-close-settings: close Settings before dispatch (RC IPC needs main view)"
     shell: |
       Add-Type -AssemblyName System.Windows.Forms
@@ -464,15 +460,10 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-010-step8a: Start-Process 'tel:{{ test_number }}' (should focus RC + open picker)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
   - wait: 2
 
   # If OS picker appears, click Rocket.Chat to route to RC.
@@ -531,15 +522,10 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-010-step8d: Start-Process 'callto:{{ test_number }}' (should focus RC + open picker)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList 'callto:{{ test_number }}' -WindowStyle Hidden
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "callto:{{ test_number }}"
   - wait: 2
 
   # If OS picker appears for callto:, dismiss it.

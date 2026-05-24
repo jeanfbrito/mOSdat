@@ -166,17 +166,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-002-step1e: Start-Process tel:{{ test_number }} (should NO-OP for RC)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'TEL_DISPATCHED'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
+        marker: TEL_DISPATCHED
   - wait: 2
 
   - label: "QA-002-step1f: verify NO telephony surface painted in RC (BLOCKED)"
@@ -207,7 +201,7 @@ steps:
 
   - label: "QA-002-step2b: click Settings menu item via VLM (UIA exposes as CustomControl)"
     localize: "the 'Settings' menu item text in the small popover near the bottom-left workspace sidebar, directly below the 'Downloads' row in the 'Customize and control app' popup"
-    click: true
+    click: left
     wait: 1
 
   - label: "QA-002-step2d: wait_for Settings General tab"
@@ -226,7 +220,7 @@ steps:
     wait: 3
 
   - label: "QA-002-step2g-vlm: VLM confirm Telephony section visible (checkbox anchor)"
-    localize: "the 'Telephony' label next to a checkbox in the Voice & Video Settings panel"
+    verify: "the 'Telephony' label next to a checkbox in the Voice & Video Settings panel"
 
   # ── QA-002-step3: Ensure toggle is OFF (pre-stage already set it OFF) ────
   - label: "QA-002-step3: verify toggle currently OFF (no Got it prompt visible)"
@@ -276,17 +270,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-002-step4a: Start-Process callto:{{ test_number }} (should NO-OP for RC)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'callto:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'CALLTO_DISPATCHED'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "callto:{{ test_number }}"
+        marker: CALLTO_DISPATCHED
   - wait: 2
 
   - label: "QA-002-step4b: verify NO telephony surface painted in RC (BLOCKED, callto)"
@@ -401,17 +389,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-002-step6a: Start-Process tel:{{ test_number }} (should ROUTE to RC)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 1
-        Write-Host 'TEL_DISPATCHED_ENABLED'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
+        marker: TEL_DISPATCHED_ENABLED
   - wait: 2
 
   # If the Windows system "How do you want to open?" picker appears, dismiss it.
@@ -473,17 +455,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-002-step7a: Start-Process callto:{{ test_number }} (should ROUTE to RC)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'callto:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 1
-        Write-Host 'CALLTO_DISPATCHED_ENABLED'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "callto:{{ test_number }}"
+        marker: CALLTO_DISPATCHED_ENABLED
   - wait: 2
 
   # If the Windows OS picker appeared for callto:, dismiss it.
@@ -547,17 +523,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-002-roundtrip: Start-Process tel:{{ test_number }} after OFF (should NO-OP)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'TEL_DISPATCHED_AFTER_DISABLE'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
+        marker: TEL_DISPATCHED_AFTER_DISABLE
   - wait: 2
 
   - label: "QA-002-roundtrip: verify protocol BLOCKED again after toggling OFF"

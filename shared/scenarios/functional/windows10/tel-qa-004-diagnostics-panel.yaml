@@ -168,14 +168,14 @@ steps:
     retries: 1
 
   - label: "QA-004-step3b: click Refresh in Diagnostics"
-    atspi: {role: "push button", name: "Refresh"}
+    atspi: {role: "push button", name: "Refresh", via: "action"}
     retries: 1
 
   - wait: 2
 
   # ── QA-004-step4: Click Copy diagnostics ─────────────────────────────────
   - label: "QA-004-step4: click Copy diagnostics (writes JSON to clipboard)"
-    atspi: {role: "push button", name: "Copy diagnostics"}
+    atspi: {role: "push button", name: "Copy diagnostics", via: "action"}
     retries: 1
 
   - wait: 1

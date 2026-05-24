@@ -179,17 +179,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_FALSE
 
   - label: "QA-014-step1e: Start-Process 'tel:{{ test_number }}' while Telephony OFF"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'START_PROCESS_TEL_OFF_DISPATCHED'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
+        marker: START_PROCESS_TEL_OFF_DISPATCHED
   - wait: 2
 
   - label: "QA-014-step1f: verify NO call request placed (no telephony surface)"
@@ -362,17 +356,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-014-step3e: Start-Process 'tel:' (malformed, empty payload)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'START_PROCESS_TEL_EMPTY'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:"
+        marker: START_PROCESS_TEL_EMPTY
   - wait: 3
 
   - label: "QA-014-step3f: verify empty tel: rejected — no picker/dialpad painted"
@@ -433,17 +421,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-014-step4a: Start-Process 'callto:?subject=empty' (query-only)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'callto:?subject=empty' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'START_PROCESS_CALLTO_QUERY_ONLY'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "callto:?subject=empty"
+        marker: START_PROCESS_CALLTO_QUERY_ONLY
   - wait: 3
 
   - label: "QA-014-step4b: verify query-only callto: rejected — no surface painted"
@@ -539,17 +521,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-014-step5a: Start-Process 'tel:{{ test_number }}' (should open picker)"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 1
-        Write-Host 'START_PROCESS_TEL_MULTIWS'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
+        marker: START_PROCESS_TEL_MULTIWS
   - wait: 2
 
   # If OS picker appears, click Rocket.Chat to route to RC.
@@ -564,7 +540,7 @@ steps:
   - wait: 3
 
   - label: "QA-014-step5b-vlm: VLM confirm picker modal visible (Fuselage exposed as CustomControl)"
-    localize: "the picker modal title 'Choose workspace' or similar text"
+    verify: "the picker modal title 'Choose workspace' or similar text"
 
   - label: "QA-014-step5b: wait_for server picker (any picker surface)"
     wait_for:
@@ -634,18 +610,17 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-014-step6a: rapid-fire two tel: links via Start-Process"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number }}' -WindowStyle Hidden
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number_b }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-        Write-Host 'TEL_RAPID_FIRE_DISPATCHED'
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number }}"
 
+  - label: "QA-014-step6a: rapid-fire two tel: links via Start-Process (2/2)"
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number_b }}"
+        marker: TEL_RAPID_FIRE_DISPATCHED
   - wait: 2
 
   # Dismiss OS picker if it appeared for either rapid-fire dispatch.
@@ -660,7 +635,7 @@ steps:
   - wait: 3
 
   - label: "QA-014-step6b-vlm: VLM confirm picker modal visible (Fuselage exposed as CustomControl)"
-    localize: "the picker modal title 'Choose workspace' or similar text"
+    verify: "the picker modal title 'Choose workspace' or similar text"
 
   - label: "QA-014-step6b: wait_for picker surface (at least one)"
     wait_for:
@@ -811,17 +786,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-014-step7e: Start-Process 'tel:{{ test_number_c }}' with stale preferred server"
-    shell: |
-        $rc = @(
-          "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-          "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-          "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-        if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-        Start-Process -FilePath $rc -ArgumentList 'tel:{{ test_number_c }}' -WindowStyle Hidden
-        Start-Sleep -Seconds 1
-        Write-Host 'START_PROCESS_TEL_STALE_PREFERRED'
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:{{ test_number_c }}"
+        marker: START_PROCESS_TEL_STALE_PREFERRED
   - wait: 2
 
   # If OS picker appears, click Rocket.Chat to route to RC.
@@ -838,7 +807,7 @@ steps:
   - wait: 3
 
   - label: "QA-014-step7f-vlm: VLM confirm picker modal visible (Fuselage exposed as CustomControl)"
-    localize: "the picker modal title 'Choose workspace' or similar text"
+    verify: "the picker modal title 'Choose workspace' or similar text"
 
   - label: "QA-014-step7f: wait_for picker to appear (graceful fallback)"
     wait_for:

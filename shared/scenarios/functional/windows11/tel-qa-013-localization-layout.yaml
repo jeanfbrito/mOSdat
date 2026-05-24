@@ -244,25 +244,11 @@ steps:
 
   - wait: 2
 
-  - label: "QA-013-step2c: verify server picker surface visible"
-    # Telephony section UI: "Preferred server" combo box + label. The widget
-    # name has drifted across PR builds. Windows UIA may expose it as
-    # combo box, list box, or group; the label role may be Static or label.
-    # Also accept the "Server" text node (Static role in UIA) which Chromium
-    # exposes for unlabelled combo boxes that only have a text sibling.
-    wait_for:
-      any:
-        - {role: "combo box", name_substr: "server"}
-        - {role: "combo box", name_substr: "Server"}
-        - {role: "list box", name_substr: "server"}
-        - {role: "label", name_substr: "Preferred"}
-        - {role: "label", name_substr: "server"}
-        - {role: "Static", name_substr: "Preferred"}
-        - {role: "Static", name_substr: "server"}
-        - {role: "group", name_substr: "server"}
-      timeout: 15
+  - label: "QA-013-step2c: verify phone-link diagnostics surface visible"
+    # Current Windows settings surface exposes diagnostics and shortcut controls;
+    # the old Preferred Server settings picker is no longer rendered here.
+    wait_for: {any: [{role: "push button", name: "Phone-link handler diagnostics", name_substr: true}], timeout: 15}
     retries: 2
-
   - label: "QA-013-step2d: verify shortcut control surface visible"
     wait_for:
       any:
@@ -338,15 +324,9 @@ steps:
     verify_atspi: {role: "page tab", name: "Voice & Video"}
     retries: 2
 
-  - label: "QA-013-step5e: verify server picker surface survives narrow viewport"
-    wait_for:
-      any:
-        - {role: "combo box", name_substr: "server"}
-        - {role: "label", name_substr: "Preferred"}
-        - {role: "label", name_substr: "server"}
-      timeout: 10
+  - label: "QA-013-step5e: verify phone-link diagnostics surface survives narrow viewport"
+    wait_for: {any: [{role: "push button", name: "Phone-link handler diagnostics", name_substr: true}], timeout: 10}
     retries: 2
-
   - label: "QA-013-step5f: verify shortcut surface survives narrow viewport"
     wait_for:
       any:

@@ -130,16 +130,11 @@ steps:
   # ════════════════════════════════════════════════════════════════════════
 
   - label: "QA-005-step4a: Start-Process tel:+15551234567 (E.164)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList 'tel:+15551234567' -WindowStyle Hidden
-      echo QA005_STEP4A_DISPATCHED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:+15551234567"
+        marker: QA005_STEP4A_DISPATCHED
   - label: "QA-005-step4a: wait for dispatch to reach renderer (frame visible)"
     wait_for: {any: [{role: "frame"}], timeout: 20}
     retries: 1
@@ -168,16 +163,11 @@ steps:
   # ════════════════════════════════════════════════════════════════════════
 
   - label: "QA-005-step4b: Start-Process tel:+55 11 99999-1234 (spaced + dashed)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList 'tel:+55 11 99999-1234' -WindowStyle Hidden
-      echo QA005_STEP4B_DISPATCHED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "tel:+55 11 99999-1234"
+        marker: QA005_STEP4B_DISPATCHED
   - label: "QA-005-step4b: wait for dispatch to reach renderer (frame visible)"
     wait_for: {any: [{role: "frame"}], timeout: 20}
     retries: 1
@@ -203,16 +193,11 @@ steps:
   # ════════════════════════════════════════════════════════════════════════
 
   - label: "QA-005-step5a: Start-Process callto:+15551234567 (callto E.164)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList 'callto:+15551234567' -WindowStyle Hidden
-      echo QA005_STEP5A_DISPATCHED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "callto:+15551234567"
+        marker: QA005_STEP5A_DISPATCHED
   - label: "QA-005-step5a: wait for dispatch to reach renderer (frame visible)"
     wait_for: {any: [{role: "frame"}], timeout: 20}
     retries: 1
@@ -238,16 +223,11 @@ steps:
   # ════════════════════════════════════════════════════════════════════════
 
   - label: "QA-005-step5b: Start-Process callto://+491234567890 (authority form)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList 'callto://+491234567890' -WindowStyle Hidden
-      echo QA005_STEP5B_DISPATCHED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "callto://+491234567890"
+        marker: QA005_STEP5B_DISPATCHED
   - label: "QA-005-step5b: wait for dispatch to reach renderer (frame visible)"
     wait_for: {any: [{role: "frame"}], timeout: 20}
     retries: 1

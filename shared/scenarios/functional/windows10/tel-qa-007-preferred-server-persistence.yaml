@@ -200,16 +200,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
-      echo TEL_DISPATCHED_1_PICKER_EXPECTED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "{{ tel_link }}"
+        marker: TEL_DISPATCHED_1_PICKER_EXPECTED
   - wait: 2
 
   # If the Windows OS picker appeared, click Rocket.Chat to route to RC.
@@ -237,7 +232,7 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step3a: tick Remember for future calls checkbox via VLM (UIA exposes as CustomControl)"
     localize: "the 'Remember for future calls' checkbox in the telephony workspace picker dialog"
-    click: true
+    click: left
     wait: 1
 
   - wait: 1
@@ -318,16 +313,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
-      echo TEL_DISPATCHED_2_NO_PICKER_EXPECTED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "{{ tel_link }}"
+        marker: TEL_DISPATCHED_2_NO_PICKER_EXPECTED
   - wait: 2
 
   # If OS picker still appears (shell cache), dismiss it — the Fuselage picker
@@ -423,16 +413,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
-      echo TEL_DISPATCHED_3_AFTER_RESTART_NO_PICKER_EXPECTED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "{{ tel_link }}"
+        marker: TEL_DISPATCHED_3_AFTER_RESTART_NO_PICKER_EXPECTED
   - wait: 2
 
   # OS picker handler for post-restart dispatch.
@@ -542,16 +527,11 @@ steps:
         Write-Host TELEPHONY_PERSISTED_TRUE
 
   - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
-    shell: |
-      $rc = @(
-        "$env:LOCALAPPDATA\Programs\Rocket.Chat\Rocket.Chat.exe",
-        "$env:LOCALAPPDATA\Programs\rocketchat-desktop\Rocket.Chat.exe",
-        "$env:ProgramFiles\Rocket.Chat\Rocket.Chat.exe"
-      ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-      if (-not $rc) { Write-Error 'Rocket.Chat.exe not found'; exit 1 }
-      Start-Process -FilePath $rc -ArgumentList '{{ tel_link }}' -WindowStyle Hidden
-      echo TEL_DISPATCHED_4_AFTER_RESET_PICKER_EXPECTED
-
+    routine:
+      name: dispatch-tel-link
+      with:
+        link: "{{ tel_link }}"
+        marker: TEL_DISPATCHED_4_AFTER_RESET_PICKER_EXPECTED
   - wait: 2
 
   # If OS picker shows (preference was cleared), click RC to route to RC.
