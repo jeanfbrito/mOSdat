@@ -57,7 +57,7 @@ The timing dimension was separate: even with correct frames, actions completing 
 
 ## References
 
-- Auditor diagnosis: `.claude/mytasks/findings.md` — "VNC stale-framebuffer race (auditor-confirmed)" section.
+- Auditor diagnosis is summarized in this post-mortem; the original `.claude/mytasks/findings.md` scratch file is intentionally not tracked.
 - `docs/KNOWN_ISSUES.md` — "RFB capture used pixel-count completion gate (fixed)" RESOLVED entry.
 - Memory: `feedback_routine_localize_prompts.md` — still valid for popup prompt authoring; not the proximate cause here.
 - Commits: `0436e51`, `5b24a5a`, `97f64b5`.

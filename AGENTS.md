@@ -27,7 +27,7 @@ background_task(agent="explore", prompt="Monitor VM 103 until IP appears...")
 
 ## Testing
 
-See `.claude/test-strategy.md` for the scoped-tests-first workflow.
+See `docs/test-strategy.md` for the scoped-tests-first workflow.
 
 ## PR scenarios
 
@@ -36,7 +36,7 @@ Before running it, ALWAYS run `mosdat build --pr <PR#> --deploy <vm> --verify-sy
 to confirm the deployed `app.asar` actually contains the feature under test.
 
 Stale binaries produce false-negative scenario failures that look like framework
-bugs. See `.claude/skills/mosdat-pr-preflight/SKILL.md` for the enforced workflow.
+bugs. See `skills/mosdat-pr-preflight/SKILL.md` for the enforced workflow.
 
 ---
 
@@ -172,11 +172,11 @@ This project is indexed by GitNexus as **mOSdat** (9782 symbols, 17042 relations
 
 | Task | Read this skill file |
 |------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| Understand architecture / "How does X work?" | `skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->

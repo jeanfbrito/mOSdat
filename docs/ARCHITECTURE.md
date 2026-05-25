@@ -3,7 +3,7 @@
 ## Overview
 
 This framework tests desktop applications across multiple operating systems
-using Proxmox VMs, optional GPU passthrough, VNC-backed input, and VLM screen
+using Proxmox VMs, optional GPU passthrough, VNC-backed input, AT-SPI semantic automation on Linux, and VLM screen
 understanding. The current implementation is Python-first (`automation/`) with
 TOML app/VM configuration and YAML functional scenarios.
 
@@ -115,7 +115,8 @@ python -m automation.main author --url http://127.0.0.1:8082 close --session SES
 YAML scenario -> FunctionalRunner
         |
         ├── Proxmox VNC capture/input
-        ├── VLM localize/verify
+        ├── Linux AT-SPI role/name targeting when available
+        ├── VLM localize/verify fallback
         ├── SSH only for shell/launch/focus helpers
         └── events.jsonl + screenshots in results/functional/<run>/<vm>/
 ```
@@ -134,7 +135,7 @@ ozone preamble into shell steps automatically (default off).
 ```
 1. Git checkout specific version
 2. yarn build (TypeScript → JavaScript)
-3. electron-builder (→ RPM/DEB/AppImage)
+3. electron-builder (→ RPM/DEB/AppImage/EXE)
 4. Package stored in dist/
 ```
 

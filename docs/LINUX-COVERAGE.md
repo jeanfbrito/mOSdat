@@ -13,9 +13,9 @@ We test **5 distributions** to achieve **~95% enterprise Linux desktop coverage*
 | openSUSE Leap | 16.0 | SUSE family + KDE desktop |
 | Manjaro Linux | 26.0.1 | Arch-based rolling releases + bleeding-edge issues |
 
-**Each distribution is tested in TWO configurations:**
-1. **Without GPU** - Virtual displays (Xvfb, Weston headless)
-2. **With GPU** - Real NVIDIA RTX 3060 via VFIO passthrough
+**Each distribution is configured for:**
+1. **Baseline desktop automation** - Real VM desktop sessions driven by VNC, AT-SPI where available, and VLM verification.
+2. **GPU passthrough validation** - Real NVIDIA RTX 3060 via VFIO passthrough for production-like compositor behavior.
 
 ## Enterprise Linux Market Analysis
 
@@ -173,7 +173,7 @@ Testing both **Mutter (GNOME)** and **KWin (KDE)** ensures we cover the two domi
 | RPM | ~50% | Yes (both dnf and zypper) |
 | AppImage | Universal | Yes |
 | Snap | ~10% | Yes |
-| Flatpak | ~10% | No |
+| Flatpak | ~10% | Yes |
 
 ### By Desktop Environment
 
@@ -193,15 +193,15 @@ Testing both **Mutter (GNOME)** and **KWin (KDE)** ensures we cover the two domi
 
 ## Test Matrix Summary
 
-| OS | VMID | Desktop | Package Formats | Without GPU | With GPU |
-|----|------|---------|-----------------|-------------|----------|
-| Fedora 42 | 100 | GNOME | RPM, AppImage | Complete | Complete |
-| Ubuntu 22.04 | 101 | GNOME | DEB, AppImage, Snap | Complete | Complete |
-| Ubuntu 24.04 | 102 | GNOME | DEB, AppImage, Snap | Complete | Complete |
-| openSUSE Leap 16.0 | 106 | KDE | RPM, AppImage | Complete | Complete |
-| Manjaro Linux 26.0.1 | 103 | KDE | AppImage | Complete | Complete |
+| OS | VMID | Desktop | Package Formats | Baseline automation | GPU passthrough |
+|----|------|---------|-----------------|---------------------|-----------------|
+| Fedora 42 | 100 | GNOME Wayland | RPM, AppImage, Flatpak | Complete | Complete |
+| Ubuntu 22.04 | 101 | GNOME X11 | DEB, AppImage, Flatpak, Snap | Complete | Complete |
+| Ubuntu 24.04 | 102 | GNOME Wayland | DEB, AppImage, Flatpak, Snap | Complete | Complete |
+| openSUSE Leap 16.0 | 106 | KDE X11 | RPM, AppImage, Flatpak | Complete | Complete |
+| Manjaro Linux 26.0.1 | 103 | KDE Wayland | AppImage, Flatpak | Complete | Complete |
 
-**All 5 target distributions fully tested (2026-01-20).**
+**All 5 target Linux distributions remain the supported Linux coverage set.** Windows 10/11 coverage lives in the main test matrix because it is not part of Linux distribution strategy.
 
 ## GPU Passthrough Testing
 
@@ -227,7 +227,7 @@ Virtual displays (Xvfb, Weston headless) are useful for CI automation but have l
 | Passthrough | VFIO/IOMMU |
 | Mode | Compute (VNC still works) |
 
-### GPU Test Results (2026-01-20)
+### Historical GPU Test Results
 
 | OS | Session Type | gpu-wayland-real | gpu-wayland-fake | gpu-x11 | gpu-wayland-nodisp |
 |----|--------------|------------------|------------------|---------|-------------------|
@@ -251,7 +251,7 @@ mosdat list-vms examples/rocketchat.toml
 
 ### Flatpak Testing
 
-Flatpak is growing in popularity. Consider adding Flatpak testing on Fedora (native Flatpak support).
+Flatpak is now configured in `examples/rocketchat.toml` for Fedora, Ubuntu 22.04/24.04, openSUSE, and Manjaro. Keep distro-specific Flatpak quirks in VM package config instead of scenario YAML.
 
 ### Immutable Distributions
 
@@ -271,7 +271,7 @@ Our 5-distribution testing strategy provides comprehensive coverage of the enter
 4. **Manjaro Linux 26.0.1** - Covers Arch/rolling releases + catches bleeding-edge issues
 
 **Each distribution is tested with:**
-- Virtual displays (Xvfb, Weston) for CI/automation scenarios
+- Baseline real desktop automation through Proxmox VNC, AT-SPI where available, and VLM verification
 - Real GPU passthrough (NVIDIA RTX 3060) for production validation
 
 This approach maximizes coverage while minimizing maintenance overhead. Each distribution was selected because it represents a **unique combination** of package manager, desktop environment, and enterprise market segment.

@@ -158,24 +158,27 @@ Replace the generic verify prompts with specific ones based on the actual UI. Se
 - Use `verify_timeout: 20` for initial app load (VNC is slow)
 - Use `retries: 5` for transient modal/dialog appearances
 
-### 4c. Set correct coordinates or use localize
+### 4c. Prefer semantic selectors before coordinates
 
-The templates use `xdotool mousemove X Y click 1` as placeholders. Replace with either:
+The templates may contain coordinate or `xdotool` placeholders. Replace them with the most stable available selector, in this order:
 
-**Option A — known coordinates** (for stable UI elements at fixed positions):
+**Option A — AT-SPI** (Linux widgets with accessible role/name):
 ```yaml
-- shell: |
-    export DISPLAY=:0
-    xdotool mousemove 300 280 click 1
+- atspi:
+    role: push button
+    name: Settings
+    action: click
 ```
 
-**Option B — VLM localize** (for dynamic content):
+Discover selectors with `mosdat atspi-dump examples/rocketchat.toml --vms ubuntu2404 --format tree`.
+
+**Option B — VLM localize** (for dynamic content or canvas-like regions):
 ```yaml
 - localize: "the 'Settings' button or gear icon"
   click: true
 ```
 
-**Option C — keyboard navigation** (preferred when possible):
+**Option C — keyboard navigation** (preferred when stable):
 ```yaml
 - key: Tab
 - key: Tab
@@ -329,7 +332,8 @@ Agent sees: "PR #3410 adds telephony deeplink support (tel:/callto:)"
 
 ## See Also
 
-- [FUNCTIONAL-TESTS-LINUX.md](FUNCTIONAL-TESTS-LINUX.md) — VNC/VLM desktop-driving model, prompt style guide, Wayland constraints
+- [FUNCTIONAL-TESTS-LINUX.md](FUNCTIONAL-TESTS-LINUX.md) — Linux AT-SPI selectors, VNC input, VLM prompt style, and Wayland constraints
+- [atspi-authoring.md](atspi-authoring.md) — AT-SPI selector fields and discovery workflow
 - [docs/runbooks/live-dashboard.md](runbooks/live-dashboard.md) — Author Workbench for interactive scenario creation
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common functional test failures
 - `mosdat-hermes` skill (Hermes agents) — MCP tools, scenario schema, pitfall guide

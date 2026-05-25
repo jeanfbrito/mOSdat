@@ -2,13 +2,15 @@
 
 ## Package Formats by OS
 
-| OS | DEB | RPM | AppImage | Snap | Flatpak |
-|----|:---:|:---:|:--------:|:----:|:-------:|
-| Fedora 42 | - | ✅ | ✅ | - | 🔜 |
-| Ubuntu 22.04 | ✅ | - | ✅ | ✅ | 🔜 |
-| Ubuntu 24.04 | ✅ | - | ✅ | ✅ | 🔜 |
-| openSUSE Leap 16.0 | - | ✅ | ✅ | - | 🔜 |
-| Manjaro Linux 26.0.1 | - | - | ✅ | - | 🔜 |
+| OS | DEB | RPM | AppImage | Snap | Flatpak | EXE |
+|----|:---:|:---:|:--------:|:----:|:-------:|:---:|
+| Fedora 42 | - | Yes | Yes | - | Yes | - |
+| Ubuntu 22.04 | Yes | - | Yes | Yes | Yes | - |
+| Ubuntu 24.04 | Yes | - | Yes | Yes | Yes | - |
+| openSUSE Leap 16.0 | - | Yes | Yes | - | Yes | - |
+| Manjaro Linux 26.0.1 | - | - | Yes | - | Yes | - |
+| Windows 10 | - | - | - | - | - | Yes |
+| Windows 11 | - | - | - | - | - | Yes |
 
 See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 
@@ -26,10 +28,10 @@ See [LINUX-COVERAGE.md](LINUX-COVERAGE.md) for detailed coverage analysis.
 
 | Config | Description |
 |--------|-------------|
-| With GPU | NVIDIA RTX 3060 via VFIO passthrough |
-| Without GPU | Software rendering (Xvfb/Weston headless) |
+| GPU passthrough | NVIDIA RTX 3060 via VFIO passthrough |
+| Baseline desktop | Real VM desktop automation through Proxmox VNC, AT-SPI where available, and VLM verification |
 
-### GPU Passthrough Test Results
+### Historical GPU Passthrough Test Results
 
 Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
 
@@ -49,7 +51,7 @@ Real GPU passthrough testing with NVIDIA RTX 3060 attached to VMs:
 
 ## Full Test Matrix
 
-Each combination: `OS × Package × Display × GPU`
+Each Linux combination: `OS × Package × Display × GPU`. Windows scenarios use `OS × EXE × desktop flow`.
 
 ### Fedora 42
 
@@ -161,7 +163,7 @@ Note: KDE Plasma installed with nouveau driver. GPU detected but using software 
 |---------|:---:|:-------:|:------------:|:--------:|:----------:|
 | AppImage | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | ⏭️ Skip (needs GPU) | ⚠️ Expected (no display) | 🔜 Planned
+Legend: ✅ Pass | ❌ Fail | 🔲 Not tested | ⏭️ Skip (needs GPU) | ⚠️ Expected (no display)
 
 ## The Bug (GitHub #3154)
 

@@ -1,21 +1,21 @@
 # Installing mosdat-insight
 
 The skill ships as a project-tracked directory at
-`.claude/skills/mosdat-insight/` inside this repository. Claude Code
+`skills/mosdat-insight/` inside this repository. Claude Code
 auto-discovers it when launched inside the project — no install needed
 for local use.
 
 ## To use this skill across all your projects
 
-Symlink the project copy into your global ~/.claude/skills/ dir:
+Symlink the project copy into your global skills dir:
 
 ```bash
-ln -s "$(pwd)/.claude/skills/mosdat-insight" ~/.claude/skills/mosdat-insight
+ln -s "$(pwd)/skills/mosdat-insight" ~/.codex/skills/mosdat-insight
 ```
 
 Verify:
 ```bash
-ls -la ~/.claude/skills/mosdat-insight/SKILL.md
+ls -la ~/.codex/skills/mosdat-insight/SKILL.md
 ```
 
 The symlink keeps the global install in lockstep with the tracked
@@ -36,7 +36,7 @@ matchers):
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/skills/mosdat-insight/check_repeated_failures.sh"
+            "command": "~/.codex/skills/mosdat-insight/check_repeated_failures.sh"
           }
         ]
       }
@@ -76,7 +76,7 @@ Your current `PostToolUse` has two entries. After adding mosdat-insight, it shou
     "hooks": [
       {
         "type": "command",
-        "command": "~/.claude/skills/mosdat-insight/check_repeated_failures.sh"
+        "command": "~/.codex/skills/mosdat-insight/check_repeated_failures.sh"
       }
     ]
   }
@@ -89,14 +89,14 @@ Your current `PostToolUse` has two entries. After adding mosdat-insight, it shou
 # Dry-run: pipe a fake failed agent result
 echo '{"output": "step 2 failed: verify check timed out"}' | \
   INSIGHT_DISABLED=0 CLAUDE_SESSION_ID=test \
-  ~/.claude/skills/mosdat-insight/check_repeated_failures.sh
+  ~/.codex/skills/mosdat-insight/check_repeated_failures.sh
 # Expect: no output (only 1 failure, threshold is 3)
 
 # Simulate hitting threshold
 for i in 1 2 3; do
   echo '{"output": "step 2 failed: verify check timed out"}' | \
     CLAUDE_SESSION_ID=test \
-    ~/.claude/skills/mosdat-insight/check_repeated_failures.sh 2>&1
+    ~/.codex/skills/mosdat-insight/check_repeated_failures.sh 2>&1
 done
 # Third run should emit: "[insight] related lessons found..."
 # Then clean up:

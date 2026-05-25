@@ -1,21 +1,21 @@
 # Installing mosdat-authoring
 
 The skill ships as a project-tracked directory at
-`.claude/skills/mosdat-authoring/` inside this repository. Claude Code
+`skills/mosdat-authoring/` inside this repository. Claude Code
 auto-discovers it when launched inside the project — no install needed
 for local use.
 
 ## To use this skill across all your projects
 
-Symlink the project copy into your global ~/.claude/skills/ dir:
+Symlink the project copy into your global skills dir:
 
 ```bash
-ln -s "$(pwd)/.claude/skills/mosdat-authoring" ~/.claude/skills/mosdat-authoring
+ln -s "$(pwd)/skills/mosdat-authoring" ~/.codex/skills/mosdat-authoring
 ```
 
 Verify:
 ```bash
-ls -la ~/.claude/skills/mosdat-authoring/SKILL.md
+ls -la ~/.codex/skills/mosdat-authoring/SKILL.md
 ```
 
 The symlink keeps the global install in lockstep with the tracked
@@ -32,9 +32,8 @@ It does NOT fire automatically after failures (that is mosdat-insight's role).
 
 ## Gitignore note
 
-mOSdat's `.gitignore` does not suppress `.claude/skills/**`, so this skill
-is tracked in version control alongside the codebase. Changes to the skill
-are part of normal commits.
+mOSdat's `.gitignore` ignores `.claude/`; committed project skills live under
+root `skills/`. Changes to this skill are part of normal commits.
 
 ## Dependencies
 

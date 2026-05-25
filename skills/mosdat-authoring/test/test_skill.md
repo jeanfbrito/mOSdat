@@ -12,7 +12,7 @@ Run these checks after installing or modifying the skill.
 - [ ] Verify the frontmatter name matches: `name: mosdat-authoring`.
 
 ```bash
-grep "name: mosdat-authoring" /home/jean/projects/linux-testing/mOSdat/.claude/skills/mosdat-authoring/SKILL.md
+grep "name: mosdat-authoring" /home/jean/projects/linux-testing/mOSdat/skills/mosdat-authoring/SKILL.md
 ```
 
 Expected: one match on the frontmatter line.
@@ -117,8 +117,8 @@ For the synthetic PR #9999 scenario created in check 5:
 
 ```bash
 # From project root
-ln -s "$(pwd)/.claude/skills/mosdat-authoring" ~/.claude/skills/mosdat-authoring
-ls -la ~/.claude/skills/mosdat-authoring/SKILL.md
+ln -s "$(pwd)/skills/mosdat-authoring" ~/.codex/skills/mosdat-authoring
+ls -la ~/.codex/skills/mosdat-authoring/SKILL.md
 ```
 
 Expected: symlink resolves to project-tracked file.

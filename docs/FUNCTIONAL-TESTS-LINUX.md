@@ -24,7 +24,7 @@ Fedora, etc.) for these reasons:
 Working around each of these piecemeal ends up brittle and
 distro-specific. The stable answer is to stop launching apps from SSH.
 
-## The pattern: drive the desktop launcher with VNC + VLM
+## The pattern: drive the desktop launcher with VNC + AT-SPI/VLM
 
 Instead, do what a human does:
 
@@ -39,8 +39,7 @@ Instead, do what a human does:
 4. `Enter` — launches the top-ranked result.
 5. VLM `verify` — confirm the app is the foreground window.
 
-All clicks/keys flow through the Proxmox VNC WebSocket (RFB protocol)
-so they're independent of X11 vs Wayland, guest-side tools, or xauth.
+Clicks/keys flow through the Proxmox VNC WebSocket (RFB protocol) so they are independent of X11 vs Wayland, guest-side tools, or xauth. For accessible Linux widgets, prefer AT-SPI role/name selectors (`atspi:`, `verify_atspi:`, `wait_for:`) before VLM localization; keep VLM `localize` for canvas-like or inaccessible regions.
 
 ## Pre-test cleanup (bash)
 
@@ -63,6 +62,7 @@ rm -rf "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"
 - 1.5 s pause after `key_pre` covers the time the launcher takes to
   fully paint before typing lands. 0.8 s after `type` lets GNOME's
   search ranker settle before `Enter`.
+- `atspi:`, `verify_atspi:`, and `wait_for:` steps use Linux accessibility semantics for role/name targeting when widgets expose them. Discovery is via `mosdat atspi-dump`.
 
 (`automation/runners/functional.py`, in the "standalone key/type steps"
 branch.)
@@ -115,6 +115,7 @@ what actually failed.
 
 - VNC click/keyboard/screenshot path (Proxmox RFB) — works on every
   Linux GUI regardless of display server.
+- AT-SPI selectors when widgets expose stable role/name metadata.
 - qwen3.6 localize/verify prompts — the prompts describe app UI
   elements, not OS chrome, so they transfer as-is.
 - VLM model swap via `[vlm]` in the TOML.
