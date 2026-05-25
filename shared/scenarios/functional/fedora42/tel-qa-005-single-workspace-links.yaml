@@ -181,7 +181,7 @@ steps:
             {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
           ]
         }'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
           echo "NO_PICKER_OK (attempt ${attempt}) — single-workspace direct route"
           exit 0
@@ -226,7 +226,7 @@ steps:
       set -u
       for attempt in 1 2 3 4 5 6; do
         PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
           echo "NO_PICKER_OK (attempt ${attempt})"
           exit 0
@@ -271,7 +271,7 @@ steps:
       set -u
       for attempt in 1 2 3 4 5 6; do
         PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
           echo "NO_PICKER_OK (attempt ${attempt})"
           exit 0
@@ -316,7 +316,7 @@ steps:
       set -u
       for attempt in 1 2 3 4 5 6; do
         PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
           echo "NO_PICKER_OK (attempt ${attempt}) — callto://authority did NOT crash"
           exit 0
@@ -344,7 +344,7 @@ steps:
       set -u
       for attempt in 1 2 3 4 5 6; do
         PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
           echo "NO_PICKER_AGGREGATE_OK"
           exit 0

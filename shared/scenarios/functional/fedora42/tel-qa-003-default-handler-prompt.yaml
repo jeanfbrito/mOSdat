@@ -181,7 +181,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "TELEPHONY_TOGGLE_OFF_OK"
         exit 0
@@ -225,7 +225,7 @@ steps:
           {"id":"label_phone","op":"find","role":"label","name":"phone","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       echo "PROMPT_COPY_DUMP_BEGIN"
       echo "$RES"
       echo "PROMPT_COPY_DUMP_END"
@@ -256,7 +256,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q PRESENT; then
         echo "OPEN_SETTINGS_BUTTON_PRESENT"
       else
@@ -277,7 +277,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q ABSENT; then
         echo "OPEN_SETTINGS_SKIPPED (button absent — macOS-style or build variance)"
         exit 0
@@ -362,7 +362,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "MODAL_DISMISSED_OK"
         exit 0
@@ -391,7 +391,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "TOGGLE_OFF_NO_PROMPT_OK"
         exit 0

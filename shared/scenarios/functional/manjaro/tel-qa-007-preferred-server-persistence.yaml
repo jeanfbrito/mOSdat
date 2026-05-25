@@ -218,7 +218,7 @@ steps:
             {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
           ]
         }'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
           echo "PICKER_CLOSED_OK (attempt ${attempt})"
           exit 0
@@ -287,7 +287,7 @@ steps:
             {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
           ]
         }'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q PRESENT; then
           echo "FAILED — picker re-opened despite remembered preference (attempt ${attempt})" >&2
           exit 1
@@ -382,7 +382,7 @@ steps:
             {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
           ]
         }'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q PRESENT; then
           echo "FAILED — picker re-opened after restart (preference did NOT persist)" >&2
           exit 1

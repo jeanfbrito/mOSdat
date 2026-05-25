@@ -292,15 +292,17 @@ steps:
       export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
-        printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard
+        printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard >/dev/null 2>&1 &
+        sleep 0.2
       else
-        printf '%s' '{{ phone_e164 }}' | xsel --clipboard --input
+        printf '%s' '{{ phone_e164 }}' | xsel --clipboard --input >/dev/null 2>&1 &
+        sleep 0.2
       fi
       # Confirm what's actually in the clipboard
       if which xclip >/dev/null 2>&1; then
-        GOT=$(xclip -selection clipboard -o)
+        GOT=$(timeout 5s xclip -selection clipboard -o 2>/dev/null || true)
       else
-        GOT=$(xsel --clipboard --output)
+        GOT=$(timeout 5s xsel --clipboard --output 2>/dev/null || true)
       fi
       [ "$GOT" = '{{ phone_e164 }}' ] || { echo "FAIL — clipboard='$GOT'" >&2; exit 1; }
       echo CLIPBOARD_E164_OK
@@ -348,7 +350,7 @@ steps:
           {"id":"e","op":"find","role":"entry","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       VAL=$(echo "$RES" | python3 -c '
       import json, sys
       try:
@@ -402,14 +404,16 @@ steps:
       export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
-        printf '%s' '{{ phone_uri_raw }}' | xclip -selection clipboard
+        printf '%s' '{{ phone_uri_raw }}' | xclip -selection clipboard >/dev/null 2>&1 &
+        sleep 0.2
       else
-        printf '%s' '{{ phone_uri_raw }}' | xsel --clipboard --input
+        printf '%s' '{{ phone_uri_raw }}' | xsel --clipboard --input >/dev/null 2>&1 &
+        sleep 0.2
       fi
       if which xclip >/dev/null 2>&1; then
-        GOT=$(xclip -selection clipboard -o)
+        GOT=$(timeout 5s xclip -selection clipboard -o 2>/dev/null || true)
       else
-        GOT=$(xsel --clipboard --output)
+        GOT=$(timeout 5s xsel --clipboard --output 2>/dev/null || true)
       fi
       [ "$GOT" = '{{ phone_uri_raw }}' ] || { echo "FAIL — clipboard='$GOT'" >&2; exit 1; }
       echo CLIPBOARD_TEL_URI_OK
@@ -448,7 +452,7 @@ steps:
     shell: |
       set -u
       PROBE='{"ops":[{"id":"e","op":"find","role":"entry","app_filter":"rocket"}]}'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       VAL=$(echo "$RES" | python3 -c '
       import json, sys
       try:
@@ -497,9 +501,11 @@ steps:
       export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
-        printf '%s' '{{ invalid_text }}' | xclip -selection clipboard
+        printf '%s' '{{ invalid_text }}' | xclip -selection clipboard >/dev/null 2>&1 &
+        sleep 0.2
       else
-        printf '%s' '{{ invalid_text }}' | xsel --clipboard --input
+        printf '%s' '{{ invalid_text }}' | xsel --clipboard --input >/dev/null 2>&1 &
+        sleep 0.2
       fi
       echo CLIPBOARD_INVALID_OK
 
@@ -538,14 +544,14 @@ steps:
           {"id":"crash","op":"find","role":"dialog","name":"crashed","name_substr":true}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE_CRASH" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE_CRASH" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);r=d["results"];print("CRASH" if (r["apport"].get("ok") or r["crash"].get("ok")) else "OK")' 2>/dev/null | grep -q CRASH; then
         echo "FAIL — crash/apport dialog visible after invalid-clipboard trigger" >&2
         exit 1
       fi
       # Inspect dialpad entry value (if surface painted).
       PROBE='{"ops":[{"id":"e","op":"find","role":"entry","app_filter":"rocket"}]}'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       VAL=$(echo "$RES" | python3 -c '
       import json, sys
       try:
@@ -628,9 +634,11 @@ steps:
       export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
-        printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard
+        printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard >/dev/null 2>&1 &
+        sleep 0.2
       else
-        printf '%s' '{{ phone_e164 }}' | xsel --clipboard --input
+        printf '%s' '{{ phone_e164 }}' | xsel --clipboard --input >/dev/null 2>&1 &
+        sleep 0.2
       fi
       wmctrl -a xterm 2>/dev/null || true
       sleep 1
@@ -679,7 +687,7 @@ steps:
     shell: |
       set -u
       PROBE='{"ops":[{"id":"t","op":"find","role":"check box","name":"Telephony","app_filter":"rocket"}]}'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("OK" if d["results"]["t"].get("ok") else "MISSING")' 2>/dev/null | grep -q OK; then
         echo "TELEPHONY_CB_VISIBLE_OK"
         exit 0
@@ -704,7 +712,11 @@ steps:
     atspi: {role: "menu item", name: "Settings", via: "action"}
     retries: 1
 
-  - label: "QA-008-step10f: click Voice & Video tab"
+  - label: "QA-008-step10f: wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 15}
+    retries: 1
+
+  - label: "QA-008-step10g: click Voice & Video tab"
     atspi: {role: "page tab", name: "Voice & Video", via: "action"}
     retries: 1
 
@@ -739,9 +751,11 @@ steps:
       export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
-        printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard
+        printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard >/dev/null 2>&1 &
+        sleep 0.2
       else
-        printf '%s' '{{ phone_e164 }}' | xsel --clipboard --input
+        printf '%s' '{{ phone_e164 }}' | xsel --clipboard --input >/dev/null 2>&1 &
+        sleep 0.2
       fi
       wmctrl -a xterm 2>/dev/null || true
       sleep 1
@@ -763,7 +777,7 @@ steps:
             {"id":"number_entry","op":"find","role":"entry","name":"number","name_substr":true,"app_filter":"rocket"}
           ]
         }'
-        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
         HITS=$(echo "$RES" | python3 -c '
       import json, sys
       d = json.load(sys.stdin)
@@ -788,6 +802,8 @@ steps:
   # ── Final cleanup ────────────────────────────────────────────────────────
   - shell: |
       pkill -KILL -x xterm 2>/dev/null || true
+      pkill -KILL -x xclip 2>/dev/null || true
+      pkill -KILL -x xsel 2>/dev/null || true
       pkill -KILL -x apport-gtk 2>/dev/null || true
       echo XTERM_CLEANUP_OK
 

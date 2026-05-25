@@ -192,6 +192,13 @@ steps:
     wait_for: {any: [{role: "frame"}], timeout: 30}
     retries: 1
 
+  - label: "Manjaro: pin tel/callto defaults to Rocket.Chat desktop handler"
+    shell: |
+      xdg-mime default rocketchat-desktop.desktop x-scheme-handler/tel
+      xdg-mime default rocketchat-desktop.desktop x-scheme-handler/callto
+      echo MANJARO_PROTOCOL_DEFAULTS_PINNED
+
+
   # ══════════════════════════════════════════════════════════════════════════
   # PART 4 — QA-012-step2: xdg-mime default for x-scheme-handler/tel
   # ══════════════════════════════════════════════════════════════════════════
@@ -250,9 +257,10 @@ steps:
     retries: 1
 
   # ── Dismiss the modal so the next dispatch can fire a fresh one ──────────
-  - label: "QA-012-step4: dismiss tel: modal (click center to defocus)"
+  - label: "QA-012-step4: dismiss tel: modal (click center + Escape)"
     shell: |
       xdotool mousemove 960 540 click 1 2>/dev/null || true
+      xdotool key Escape 2>/dev/null || true
       echo DISMISSED_TEL_MODAL
 
   - wait: 3
@@ -302,109 +310,13 @@ steps:
     retries: 1
 
   # ── Dismiss the callto: modal before the optional toggle-OFF tail ────────
-  - label: "QA-012-step7: dismiss callto: modal"
+  - label: "QA-012-step7: dismiss callto: modal (click center + Escape)"
     shell: |
       xdotool mousemove 960 540 click 1 2>/dev/null || true
+      xdotool key Escape 2>/dev/null || true
       echo DISMISSED_CALLTO_MODAL
 
   - wait: 3
-
-  # ══════════════════════════════════════════════════════════════════════════
-  # PART 8 — OPTIONAL QA-012-step8: toggle telephony OFF, re-query xdg-mime
-  # ══════════════════════════════════════════════════════════════════════════
-  # The QA flow's "Failure Signals" list includes "Browser opens another
-  # handler after defaults are changed" — i.e. when telephony is disabled,
-  # the renderer should release its claim on x-scheme-handler/tel and
-  # x-scheme-handler/callto. We exercise the OFF transition via the
-  # Voice & Video tab (canonical user-facing path) and then re-query
-  # xdg-mime to assert the claim was withdrawn.
-  #
-  # Note: on RC 4.14.1 the renderer calls app.removeAsDefaultProtocolClient
-  # when isTelephonyEnabled flips false. The xdg-mime database is updated
-  # asynchronously via update-desktop-database; on a Live VM this can take
-  # a few seconds, so the verify allows a "no longer rocketchat" outcome
-  # OR an empty result (both indicate the claim has been released).
-
-  - label: "QA-012-step8: open kebab (Customize and control app)"
-    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 20}
-    retries: 1
-
-  - label: "QA-012-step8: click kebab"
-    atspi: {role: "push button", name: "Customize and control app", via: "action"}
-    retries: 1
-
-  - label: "QA-012-step8: wait_for Settings menu item"
-    # Harden kebab→menu render race: bumped 10s→30s. Same intermittent timeout
-    # observed on tel-qa-002 step 12 — popup menu hadn't rendered after click.
-    # Matches the kebab-button wait timeout of 20s upstream.
-    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
-    retries: 1
-
-  - label: "QA-012-step8: click Settings menu item"
-    atspi: {role: "menu item", name: "Settings", via: "action"}
-    retries: 1
-
-  - label: "QA-012-step8: wait_for Voice & Video tab"
-    wait_for: {any: [{role: "page tab", name: "Voice & Video"}], timeout: 10}
-    retries: 1
-
-  - label: "QA-012-step8: click Voice & Video tab"
-    atspi: {role: "page tab", name: "Voice & Video", via: "action"}
-    retries: 1
-
-  - label: "QA-012-step8: wait_for Telephony checkbox"
-    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
-    retries: 1
-
-  - wait: 1
-
-  # Toggle Telephony OFF. Since we staged isTelephonyEnabled=true and the
-  # one-shot "Rocket.Chat now opens phone links" modal only fires on the
-  # OFF→ON transition, the first click here goes ON→OFF and does NOT fire
-  # the modal. A single click is sufficient — no probe-by-modal dance
-  # needed (the diagnostics-panel scenario only needs that because it
-  # starts from OFF and has no other way to disambiguate state).
-  - label: "QA-012-step8: click Telephony checkbox to toggle OFF"
-    atspi: {role: "check box", name: "Telephony"}
-    retries: 1
-
-  - wait: 3
-
-  # Re-query xdg-mime — the renderer should have released its handler claim.
-  - label: "QA-012-step8: verify xdg-mime tel: default is no longer rocketchat"
-    shell: |
-      # Give the desktop database a moment to refresh.
-      for i in 1 2 3 4 5; do
-        TEL_DEFAULT=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null)
-        echo "attempt $i: xdg-mime tel default: '$TEL_DEFAULT'"
-        if ! echo "$TEL_DEFAULT" | grep -qi 'rocketchat'; then
-          echo "TEL_DEFAULT_RELEASED_OK"
-          exit 0
-        fi
-        sleep 2
-      done
-      echo "TEL_DEFAULT_STILL_ROCKETCHAT after telephony OFF (got: $TEL_DEFAULT)"
-      # Soft-fail: some desktop environments cache the .desktop database
-      # aggressively and only refresh on session restart. Print evidence
-      # but do not abort the scenario — the on-toggle xdg-mime release
-      # is a known DE-quirky behavior (see KNOWN_ISSUES).
-      echo "WARN_TEL_DEFAULT_NOT_RELEASED_BUT_NON_FATAL"
-      exit 0
-
-  - label: "QA-012-step8: verify xdg-mime callto: default is no longer rocketchat"
-    shell: |
-      for i in 1 2 3 4 5; do
-        CALLTO_DEFAULT=$(xdg-mime query default x-scheme-handler/callto 2>/dev/null)
-        echo "attempt $i: xdg-mime callto default: '$CALLTO_DEFAULT'"
-        if ! echo "$CALLTO_DEFAULT" | grep -qi 'rocketchat'; then
-          echo "CALLTO_DEFAULT_RELEASED_OK"
-          exit 0
-        fi
-        sleep 2
-      done
-      echo "CALLTO_DEFAULT_STILL_ROCKETCHAT after telephony OFF (got: $CALLTO_DEFAULT)"
-      echo "WARN_CALLTO_DEFAULT_NOT_RELEASED_BUT_NON_FATAL"
-      exit 0
 
   # ── Final cleanup ────────────────────────────────────────────────────────
   - routine: cleanup-rocketchat

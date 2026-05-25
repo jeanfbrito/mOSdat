@@ -183,7 +183,7 @@ steps:
           {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       ANY_PRESENT=$(echo "$RES" | python3 -c '
       import json, sys
       d = json.load(sys.stdin)
@@ -384,7 +384,7 @@ steps:
   #         {"id":"ws2","op":"find","role":"push button","name":"rocket.chat","name_substr":true,"app_filter":"rocket"}
   #       ]
   #     }'
-  #     RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+  #     RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
   #     ANY_PRESENT=$(echo "$RES" | python3 -c '
   #     import json, sys
   #     d = json.load(sys.stdin)
@@ -529,7 +529,7 @@ steps:
           {"id":"phone","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       ANY_PRESENT=$(echo "$RES" | python3 -c '
       import json, sys
       d = json.load(sys.stdin)
@@ -581,7 +581,7 @@ steps:
           {"id":"phone","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       ANY_PRESENT=$(echo "$RES" | python3 -c '
       import json, sys
       d = json.load(sys.stdin)
@@ -645,7 +645,7 @@ steps:
           {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["remember"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "STEP5_PICKER_DISMISSED_OK"
         exit 0
@@ -702,7 +702,7 @@ steps:
           {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       OK=$(echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("1" if d["results"]["remember"].get("ok") else "0")' 2>/dev/null)
       if [ "$OK" = "1" ]; then
         echo "STEP6_AT_LEAST_ONE_MODAL_OK"
@@ -862,7 +862,7 @@ steps:
           {"id":"stale","op":"find","role":"push button","name":"stale-removed.example.invalid","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["stale"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "STEP7_STALE_URL_NOT_OFFERED_OK"
         exit 0

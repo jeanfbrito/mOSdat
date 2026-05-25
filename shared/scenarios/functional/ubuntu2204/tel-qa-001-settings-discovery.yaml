@@ -192,7 +192,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       # find returns ok:false when the node is absent — that's the GOOD path here.
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "TELEPHONY_INITIAL_STATE_OFF_OK"

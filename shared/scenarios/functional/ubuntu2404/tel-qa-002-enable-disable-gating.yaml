@@ -221,7 +221,7 @@ steps:
           {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       echo "$RES" | head -c 400
       echo
       ANY_PRESENT=$(echo "$RES" | python3 -c '
@@ -281,7 +281,7 @@ steps:
           {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
         echo "TELEPHONY_TOGGLE_OFF_OK"
         exit 0
@@ -323,7 +323,7 @@ steps:
           {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       ANY_PRESENT=$(echo "$RES" | python3 -c '
       import json, sys
       d = json.load(sys.stdin)
@@ -487,7 +487,7 @@ steps:
           {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
         ]
       }'
-      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      RES=$(timeout 10s python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1 || true)
       ANY_PRESENT=$(echo "$RES" | python3 -c '
       import json, sys
       d = json.load(sys.stdin)
