@@ -1,0 +1,200 @@
+# qa_flow: TEL-QA-001
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/01-settings-discovery.md
+# Authored 2026-05-22 atop swiss-knife epic Stage 1+2+3 + pointer-mode default.
+#
+# Mirrors the 5-step QA flow 1:1:
+#   1. Launch Rocket.Chat → main window visible.
+#   2. Open kebab → click `Settings` menu item → Settings screen opens.
+#   3. Click `Voice & Video` tab → V&V options visible.
+#   4. Find Telephony → Telephony section/checkbox present.
+#   5. Check initial state → toggle is OFF (this profile pre-staged
+#      isTelephonyEnabled=false).
+#
+# Pattern stolen verbatim from 3325-diagnostics-panel.yaml (green PASS 27/27):
+#   - cleanup-rocketchat routine bookends
+#   - inline userData pre-stage (servers + overridden-settings telephony OFF)
+#   - inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME/.Xauthority)
+#   - AT-SPI pointer-mode primitives (via: pointer is implicit default)
+#   - wait_for + verify_atspi instead of fixed waits + VLM
+#
+# Live-discovered widget names (ubuntu2204@192.168.13.81, PR3325 head):
+#   - kebab:     push button "Customize and control app"
+#   - settings:  menu item "Settings"
+#   - tab:       page tab "Voice & Video"  (NOT "General" — drift fixed in PR build)
+#   - section:   the Telephony toggle is a `check box` named "Telephony" living
+#                inside the Voice & Video tab; its presence is sufficient to
+#                assert step 4 (section discovered) AND step 5 (initial OFF —
+#                pre-staged via overridden-settings.json isTelephonyEnabled=false).
+#
+# AT-SPI/VLM ratio: 100% AT-SPI. No VLM localize fallback needed — every widget
+# in the discovery flow has a stable role+name.
+
+name: "tel-qa-001-settings-discovery"
+description: |
+  TEL-QA-001 — Telephony settings discovery.
+
+  Smoke flow: a tester with no feature context navigates Settings → Voice &
+  Video and identifies the Telephony section. Pre-stages a workspace + a
+  telephony-OFF profile so the initial-state assertion (step 5) is meaningful.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings with telephony OFF) ─
+  # Inlined from launch-rocketchat (Known Issue #1: Wayland-only XAUTH path
+  # in the routine — inline shell is safer until that's repaired).
+  - shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": False,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED
+
+  # ── QA-001-step1: Launch Rocket.Chat ─────────────────────────────────────
+  # Inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME).
+  - label: "QA-001-step1: launch Rocket.Chat (inline, XAUTH fallback chain)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-001-step1: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # ── QA-001-step2: Open kebab → click Settings ────────────────────────────
+  - label: "QA-001-step2a: wait_for kebab button (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-001-step2b: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-001-step2c: wait_for Settings menu item in kebab popup"
+    # Harden kebab→menu render race: bumped 10s→30s. Same intermittent timeout
+    # observed on tel-qa-002 step 12 — popup menu hadn't rendered after click.
+    # Matches the kebab-button wait timeout of 20-30s upstream.
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-001-step2d: click Settings menu item"
+    atspi: {role: "menu item", name: "Settings"}
+    retries: 1
+
+  - label: "QA-001-step2e: verify Settings screen opened (General tab present)"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  # ── QA-001-step3: Click Voice & Video tab ────────────────────────────────
+  - label: "QA-001-step3a: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-001-step3b: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  # ── QA-001-step4: Find Telephony section ─────────────────────────────────
+  # The Telephony checkbox is the canonical anchor for the Telephony section.
+  # Its presence on the Voice & Video tab is sufficient to assert step 4.
+  - label: "QA-001-step4: wait_for Telephony section (checkbox is the anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-001-step4: verify_atspi Telephony section present"
+    verify_atspi: {role: "check box", name: "Telephony"}
+    retries: 1
+
+  # ── QA-001-step5: Check initial state — toggle OFF ───────────────────────
+  # Profile was pre-staged with isTelephonyEnabled=false in
+  # overridden-settings.json, so the toggle MUST render OFF on first Settings
+  # open. We assert the OFF state by behavioural proof: if the toggle is OFF,
+  # then no "Got it" default-handler prompt is currently visible (that modal
+  # only fires on the OFF→ON transition). A simpler structural assert — the
+  # Telephony checkbox exists and the Got it modal does not — is the cleanest
+  # signal AT-SPI gives us, since Fuselage ToggleSwitch decouples the React
+  # `checked` prop from the AT-SPI action_name (see KNOWN_ISSUES #
+  # "Fuselage ToggleSwitch AT-SPI action drift").
+  - label: "QA-001-step5: verify no default-handler prompt visible (toggle is OFF)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      # find returns ok:false when the node is absent — that's the GOOD path here.
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "TELEPHONY_INITIAL_STATE_OFF_OK"
+        exit 0
+      fi
+      echo "FAILED — Got it modal is visible, meaning telephony toggled ON unexpectedly" >&2
+      echo "$RES" >&2
+      exit 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

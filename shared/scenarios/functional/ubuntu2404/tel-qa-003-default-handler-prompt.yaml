@@ -1,0 +1,404 @@
+# qa_flow: TEL-QA-003
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/03-default-handler-prompt.md
+# Authored 2026-05-22 atop swiss-knife epic Stage 1+2+3 + pointer-mode default.
+#
+# Mirrors the 6-step QA flow 1:1:
+#   1. Navigate kebab → Settings → Voice & Video → Telephony. Ensure toggle OFF.
+#      Verify NO default-handler prompt is currently visible.
+#   2. Switch Telephony toggle ON. The default-handler prompt opens (one-shot
+#      OFF→ON transition).
+#   3. Read prompt copy. Capture title/body/button widget names from AT-SPI
+#      tree dump (recorded into events.jsonl + the runner log).
+#   4. If the prompt offers "Open Settings", activate it. On Linux this should
+#      open the GNOME/KDE default-application settings via xdg-mime / gnome
+#      control-center. macOS has no action by design; the button may be absent.
+#   5. Dismiss the prompt (Got it). Verify the modal closes and the app
+#      remains usable (kebab still clickable).
+#   6. Switch Telephony OFF, then back ON. The prompt MUST reappear on a new
+#      OFF→ON transition (it is one-shot per transition, not session-wide).
+#
+# Pattern stolen verbatim from tel-qa-002-enable-disable-gating.yaml (PASS):
+#   - cleanup-rocketchat routine bookends
+#   - inline userData pre-stage (servers + overridden-settings telephony OFF)
+#   - inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME/.Xauthority)
+#   - AT-SPI pointer-mode primitives (via: pointer is implicit default)
+#   - via: hint ONLY for the Fuselage ToggleSwitch (zero-extent check box) —
+#     see docs/KNOWN_ISSUES.md "Fuselage ToggleSwitch AT-SPI action drift"
+#   - wait_for + verify_atspi instead of fixed waits + VLM
+#
+# Live-discovered widget names (PR3325 head, 2026-05-22):
+#   - kebab:        push button "Customize and control app"
+#   - settings:     menu item "Settings"
+#   - tab:          page tab "Voice & Video"
+#   - section:     check box "Telephony" (Fuselage ToggleSwitch, zero-extent)
+#   - prompt btn:   push button "Got it"  (default-handler modal)
+#   - open-settings: push button "Open Settings" (Linux/Windows only; may be
+#                    absent on macOS — we probe-by-find and skip if not present)
+#
+# AT-SPI/VLM ratio: 100% AT-SPI. No VLM fallback needed.
+
+name: "tel-qa-003-default-handler-prompt"
+description: |
+  TEL-QA-003 — Default-handler prompt copy + actions + repeatability.
+
+  Enable Telephony from OFF → ON, assert prompt opens once, capture copy,
+  exercise Open Settings (if present), dismiss, then cycle OFF→ON to
+  confirm the prompt fires on each new enable transition.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings telephony OFF) ─────
+  # Inlined from launch-rocketchat (Known Issue #1: Wayland-only XAUTH path
+  # in the routine — inline shell is safer until that's repaired).
+  - shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": False,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED
+
+  # ── Launch Rocket.Chat (telephony OFF pre-staged) ────────────────────────
+  # Inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME).
+  - label: "QA-003-launch: launch Rocket.Chat (fresh, telephony OFF pre-staged)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-003-launch: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-003-launch: wait for workspace to fully load (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # ── QA-003-step1: Navigate to Voice & Video → Telephony, ensure OFF ──────
+  - label: "QA-003-step1a: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-003-step1b: wait_for Settings menu item in kebab popup"
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-003-step1c: click Settings menu item"
+    atspi: {role: "menu item", name: "Settings"}
+    retries: 1
+
+  - label: "QA-003-step1d: wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-003-step1e: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-003-step1f: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-003-step1g: wait_for Telephony section (checkbox is the anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  # Behavioural proof of OFF state: no "Got it" prompt is currently visible
+  # (that modal only fires on OFF→ON). Matches tel-qa-002 step 3 pattern.
+  - label: "QA-003-step1h: verify toggle currently OFF (no prompt visible)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "TELEPHONY_TOGGLE_OFF_OK"
+        exit 0
+      fi
+      echo "FAIL — Got it prompt visible; toggle is unexpectedly ON" >&2
+      echo "$RES" >&2
+      exit 1
+
+  - wait: 1
+
+  # ── QA-003-step2: Switch Telephony toggle ON → prompt opens once ─────────
+  # `via: hint` for the Fuselage ToggleSwitch zero-extent widget. See
+  # docs/KNOWN_ISSUES.md "Fuselage ToggleSwitch AT-SPI action drift".
+  - label: "QA-003-step2a: invoke Telephony toggle ON (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  # Let the React modal portal fully mount + take focus before reading copy.
+  - wait: 1
+
+  - label: "QA-003-step2b: wait_for default-handler prompt (Got it button anchor)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  # ── QA-003-step3: Read prompt copy ───────────────────────────────────────
+  # Dump the modal subtree to events.jsonl + log via atspi tree-walk probe.
+  # The QA agent action is "Capture prompt title/body/buttons" — we surface
+  # all dialog descendants so a reviewer can compare with the spec.
+  - label: "QA-003-step3: capture prompt copy (title/body/buttons via AT-SPI tree dump)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"dialog","op":"find","role":"dialog","app_filter":"rocket"},
+          {"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},
+          {"id":"open_settings","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"},
+          {"id":"label_default","op":"find","role":"label","name":"default","name_substr":true,"app_filter":"rocket"},
+          {"id":"label_phone","op":"find","role":"label","name":"phone","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      echo "PROMPT_COPY_DUMP_BEGIN"
+      echo "$RES"
+      echo "PROMPT_COPY_DUMP_END"
+      # Soft assertion: at least one phone/default label OR the dialog itself
+      # must be present. The exact copy is a manual review artefact.
+      ANY=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("dialog","got_it","label_default","label_phone") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY" = "NONE" ]; then
+        echo "FAIL — prompt modal carries no recognisable dialog/label widgets" >&2
+        exit 1
+      fi
+      echo "PROMPT_COPY_PRESENT_OK ($ANY)"
+
+  # ── QA-003-step4: Activate "Open Settings" if present ────────────────────
+  # On Linux/Windows the button exists and should open the OS default-app
+  # settings via xdg-mime / gnome-control-center. macOS does not have this
+  # action. We probe-by-find first and only click if present.
+  - label: "QA-003-step4a: probe for Open Settings button (Linux/Windows path)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q PRESENT; then
+        echo "OPEN_SETTINGS_BUTTON_PRESENT"
+      else
+        echo "OPEN_SETTINGS_BUTTON_ABSENT (macOS-style or build variance — step 4 will skip click)"
+      fi
+
+  # Click Open Settings via the AT-SPI worker IFF the button is present.
+  # We CANNOT use the YAML-level if_visible step (its `if_visible` field is a
+  # VLM prompt string, not an AT-SPI selector dict). Instead we run a single
+  # shell that probes via the worker and, on hit, invokes the click action.
+  # The button is absent on macOS by design — script exits 0 with a SKIP
+  # marker so the QA flow continues to step 5.
+  - label: "QA-003-step4b: click Open Settings if present (Linux/Windows path)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Open Settings","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("PRESENT" if d["results"]["f"]["ok"] else "ABSENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "OPEN_SETTINGS_SKIPPED (button absent — macOS-style or build variance)"
+        exit 0
+      fi
+      CLICK='{
+        "ops": [
+          {"id":"c","op":"click","role":"push button","name":"Open Settings","app_filter":"rocket","via":"action"}
+        ]
+      }'
+      CRES=$(python3 /tmp/mosdat_atspi_worker.py "$CLICK" 2>&1)
+      echo "OPEN_SETTINGS_CLICK_RESULT:"
+      echo "$CRES"
+      if echo "$CRES" | python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d["results"]["c"]["ok"] else 1)' 2>/dev/null; then
+        echo "OPEN_SETTINGS_CLICKED_OK"
+      else
+        echo "FAIL — Open Settings present but click failed" >&2
+        exit 1
+      fi
+
+  # Brief settle: the spawn is asynchronous (xdg-mime / gnome-control-center).
+  - wait: 3
+
+  # Soft evidence: a settings-ish window opened on the host. We check wmctrl
+  # for any non-RC window whose title mentions "Settings" or "Default Apps".
+  # Absence is NOT a hard fail — minimal hosts may not have a graphical
+  # control-center available.
+  - label: "QA-003-step4c: probe OS settings surface opened (soft evidence)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      WINDOWS=$(wmctrl -l 2>/dev/null || true)
+      echo "WMCTRL_DUMP_BEGIN"
+      echo "$WINDOWS"
+      echo "WMCTRL_DUMP_END"
+      if echo "$WINDOWS" | grep -iE 'settings|default apps|control[- ]center' | grep -v -i rocket >/dev/null; then
+        echo "OS_SETTINGS_SURFACE_OPENED_OK"
+      else
+        echo "OS_SETTINGS_SURFACE_NOT_DETECTED (soft — minimal host or async spawn)"
+      fi
+
+  # Refocus Rocket.Chat for step 5 (whatever opened may have stolen focus).
+  - label: "QA-003-step4d: refocus Rocket.Chat for step 5"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      wmctrl -a "Rocket.Chat" 2>/dev/null || true
+      echo "REFOCUSED_RC"
+
+  - wait: 1
+
+  # ── QA-003-step5: Dismiss prompt → modal closes, app usable ──────────────
+  - label: "QA-003-step5a: dismiss the default-handler prompt (Got it)"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  # Brief settle so React unmounts the modal portal cleanly.
+  - wait: 1
+
+  - label: "QA-003-step5b: verify modal closed (Got it button no longer present)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "MODAL_DISMISSED_OK"
+        exit 0
+      fi
+      echo "FAIL — Got it prompt still visible after dismissal" >&2
+      echo "$RES" >&2
+      exit 1
+
+  - label: "QA-003-step5c: verify app remains usable (kebab still clickable)"
+    verify_atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  # ── QA-003-step6: Cycle OFF → ON → prompt MUST reappear ──────────────────
+  # The QA contract says the prompt may appear again on a new off-to-on
+  # transition (it is one-shot per transition, not session-wide).
+  - label: "QA-003-step6a: switch Telephony OFF (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 2
+
+  - label: "QA-003-step6b: verify no prompt while OFF"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "TOGGLE_OFF_NO_PROMPT_OK"
+        exit 0
+      fi
+      echo "FAIL — Got it prompt visible while toggle OFF (stale modal?)" >&2
+      exit 1
+
+  - label: "QA-003-step6c: switch Telephony ON again (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  - wait: 1
+
+  - label: "QA-003-step6d: wait_for prompt to REAPPEAR on new OFF→ON transition"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-003-step6e: dismiss the reappeared prompt"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  - wait: 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

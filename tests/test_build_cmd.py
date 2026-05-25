@@ -167,6 +167,32 @@ def test_targets_table_contains_deb_and_exe() -> None:
     assert set(TARGETS) == {"deb", "exe"}
 
 
+
+def test_clone_or_update_existing_clone_fetches_to_fetch_head(monkeypatch, tmp_path) -> None:
+    clone_dir = tmp_path / "clone"
+    clone_dir.mkdir()
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(cmd)
+        return 0
+
+    def fake_capture(cmd, *args, **kwargs):
+        return 0, "abcdef HEAD\n", ""
+
+    monkeypatch.setattr(build_mod, "_run", fake_run)
+    monkeypatch.setattr(build_mod, "_capture", fake_capture)
+
+    rc = build_mod.clone_or_update(3325, "RocketChat/Rocket.Chat.Electron", clone_dir, dry_run=False)
+
+    assert rc == 0
+    assert calls[0] == [
+        "git", "-C", str(clone_dir), "fetch", "origin", "pull/3325/head", "--force"
+    ]
+    assert calls[1] == [
+        "git", "-C", str(clone_dir), "checkout", "-B", "pr-3325-latest", "FETCH_HEAD"
+    ]
+
 # ---------------------------------------------------------------------------
 # Dry-run end-to-end (no network, no subprocess)
 # ---------------------------------------------------------------------------

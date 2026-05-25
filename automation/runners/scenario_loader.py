@@ -527,13 +527,15 @@ def resolve_test_path(
     name: str,
     base_dir: Path,
     subdir: Optional[str] = None,
+    fallback_subdirs: Optional[list[str]] = None,
 ) -> Path:
     """Resolve a ``--test NAME`` argument to a concrete scenario YAML path.
 
     Resolution order:
-    1. ``base_dir / subdir / NAME.yaml`` (if ``subdir`` is given) — per-OS variant.
-    2. ``base_dir / NAME.yaml`` — backward-compat root.
-    3. If NAME already contains a path separator (``linux/foo``), only
+    1. ``base_dir / subdir / NAME.yaml`` (if ``subdir`` is given) — per-VM/OS variant.
+    2. ``base_dir / fallback_subdir / NAME.yaml`` for each fallback.
+    3. ``base_dir / NAME.yaml`` — backward-compat root.
+    4. If NAME already contains a path separator (``linux/foo``), only
        ``base_dir / NAME.yaml`` is probed (caller specified the subfolder).
 
     NAME may include or omit the ``.yaml`` extension.
@@ -553,6 +555,9 @@ def resolve_test_path(
     candidates: list[Path] = []
     if subdir:
         candidates.append(base_dir / subdir / f"{stem}.yaml")
+    for fallback in fallback_subdirs or []:
+        if fallback and fallback != subdir:
+            candidates.append(base_dir / fallback / f"{stem}.yaml")
     candidates.append(base_dir / f"{stem}.yaml")
 
     for path in candidates:

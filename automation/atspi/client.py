@@ -95,6 +95,10 @@ class AtspiClient:
 
     # ----- deployment -------------------------------------------------------
 
+    def deploy_worker(self) -> None:
+        """SCP the worker to the VM. Idempotent."""
+        self._ensure_deployed()
+
     def _ensure_deployed(self) -> None:
         """SCP the worker to the VM on first use. Idempotent.
 

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from automation.config import load_config
+from automation.runners.scenario_loader import ScenarioNotFoundError, resolve_test_path
 from automation.transport.ssh import SSHClient
 
 
@@ -50,8 +51,11 @@ def _print(status: str, label: str, detail: str = "") -> None:
 # Check implementations
 # ---------------------------------------------------------------------------
 
-def _check_yaml(scenario_path: Path) -> tuple[str, str, Optional[dict]]:
-    """Parse YAML and validate with ScenarioModel. Returns (status, detail, raw_data)."""
+def _check_yaml(
+    scenario_path: Path,
+    platform: Optional[str] = None,
+) -> tuple[str, str, Optional[dict]]:
+    """Parse YAML and validate after import/routine expansion."""
     try:
         import yaml
     except ImportError:
@@ -64,14 +68,16 @@ def _check_yaml(scenario_path: Path) -> tuple[str, str, Optional[dict]]:
         return FAIL, f"YAML parse error: {exc}", None
 
     try:
-        from automation.scenario import ScenarioModel
-        ScenarioModel.model_validate(data)
+        from automation.runners.scenario_loader import load_test_yaml
+
+        _, expanded_steps, _, _ = load_test_yaml(scenario_path, platform=platform)
+    except SystemExit as exc:
+        return FAIL, f"Scenario loader failed with exit {exc.code}", None
     except Exception as exc:
         first_line = str(exc).splitlines()[0][:120]
-        return FAIL, f"Schema error: {first_line}", None
+        return FAIL, f"Scenario loader error: {first_line}", None
 
-    step_count = len(data.get("steps", []))
-    return PASS, f"{step_count} steps", data
+    return PASS, f"{len(expanded_steps)} expanded steps", data
 
 
 def _check_ssh(ssh) -> tuple[str, str]:
@@ -221,15 +227,51 @@ def _check_no_stale_rc(ssh) -> tuple[str, str]:
         "pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' 2>/dev/null || true",
         timeout=10,
     )
-    procs = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
+    procs = [
+        ln for ln in r.stdout.strip().splitlines()
+        if ln.strip() and "pgrep -af" not in ln
+    ]
     if not procs:
         return PASS, "no stale RC processes"
     return FAIL, f"{len(procs)} stale process(es): {procs[0][:80]}"
 
 
+def _needs_atspi_worker(steps: list, *, limit: int = 3) -> bool:
+    """Return True if the shell dry-run window calls the AT-SPI worker."""
+    shell_count = 0
+    for raw in steps:
+        if not isinstance(raw, dict):
+            continue
+        shell_script = raw.get("shell")
+        if not shell_script:
+            continue
+        shell_count += 1
+        if "mosdat_atspi_worker.py" in shell_script:
+            return True
+        if shell_count >= limit:
+            break
+    return False
+
+
+def _stage_atspi_worker_for_dry_run(ssh) -> tuple[str, str]:
+    """Ship the AT-SPI worker so shell probes can run during preflight."""
+    try:
+        from automation.atspi import AtspiClient
+
+        AtspiClient(ssh=ssh).deploy_worker()
+        return PASS, "AT-SPI worker staged"
+    except Exception as exc:
+        return FAIL, f"AT-SPI worker staging failed: {str(exc)[:120]}"
+
+
 def _dry_run_shell_steps(ssh, steps: list) -> list[tuple[str, str, str]]:
     """Find first 3 shell: blocks, run them, return list of (label, status, detail)."""
     results = []
+    if _needs_atspi_worker(steps):
+        status, detail = _stage_atspi_worker_for_dry_run(ssh)
+        if status == FAIL:
+            return [("AT-SPI worker", status, detail)]
+
     shell_count = 0
     for i, raw in enumerate(steps):
         if not isinstance(raw, dict):
@@ -283,7 +325,17 @@ def run_preflight(
 
     framework_root = config.framework_path
     scenarios_dir = framework_root / "shared" / "scenarios" / "functional"
-    scenario_path = scenarios_dir / f"{scenario_name}.yaml"
+    first_vm = config.vm_by_name.get(vms[0]) if vms else None
+    try:
+        scenario_path = resolve_test_path(
+            scenario_name,
+            scenarios_dir,
+            subdir=first_vm.scenario_subdir if first_vm else None,
+            fallback_subdirs=first_vm.scenario_fallback_subdirs if first_vm else None,
+        )
+    except ScenarioNotFoundError as exc:
+        print(f"[preflight] ERROR: {exc}", file=sys.stderr)
+        return 2
 
     print(f"\n[preflight] Scenario: {scenario_name}")
     print(f"[preflight] Config:   {config_path}")
@@ -296,11 +348,10 @@ def run_preflight(
     # Check 1: YAML + schema
     # -----------------------------------------------------------------------
     print("=== 1. Scenario YAML + schema ===")
-    if not scenario_path.exists():
-        _print(FAIL, "File exists", f"not found: {scenario_path}")
-        return 2
-
-    yaml_status, yaml_detail, raw_data = _check_yaml(scenario_path)
+    yaml_status, yaml_detail, raw_data = _check_yaml(
+        scenario_path,
+        platform=first_vm.os_type if first_vm else None,
+    )
     _print(yaml_status, "YAML parse + ScenarioModel", yaml_detail)
     if yaml_status == FAIL:
         any_fail = True

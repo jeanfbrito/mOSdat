@@ -1,0 +1,461 @@
+# qa_flow: TEL-QA-002
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/02-enable-disable-gating.md
+# Authored 2026-05-22 atop swiss-knife epic Stage 1+2+3 + pointer-mode default.
+#
+# Mirrors the 7-step QA flow 1:1:
+#   1. Fresh launch, Telephony NOT enabled → click tel: link → RC does NOT
+#      handle it (no dialpad, no protocol registration).
+#   2. Navigate kebab → Settings → Voice & Video → find Telephony section.
+#   3. Ensure toggle is OFF.
+#   4. Click callto:+15551234567 → RC does NOT handle it.
+#   5. Switch Telephony toggle ON (probe-by-modal: "Got it" only fires OFF→ON).
+#   6. Click tel:+15551234567 → RC opens the telephony dialpad.
+#   7. Click callto:+15551234567 → RC opens the telephony dialpad.
+#
+# Pattern stolen verbatim from tel-qa-001-settings-discovery.yaml +
+# 3325-diagnostics-panel.yaml (both green PASS):
+#   - cleanup-rocketchat routine bookends
+#   - inline userData pre-stage (servers + overridden-settings telephony OFF)
+#   - inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME/.Xauthority)
+#   - AT-SPI pointer-mode primitives (via: pointer is implicit default)
+#   - wait_for + verify_atspi instead of fixed waits + VLM
+#   - probe-by-modal pattern for Telephony toggle ON (KNOWN_ISSUES #
+#     "Fuselage ToggleSwitch AT-SPI action drift")
+#
+# Live-discovered widget names (ubuntu2204@192.168.13.81, PR3325 head):
+#   - kebab:     push button "Customize and control app"
+#   - settings:  menu item "Settings"
+#   - tab:       page tab "Voice & Video"  (NOT "General" — drift fixed in PR build)
+#   - section:   check box "Telephony" inside Voice & Video
+#   - prompt:    push button "Got it" (default-handler modal, OFF→ON one-shot)
+#   - dialpad:   the telephony dispatch surface (Fuselage modal / server picker
+#                / dial-pad frame). We assert any of:
+#                  · push button "Got it"           — first-time prompt
+#                  · push button name_substr "Call" — server picker / dial UI
+#                  · entry name_substr "phone"      — dial-pad number entry
+#                  · push button name_substr "Remember this choice"
+#                We use `wait_for` with `any:` so whichever surface paints first
+#                fires the assertion.
+#
+# Protocol-gating proof (Linux):
+#   - Disabled state: `xdg-open tel:+15551234567` is a no-op for RC. RC must
+#     not own the `x-scheme-handler/tel` MIME type (xdg-mime query is empty
+#     OR points elsewhere) AND no telephony surface paints in RC.
+#   - Enabled state: same xdg-open invocation surfaces a telephony UI in RC.
+#
+# AT-SPI/VLM ratio: 100% AT-SPI. No VLM fallback needed.
+
+name: "tel-qa-002-enable-disable-gating"
+description: |
+  TEL-QA-002 — Enable/disable gating for tel: and callto: protocol handling.
+
+  Fresh-launch-disabled → tel: ignored → callto: ignored → enable toggle →
+  tel: routes → callto: routes. Cycles the master toggle and asserts
+  protocol behaviour on both sides.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  test_number: "+15551234567"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── Pre-stage userData (servers + overridden-settings with telephony OFF) ─
+  # Inlined from launch-rocketchat (Known Issue #1: Wayland-only XAUTH path
+  # in the routine — inline shell is safer until that's repaired).
+  - shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": False,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED
+
+  # ── QA-002-step1: Fresh launch BEFORE enabling Telephony ─────────────────
+  # Inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME).
+  - label: "QA-002-step1a: launch Rocket.Chat (fresh, telephony OFF pre-staged)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-002-step1b: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-002-step1c: wait for workspace to fully load (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # Assert tel: protocol is NOT registered to RC. The startup-registration
+  # contract for the PR is: `rocketchat://` registers at startup but `tel`
+  # and `callto` only register after the master toggle is enabled. So on a
+  # fresh launch with telephony OFF, xdg-mime should NOT report
+  # rocketchat-desktop as the tel: handler.
+  - label: "QA-002-step1d: assert tel: protocol NOT bound to Rocket.Chat (xdg-mime BLOCKED)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      TEL_HANDLER=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null || true)
+      CALLTO_HANDLER=$(xdg-mime query default x-scheme-handler/callto 2>/dev/null || true)
+      echo "tel handler:    [$TEL_HANDLER]"
+      echo "callto handler: [$CALLTO_HANDLER]"
+      if echo "$TEL_HANDLER" | grep -qi 'rocket'; then
+        echo "FAIL — tel: is bound to Rocket.Chat while Telephony OFF" >&2
+        exit 1
+      fi
+      if echo "$CALLTO_HANDLER" | grep -qi 'rocket'; then
+        echo "FAIL — callto: is bound to Rocket.Chat while Telephony OFF" >&2
+        exit 1
+      fi
+      echo "PROTOCOLS_NOT_BOUND_TO_RC_OK"
+
+  # Dispatch tel: link via xdg-open and assert no telephony surface paints.
+  # If RC is not the registered handler, xdg-open is a no-op for RC's UI.
+  # We confirm the RC window did NOT spawn a "Got it" or "Call" / dial-pad
+  # surface (those only exist when telephony is enabled and dispatched).
+  - label: "QA-002-step1e: xdg-open tel:{{ test_number }} (should NO-OP for RC)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      # nohup + & so xdg-open returning non-zero (no handler) does not fail us;
+      # the assertion is on RC's AT-SPI surface, not xdg-open's exit code.
+      nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 2
+      echo "XDG_OPEN_DISPATCHED"
+
+  - wait: 2
+
+  - label: "QA-002-step1f: verify NO telephony surface painted in RC (BLOCKED)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},
+          {"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      echo "$RES" | head -c 400
+      echo
+      ANY_PRESENT=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("got_it","call_btn","remember") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY_PRESENT" = "NONE" ]; then
+        echo "TEL_PROTOCOL_BLOCKED_OK (no telephony surface)"
+        exit 0
+      fi
+      echo "FAIL — telephony surface painted while telephony OFF: $ANY_PRESENT" >&2
+      exit 1
+
+  # ── QA-002-step2: Navigate kebab → Settings → Voice & Video ──────────────
+  - label: "QA-002-step2a: click kebab (Customize and control app)"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-002-step2b: wait_for Settings menu item in kebab popup"
+    # Harden kebab→menu render race: bumped 10s→30s after a single observed
+    # timeout on this step (popup menu hadn't rendered yet after kebab click).
+    # Matches the kebab-button wait timeout of 30s upstream.
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-002-step2c: click Settings menu item"
+    atspi: {role: "menu item", name: "Settings"}
+    retries: 1
+
+  - label: "QA-002-step2d: wait_for Settings General tab"
+    wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-002-step2e: verify Voice & Video tab present (PR3325 build)"
+    verify_atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-002-step2f: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-002-step2g: wait_for Telephony section (checkbox is the anchor)"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  # ── QA-002-step3: Ensure toggle is OFF (pre-stage already set it OFF) ────
+  # Behavioural proof: if toggle is OFF, no "Got it" prompt is currently
+  # visible (that modal only fires OFF→ON). Matches tel-qa-001 step 5.
+  - label: "QA-002-step3: verify toggle currently OFF (no Got it prompt visible)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"f","op":"find","role":"push button","name":"Got it","app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "TELEPHONY_TOGGLE_OFF_OK"
+        exit 0
+      fi
+      echo "FAIL — Got it prompt visible; toggle is unexpectedly ON" >&2
+      echo "$RES" >&2
+      exit 1
+
+  # Give the V&V panel a beat to fully hydrate before the next probe.
+  - wait: 1
+
+  # ── QA-002-step4: Click callto: while disabled → must be ignored ─────────
+  - label: "QA-002-step4a: xdg-open callto:{{ test_number }} (should NO-OP for RC)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'callto:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 2
+      echo "XDG_OPEN_CALLTO_DISPATCHED"
+
+  - wait: 2
+
+  - label: "QA-002-step4b: verify NO telephony surface painted in RC (BLOCKED, callto)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},
+          {"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      ANY_PRESENT=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("got_it","call_btn","remember") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY_PRESENT" = "NONE" ]; then
+        echo "CALLTO_PROTOCOL_BLOCKED_OK"
+        exit 0
+      fi
+      echo "FAIL — telephony surface painted from callto: while telephony OFF: $ANY_PRESENT" >&2
+      exit 1
+
+  # ── QA-002-step5: Switch Telephony toggle ON ─────────────────────────────
+  # Step3 already asserted toggle currently OFF, so a single OFF→ON click
+  # surfaces the one-shot "Got it" default-handler modal.
+  #
+  # NOTE: this is the ONE click in the scenario that uses `via: hint`
+  # instead of pointer-mode. The Fuselage ToggleSwitch exposes a
+  # zero-extent AT-SPI check box (extents 1×1 — the hidden <input>) whose
+  # paint-side track widget has no accessible role. A pointer-mode click
+  # lands on a 1px point and the React onChange handler does not fire.
+  # Verified live 2026-05-22: pointer click at (948,433) → no Got it modal.
+  # `via: hint` moves the cursor to the clickable ancestor + dwells +
+  # invokes the semantic AT-SPI "check" action (which IS wired to React
+  # state). Recording shows cursor arriving and pausing on the toggle so
+  # a reviewer can SEE where activation happens, but the actual state
+  # change rides the action — combining visual context with reliability.
+  # Every other click in this scenario remains pointer-mode.
+  # See `docs/KNOWN_ISSUES.md` "Fuselage ToggleSwitch AT-SPI action drift".
+  - label: "QA-002-step5a: invoke Telephony toggle ON (via: hint — zero-extent widget)"
+    atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+
+  # Let the React modal portal fully mount + take focus before the Got it
+  # click. `via: hint` adds a ~300ms cursor dwell on top of the action.
+  - wait: 1
+
+  - label: "QA-002-step5b: wait_for Got it modal (confirms OFF→ON)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Got it"}
+      timeout: 10
+      interval: 0.5
+    retries: 1
+
+  - label: "QA-002-step5c: dismiss the one-shot default-handler prompt"
+    atspi: {role: "push button", name: "Got it"}
+    retries: 1
+
+  # Brief settle so the protocol registration (registerProtocolHandler) and
+  # mime database update have time to flush before we test routing.
+  - wait: 2
+
+  # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
+  - label: "QA-002-step6a: xdg-open tel:{{ test_number }} (should ROUTE to RC)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 1
+      echo "XDG_OPEN_TEL_DISPATCHED_ENABLED"
+
+  # wait_for a telephony surface to paint. With 2 workspaces and no
+  # preferred server, the server picker modal must appear (Fuselage dialog
+  # with the "Remember for future calls" checkbox + workspace rows).
+  # Live-discovered widget names (2026-05-22 tree dump):
+  #   - check box "Remember for future calls"  (NOT "Remember this choice")
+  #   - push button "Southlogic rocketchat.jeanbrito.com" (workspace row)
+  #   - role "dialog" (Fuselage Modal portal, no accessible name)
+  - label: "QA-002-step6b: wait_for telephony dispatch surface (tel: ROUTED)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  # Dismiss whatever surface appeared so the callto: round-trip is clean.
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ── QA-002-step7: callto: link also routes ───────────────────────────────
+  - label: "QA-002-step7a: xdg-open callto:{{ test_number }} (should ROUTE to RC)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'callto:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 1
+      echo "XDG_OPEN_CALLTO_DISPATCHED_ENABLED"
+
+  - label: "QA-002-step7b: wait_for telephony dispatch surface (callto: ROUTED)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+
+  # ── Round-trip: toggle OFF again and re-verify protocol is BLOCKED ───────
+  # Extra coverage beyond the 7-step QA flow: catches the regression where
+  # disabling does not de-register the handler.
+  - label: "QA-002-roundtrip: click Telephony checkbox to disable"
+    atspi: {role: "check box", name: "Telephony"}
+    retries: 1
+
+  - wait: 2
+
+  - label: "QA-002-roundtrip: xdg-open tel:{{ test_number }} after OFF (should NO-OP again)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 2
+      echo "XDG_OPEN_TEL_DISPATCHED_AFTER_DISABLE"
+
+  - wait: 2
+
+  - label: "QA-002-roundtrip: verify protocol BLOCKED again after toggling OFF"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      ANY_PRESENT=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("call_btn","remember") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY_PRESENT" = "NONE" ]; then
+        echo "PROTOCOL_BLOCKED_AGAIN_AFTER_DISABLE_OK"
+        exit 0
+      fi
+      echo "FAIL — telephony surface still paints after disabling: $ANY_PRESENT" >&2
+      exit 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

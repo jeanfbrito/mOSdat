@@ -42,6 +42,7 @@ from automation.commands.preflight import (
     _check_tool_deps,
     _check_x11_cookie,
     _dry_run_shell_steps,
+    _needs_atspi_worker,
     run_preflight,
 )
 from automation.transport.ssh import SSHResult
@@ -156,6 +157,11 @@ class TestCheckNoStaleRc:
         assert status == FAIL
         assert "stale" in detail
 
+    def test_ignores_own_pgrep_shell(self):
+        ssh = _ssh("3681 bash -c pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' 2>/dev/null || true")
+        status, detail = _check_no_stale_rc(ssh)
+        assert status == PASS
+
 
 class TestDryRunShellSteps:
     def test_runs_first_3_shell_steps_only(self):
@@ -193,6 +199,37 @@ class TestDryRunShellSteps:
         assert status == FAIL
         assert "exit 1" in detail
 
+    def test_stages_atspi_worker_when_dry_run_shell_uses_it(self):
+        steps = [{"shell": "python3 /tmp/mosdat_atspi_worker.py '{\"ops\":[]}'"}]
+        ssh = MagicMock()
+        ssh.run.return_value = SSHResult(0, "ok\n", "")
+
+        with patch("automation.atspi.client.AtspiClient.deploy_worker") as deploy:
+            results = _dry_run_shell_steps(ssh, steps)
+
+        deploy.assert_called_once()
+        assert len(results) == 1
+        assert results[0][1] == PASS
+
+    def test_reports_atspi_worker_stage_failure_before_shell(self):
+        steps = [{"shell": "python3 /tmp/mosdat_atspi_worker.py '{\"ops\":[]}'"}]
+        ssh = MagicMock()
+
+        with patch("automation.atspi.client.AtspiClient.deploy_worker", side_effect=RuntimeError("scp failed")):
+            results = _dry_run_shell_steps(ssh, steps)
+
+        assert results == [("AT-SPI worker", FAIL, "AT-SPI worker staging failed: scp failed")]
+        ssh.run.assert_not_called()
+
+    def test_needs_atspi_worker_only_checks_first_3_shell_steps(self):
+        steps = [
+            {"shell": "echo 1"},
+            {"shell": "echo 2"},
+            {"shell": "echo 3"},
+            {"shell": "python3 /tmp/mosdat_atspi_worker.py"},
+        ]
+        assert _needs_atspi_worker(steps) is False
+
 
 # ---------------------------------------------------------------------------
 # Integration-level: run_preflight with mocked config + SSH
@@ -227,6 +264,8 @@ class TestRunPreflight:
         mock_config.app.binary = "/opt/Rocket.Chat/rocketchat-desktop"
         mock_vm = MagicMock()
         mock_vm.name = "ubuntu2204"
+        mock_vm.scenario_subdir = "ubuntu2204"
+        mock_vm.scenario_fallback_subdirs = ["linux"]
         mock_vm.ip = "192.168.1.10"
         mock_vm.user = "jean"
         mock_vm.packages = []
@@ -272,6 +311,36 @@ class TestRunPreflight:
         # No symbols checked, userdata detection may fail in unit env — just verify exit 0/1
         # The important thing is no exception and consistent return value
         assert rc in (0, 1)
+
+
+    def test_resolves_vm_scenario_subdir_before_shared_linux(self, tmp_path):
+        cfg = self._write_fake_toml(tmp_path)
+        scenarios_dir = tmp_path / "shared" / "scenarios" / "functional"
+        (scenarios_dir / "ubuntu2404").mkdir(parents=True)
+        (scenarios_dir / "linux").mkdir()
+        (scenarios_dir / "ubuntu2404" / "bad.yaml").write_text("name: bad\n# missing steps key\n")
+        (scenarios_dir / "linux" / "bad.yaml").write_text(textwrap.dedent("""\
+            name: bad
+            steps:
+              - shell: echo linux fallback
+        """))
+
+        mock_config = MagicMock()
+        mock_config.framework_path = tmp_path
+        mock_config.app.binary = "/opt/Rocket.Chat/rocketchat-desktop"
+        mock_vm = MagicMock()
+        mock_vm.scenario_subdir = "ubuntu2404"
+        mock_vm.scenario_fallback_subdirs = ["linux"]
+        mock_config.vm_by_name = {"ubuntu2404": mock_vm}
+
+        with patch("automation.commands.preflight.load_config", return_value=mock_config):
+            rc = run_preflight(
+                config_path=str(cfg),
+                scenario_name="bad",
+                vms=["ubuntu2404"],
+            )
+
+        assert rc == 1
 
     def test_returns_2_on_missing_scenario(self, tmp_path):
         cfg = self._write_fake_toml(tmp_path)

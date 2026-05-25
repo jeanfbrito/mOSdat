@@ -138,16 +138,24 @@ class VMConfig:
 
     @property
     def scenario_subdir(self) -> str:
-        """Per-OS subdirectory under shared/scenarios/functional/ to search first
-        when resolving a ``--test NAME`` argument.
+        """Per-VM subdirectory under shared/scenarios/functional/.
 
-        Linux VMs → ``linux``. Windows VMs → ``vm.name`` (e.g. ``windows10`` /
-        ``windows11``) so win10 vs win11 stay in independent buckets. Unknown
-        os_type → ``linux`` as a safe default.
+        Concrete VM names (for example ``ubuntu2204`` or ``windows10``) get
+        first chance to provide scenario variants. Linux callers also fall back
+        to the shared ``linux`` bucket for scenarios that have not diverged.
+        """
+        return self.name
+
+    @property
+    def scenario_fallback_subdirs(self) -> list[str]:
+        """Fallback scenario subdirectories after ``scenario_subdir``.
+
+        Windows variants must be explicit. Linux VMs share the historical
+        ``linux`` bucket until a per-VM scenario exists.
         """
         if self.is_windows:
-            return self.name
-        return "linux"
+            return []
+        return ["linux"]
 
     @property
     def resolved_temp_dir(self) -> str:

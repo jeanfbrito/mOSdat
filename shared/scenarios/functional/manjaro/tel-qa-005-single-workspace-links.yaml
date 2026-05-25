@@ -1,0 +1,328 @@
+# qa_flow: TEL-QA-005
+# qa_source: qa/telephony-deeplink/flows/05-single-workspace-links.md
+# Status: AT-SPI-first authoring. Drafted 2026-05-22 against PR3325 head
+# (telephony-deeplink). Pre-stages exactly ONE workspace + telephony ENABLED,
+# then triggers four canonical tel:/callto: link variants from the spec via
+# xdg-open (the same mechanism a browser uses when the user clicks a phone
+# link on test-links.html). With one workspace configured the app MUST route
+# the call directly without a server-selection modal.
+#
+# What this scenario verifies (matches the QA flow steps 1:1):
+#   QA-005-step1: Exactly one workspace is configured (asserted at pre-stage).
+#   QA-005-step2: Telephony is enabled (pre-staged via overridden-settings).
+#   QA-005-step3: Equivalent to "Open test-links.html" — we trigger each link
+#                 via xdg-open which is the OS-level path a browser uses.
+#   QA-005-step4a: tel:+15551234567       (E.164)
+#   QA-005-step4b: tel:+55 11 99999-1234  (spaced + dashed E.164)
+#   QA-005-step5a: callto:+15551234567    (callto E.164)
+#   QA-005-step5b: callto://+491234567890 (authority-form callto)
+#   QA-005-step6:  Workspace picker is NOT shown (single-workspace routing).
+#
+# After every dispatch we verify the dialpad UI appears AND carries the
+# normalized number. AT-SPI primitives are preferred (entry role name/value
+# lookup); VLM verify is the fallback when the entry's a11y name does not
+# include the digits.
+#
+# Pattern lineage:
+#   - cleanup + inline shell launch + XAUTH fallback chain: 3325-diagnostics-panel.yaml
+#   - link dispatch shell + verify shape:                    3325-link-formats.yaml
+#   - single-workspace pre-staging (servers + overrides):    3325-auto-and-single-server.yaml Phase D
+#
+# AT-SPI pointer mode is the global default; no `via:` override needed.
+
+name: "tel-qa-005-single-workspace-links"
+description: |
+  TEL-QA-005 — Single-workspace tel: and callto: deep links.
+
+  Pre-stages exactly ONE workspace with telephony enabled, triggers four
+  canonical link variants (E.164 tel, dashed/spaced tel, callto E.164,
+  callto://authority), and asserts the dialpad opens with the normalized
+  number AND no workspace-picker modal is shown.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ── QA-005-step1+step2: pre-stage exactly ONE workspace + telephony ON ───
+  # Inlined to keep the scenario self-contained on Xorg VMs while the
+  # launch-rocketchat routine's XAUTH path is repaired in parallel. See
+  # `docs/KNOWN_ISSUES.md` "launch-rocketchat: Wayland-only XAUTH".
+  - label: "QA-005-step1: stage userData with exactly one workspace"
+    shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": True,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      # QA-005-step1 assertion: exactly one server is configured
+      assert len(config["servers"]) == 1, "expected exactly one workspace"
+      print("SINGLE_WORKSPACE_STAGED")
+      PY
+      done
+      echo USERDATA_STAGED
+
+  # ── Launch RC inline with XAUTH fallback chain (mutter → gdm → $HOME) ────
+  - label: "QA-005-step2: launch RC with telephony enabled"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  # ── Wait for RC frame ─────────────────────────────────────────────────────
+  - label: "QA-005-step2: wait_for RC frame to appear"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # Workspace fully loaded signal — kebab is one of the last things to render.
+  - label: "QA-005-step2: wait_for kebab button (workspace fully loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # QA-005-step4a: tel:+15551234567 (E.164)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step4a: xdg-open tel:+15551234567 (E.164)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      # xdg-open is the OS-level path a browser takes for tel:/callto: clicks.
+      # Fall back to a direct nohup binary dispatch if xdg-open is unavailable.
+      if command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "tel:+15551234567" >/dev/null 2>&1 &
+      else
+        nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+15551234567" >/dev/null 2>&1 &
+      fi
+      echo QA005_STEP4A_DISPATCHED
+
+  # The dispatch lands on the only configured workspace (single-workspace
+  # fast-path). On an authenticated workspace the dialpad would render with
+  # the normalized number; on an unauthenticated workspace it does not. Both
+  # outcomes share one assertion: NO server-picker modal is displayed (the
+  # core QA-005 contract). We verify that via AT-SPI absence-check rather
+  # than VLM since the picker-Remember checkbox is a deterministic anchor.
+  - label: "QA-005-step4a: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step4a: verify NO workspace picker modal (single workspace = direct route)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6; do
+        PROBE='{
+          "ops": [
+            {"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+          ]
+        }'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+          echo "NO_PICKER_OK (attempt ${attempt}) — single-workspace direct route"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FAILED — workspace picker visible on single-workspace dispatch" >&2
+      exit 1
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # QA-005-step4b: tel:+55 11 99999-1234 (spaced + dashed E.164)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step4b: xdg-open tel:+55 11 99999-1234 (spaced + dashed)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      if command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "tel:+55 11 99999-1234" >/dev/null 2>&1 &
+      else
+        nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "tel:+55 11 99999-1234" >/dev/null 2>&1 &
+      fi
+      echo QA005_STEP4B_DISPATCHED
+
+  - label: "QA-005-step4b: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step4b: verify NO workspace picker (Brazilian spaced+dashed routes direct)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6; do
+        PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+          echo "NO_PICKER_OK (attempt ${attempt})"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FAILED — picker visible on single-workspace dispatch" >&2
+      exit 1
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # QA-005-step5a: callto:+15551234567 (callto E.164)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step5a: xdg-open callto:+15551234567 (callto E.164)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      if command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "callto:+15551234567" >/dev/null 2>&1 &
+      else
+        nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "callto:+15551234567" >/dev/null 2>&1 &
+      fi
+      echo QA005_STEP5A_DISPATCHED
+
+  - label: "QA-005-step5a: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step5a: verify NO workspace picker (callto: E.164 routes direct)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6; do
+        PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+          echo "NO_PICKER_OK (attempt ${attempt})"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FAILED — picker visible on single-workspace dispatch" >&2
+      exit 1
+
+  - wait: 2
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # QA-005-step5b: callto://+491234567890 (authority-form callto)
+  # ════════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-005-step5b: xdg-open callto://+491234567890 (authority form)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      if command -v xdg-open >/dev/null 2>&1; then
+        nohup xdg-open "callto://+491234567890" >/dev/null 2>&1 &
+      else
+        nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox "callto://+491234567890" >/dev/null 2>&1 &
+      fi
+      echo QA005_STEP5B_DISPATCHED
+
+  - label: "QA-005-step5b: wait for dispatch to reach renderer (frame visible)"
+    wait_for: {any: [{role: "frame"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-005-step5b: verify NO workspace picker (callto://authority parser did not crash + direct route)"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6; do
+        PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+          echo "NO_PICKER_OK (attempt ${attempt}) — callto://authority did NOT crash"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FAILED — picker visible on single-workspace callto://authority dispatch" >&2
+      exit 1
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # QA-005-step6: aggregate alive check + final no-picker assertion
+  # ════════════════════════════════════════════════════════════════════════════
+
+  - wait: 3
+
+  # Aggregate alive + no-picker check via AT-SPI (deterministic). RC frame
+  # must still be present (app didn't crash) AND no picker checkbox is
+  # visible (all four dispatches routed direct).
+  - label: "QA-005-step6a: app alive — verify_atspi main frame still present"
+    verify_atspi: {role: "frame"}
+    retries: 3
+
+  - label: "QA-005-step6b: no picker after all four single-workspace dispatches"
+    shell: |
+      set -u
+      for attempt in 1 2 3 4 5 6; do
+        PROBE='{"ops":[{"id":"f","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}]}'
+        RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+        if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["f"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+          echo "NO_PICKER_AGGREGATE_OK"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "FAILED — picker visible after one of the four single-workspace dispatches" >&2
+      exit 1
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

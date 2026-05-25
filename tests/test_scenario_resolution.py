@@ -31,8 +31,10 @@ def scenarios_root(tmp_path: Path) -> Path:
         windows10/.gitkeep
     """
     root = tmp_path / "functional"
+    (root / "ubuntu2204").mkdir(parents=True)
     (root / "linux").mkdir(parents=True)
     (root / "windows10").mkdir()
+    (root / "ubuntu2204" / "foo.yaml").write_text("name: foo-ubuntu\nsteps: []\n")
     (root / "linux" / "foo.yaml").write_text("name: foo\nsteps: []\n")
     (root / "linux" / "tel-qa-001.yaml").write_text("name: tel-qa-001\nsteps: []\n")
     (root / "legacy.yaml").write_text("name: legacy\nsteps: []\n")
@@ -44,14 +46,29 @@ def scenarios_root(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def test_bare_name_resolves_to_vm_subdir_first(scenarios_root: Path) -> None:
+    resolved = resolve_test_path(
+        "foo",
+        scenarios_root,
+        subdir="ubuntu2204",
+        fallback_subdirs=["linux"],
+    )
+    assert resolved == scenarios_root / "ubuntu2204" / "foo.yaml"
+
+
 def test_bare_name_resolves_to_linux_subdir(scenarios_root: Path) -> None:
     resolved = resolve_test_path("foo", scenarios_root, subdir="linux")
     assert resolved == scenarios_root / "linux" / "foo.yaml"
 
 
 def test_tel_qa_resolves_to_linux_subdir(scenarios_root: Path) -> None:
-    """The 5 TEL-QA scenarios live under linux/ and must resolve by bare name."""
-    resolved = resolve_test_path("tel-qa-001", scenarios_root, subdir="linux")
+    """Linux VM folders fall back to shared linux/ scenarios by bare name."""
+    resolved = resolve_test_path(
+        "tel-qa-001",
+        scenarios_root,
+        subdir="ubuntu2204",
+        fallback_subdirs=["linux"],
+    )
     assert resolved == scenarios_root / "linux" / "tel-qa-001.yaml"
 
 
@@ -95,11 +112,17 @@ def test_no_subdir_arg_falls_through_to_root(scenarios_root: Path) -> None:
 
 def test_unknown_name_raises_with_candidates(scenarios_root: Path) -> None:
     with pytest.raises(ScenarioNotFoundError) as exc_info:
-        resolve_test_path("does-not-exist", scenarios_root, subdir="linux")
+        resolve_test_path(
+            "does-not-exist",
+            scenarios_root,
+            subdir="ubuntu2204",
+            fallback_subdirs=["linux"],
+        )
     err = exc_info.value
     assert err.test_name == "does-not-exist"
-    # Both probed paths should appear in the diagnostic
+    # All probed paths should appear in the diagnostic
     candidates_str = "\n".join(str(c) for c in err.candidates)
+    assert "ubuntu2204/does-not-exist.yaml" in candidates_str
     assert "linux/does-not-exist.yaml" in candidates_str
     assert "functional/does-not-exist.yaml" in candidates_str
 
@@ -168,7 +191,8 @@ def test_vmconfig_linux_scenario_subdir() -> None:
         desktop="GNOME",
         os_type="linux",
     )
-    assert vm.scenario_subdir == "linux"
+    assert vm.scenario_subdir == "ubuntu2204"
+    assert vm.scenario_fallback_subdirs == ["linux"]
 
 
 def test_vmconfig_windows10_scenario_subdir() -> None:
@@ -183,6 +207,7 @@ def test_vmconfig_windows10_scenario_subdir() -> None:
         os_type="windows",
     )
     assert vm.scenario_subdir == "windows10"
+    assert vm.scenario_fallback_subdirs == []
 
 
 def test_vmconfig_windows11_scenario_subdir() -> None:
@@ -197,3 +222,4 @@ def test_vmconfig_windows11_scenario_subdir() -> None:
         os_type="windows",
     )
     assert vm.scenario_subdir == "windows11"
+    assert vm.scenario_fallback_subdirs == []

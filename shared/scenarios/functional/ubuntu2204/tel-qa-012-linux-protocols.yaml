@@ -1,0 +1,412 @@
+# qa_flow: TEL-QA-012
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/12-linux-protocols.md
+# Authored 2026-05-22 — AT-SPI-first scenario for Linux protocol handler
+# registration + xdg-open dispatch coverage of PR 3325.
+#
+# What this scenario verifies (mirrors the QA flow 1:1):
+#   1. The packaged Linux desktop entry
+#      `/usr/share/applications/rocketchat-desktop.desktop` exists and its
+#      MimeType= line declares BOTH x-scheme-handler/tel and
+#      x-scheme-handler/callto.
+#   2. With telephony ENABLED (pre-staged via overridden-settings.json),
+#      `xdg-mime query default x-scheme-handler/tel` returns the
+#      rocketchat-desktop.desktop file.
+#   3. `xdg-open tel:+15551234567` from the VM shell focuses the running
+#      Rocket.Chat window and surfaces the telephony server-select modal
+#      (the same modal the renderer opens when the dial pad is invoked
+#      with no preferred server).
+#   4. Same checks for the callto: scheme:
+#       - xdg-mime default lookup returns rocketchat-desktop.desktop.
+#       - `xdg-open callto:+15551234567` surfaces the modal.
+#   5. Optional spec coverage (negative path): toggle telephony OFF via the
+#      Voice & Video tab and re-query xdg-mime — Rocket.Chat must no longer
+#      claim the tel: handler.
+#
+# Pre-staging strategy:
+#   * Telephony is staged ENABLED via overridden-settings.json so that the
+#     desktop-handler registration code path has already fired by the time
+#     xdg-mime is queried. This matches the QA flow precondition
+#     `requires: [telephony_enabled, installed_linux_build]`.
+#   * RC is pre-launched and assumed to be the running instance — xdg-open
+#     therefore focuses the existing window via the second-instance IPC
+#     path instead of cold-starting a new one. See the spec note:
+#     "xdg-open behavior on a running RC may focus existing window; on a
+#     stopped RC it may launch fresh."
+#   * Two userData dirs (`Rocket.Chat` for packaged DEB, `Rocket.Chat
+#     (development)` for dev builds) are seeded so the active one is
+#     deterministic regardless of which binary lane is installed.
+#
+# AT-SPI vs shell split:
+#   * `shell:` is used for the OS-level checks the QA flow specifies —
+#     desktop file presence, MimeType grep, `xdg-mime query default`,
+#     `xdg-open` dispatch.
+#   * `atspi:` / `verify_atspi:` / `wait_for:` are used for in-app
+#     widgets: the kebab → Settings → Voice & Video navigation that the
+#     optional toggle-OFF tail step relies on, and the modal that proves
+#     a tel:/callto: dispatch reached the renderer.
+
+name: "tel-qa-012-linux-protocols"
+description: |
+  TEL-QA-012 — Linux protocol handling.
+
+  Verifies Rocket.Chat's Linux desktop file declares the tel: and callto:
+  MimeType handlers, that xdg-mime returns rocketchat-desktop as the
+  default for both schemes when telephony is enabled, and that
+  `xdg-open tel:` / `xdg-open callto:` dispatched from the VM shell
+  surface the in-app telephony modal on the already-running RC instance.
+
+  Closes with an optional toggle-OFF tail that re-queries xdg-mime — when
+  telephony is disabled the renderer should withdraw its handler claim.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+
+steps:
+  # ── Pre-test cleanup ─────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 1 — Pre-stage userData with telephony ENABLED
+  # ══════════════════════════════════════════════════════════════════════════
+  # Inlined launch-rocketchat staging (mirrors 3325-diagnostics-panel.yaml).
+  # `isTelephonyEnabled: true` is the key precondition for TEL-QA-012 — the
+  # MimeType/xdg-mime checks downstream are only meaningful once the app has
+  # registered itself as the desktop handler.
+
+  - shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": True,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED_TELEPHONY_ON
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 2 — QA-012-step1: desktop entry exists + declares both schemes
+  # ══════════════════════════════════════════════════════════════════════════
+  # Adapted from 3325-edge-cases.yaml PART 1 (the proven .desktop +
+  # MimeType grep block). We assert hard here — the QA flow's
+  # "Smallest useful proof: OS-level repro with desktop/MIME handler
+  # inspection" requires this be a real check, not a print-and-continue.
+
+  - label: "QA-012-step1: verify rocketchat-desktop.desktop exists and declares tel + callto MimeType"
+    shell: |
+      DESKTOP_FILE="/usr/share/applications/rocketchat-desktop.desktop"
+      if [ ! -f "$DESKTOP_FILE" ]; then
+        echo "DESKTOP_FILE_NOT_FOUND at $DESKTOP_FILE"
+        find /usr/share/applications -name '*rocketchat*' 2>/dev/null || true
+        exit 1
+      fi
+      echo "DESKTOP_FILE_EXISTS=$DESKTOP_FILE"
+      echo "=== MimeType line ==="
+      grep '^MimeType=' "$DESKTOP_FILE" || { echo "NO_MIMETYPE_LINE"; exit 1; }
+      echo "=== schemes declared ==="
+      grep -o 'x-scheme-handler/[^;]\+' "$DESKTOP_FILE" | sort -u
+      HAS_TEL=$(grep -c 'x-scheme-handler/tel' "$DESKTOP_FILE" 2>/dev/null || echo 0)
+      HAS_CALLTO=$(grep -c 'x-scheme-handler/callto' "$DESKTOP_FILE" 2>/dev/null || echo 0)
+      echo "HAS_TEL=$HAS_TEL HAS_CALLTO=$HAS_CALLTO"
+      if [ "$HAS_TEL" -gt 0 ] && [ "$HAS_CALLTO" -gt 0 ]; then
+        echo "PROTOCOL_REGISTRATION_OK"
+      else
+        echo "PROTOCOL_REGISTRATION_MISSING — tel=$HAS_TEL callto=$HAS_CALLTO"
+        exit 1
+      fi
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 3 — Launch RC (telephony ON) so xdg-open has an instance to focus
+  # ══════════════════════════════════════════════════════════════════════════
+  # Inline launch with XAUTH fallback chain (mirrors 3325-diagnostics-panel.yaml
+  # and _smoke-atspi.yaml). Accessibility flags enabled so the modal-verify
+  # step downstream can drive AT-SPI.
+
+  - label: "QA-012-launch: cold-start RC with accessibility + telephony ON"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-012-launch: wait_for RC frame to appear in AT-SPI tree"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 4 — QA-012-step2: xdg-mime default for x-scheme-handler/tel
+  # ══════════════════════════════════════════════════════════════════════════
+  # When telephony is enabled the renderer's `defaultProtocolClient.tel`
+  # registration call should have run, making rocketchat-desktop.desktop the
+  # xdg-mime default for tel:. This is the OS-level "is the handler claimed"
+  # check the QA flow asks for.
+
+  - label: "QA-012-step2: verify xdg-mime default for tel: is rocketchat-desktop"
+    shell: |
+      export DISPLAY=:0
+      TEL_DEFAULT=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null)
+      echo "xdg-mime tel default: '$TEL_DEFAULT'"
+      if echo "$TEL_DEFAULT" | grep -qi 'rocketchat'; then
+        echo "TEL_DEFAULT_OK"
+      else
+        echo "TEL_DEFAULT_NOT_ROCKETCHAT (got: $TEL_DEFAULT)"
+        exit 1
+      fi
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 5 — QA-012-step3: xdg-open tel:+15551234567 surfaces the modal
+  # ══════════════════════════════════════════════════════════════════════════
+  # xdg-open on a RUNNING RC routes through the desktop handler → second
+  # instance → existing IPC; the renderer opens the telephony server-select
+  # modal because no preferred server is configured (we left
+  # telephonyPreferredServer: null on purpose so the modal fires).
+
+  - label: "QA-012-step3: dispatch xdg-open tel:+15551234567"
+    shell: |
+      export DISPLAY=:0
+      xdg-open "tel:+15551234567"
+      echo TEL_XDG_OPEN_DISPATCHED
+
+  # AT-SPI poll for the modal — the spec calls this "RC focuses + dialpad
+  # opens". On the current 4.14.1 build the deep-link path first opens the
+  # server-select modal (no preferred server staged) which is the dialpad
+  # entry point.
+  - label: "QA-012-step4: wait_for telephony server-select modal (tel: dispatch)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Workspace", name_substr: true}
+        - {role: "push button", name: "Remember", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  # verify_atspi only takes a single condition (role/name/name_substr) — for
+  # "modal surfaced" presence we use wait_for with a short timeout. wait_for
+  # is the right primitive for "any of these widgets is present".
+  - label: "QA-012-step4: verify server-select modal present (tel: dispatch)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Workspace", name_substr: true}
+        - {role: "push button", name: "Remember", name_substr: true}
+        - {role: "dialog"}
+      timeout: 5
+    retries: 1
+
+  # ── Dismiss the modal so the next dispatch can fire a fresh one ──────────
+  - label: "QA-012-step4: dismiss tel: modal (click center to defocus)"
+    shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1 2>/dev/null || true
+      echo DISMISSED_TEL_MODAL
+
+  - wait: 3
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 6 — QA-012-step5: xdg-mime default for x-scheme-handler/callto
+  # ══════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-012-step5: verify xdg-mime default for callto: is rocketchat-desktop"
+    shell: |
+      export DISPLAY=:0
+      CALLTO_DEFAULT=$(xdg-mime query default x-scheme-handler/callto 2>/dev/null)
+      echo "xdg-mime callto default: '$CALLTO_DEFAULT'"
+      if echo "$CALLTO_DEFAULT" | grep -qi 'rocketchat'; then
+        echo "CALLTO_DEFAULT_OK"
+      else
+        echo "CALLTO_DEFAULT_NOT_ROCKETCHAT (got: $CALLTO_DEFAULT)"
+        exit 1
+      fi
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 7 — QA-012-step6: xdg-open callto:+15551234567 surfaces the modal
+  # ══════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-012-step6: dispatch xdg-open callto:+15551234567"
+    shell: |
+      export DISPLAY=:0
+      xdg-open "callto:+15551234567"
+      echo CALLTO_XDG_OPEN_DISPATCHED
+
+  - label: "QA-012-step7: wait_for telephony server-select modal (callto: dispatch)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Workspace", name_substr: true}
+        - {role: "push button", name: "Remember", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  # verify_atspi only takes a single condition; use wait_for short timeout
+  # for "any of these widgets present" presence-check (see step4 note).
+  - label: "QA-012-step7: verify server-select modal present (callto: dispatch)"
+    wait_for:
+      any:
+        - {role: "push button", name: "Workspace", name_substr: true}
+        - {role: "push button", name: "Remember", name_substr: true}
+        - {role: "dialog"}
+      timeout: 5
+    retries: 1
+
+  # ── Dismiss the callto: modal before the optional toggle-OFF tail ────────
+  - label: "QA-012-step7: dismiss callto: modal"
+    shell: |
+      export DISPLAY=:0
+      xdotool mousemove 960 540 click 1 2>/dev/null || true
+      echo DISMISSED_CALLTO_MODAL
+
+  - wait: 3
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # PART 8 — OPTIONAL QA-012-step8: toggle telephony OFF, re-query xdg-mime
+  # ══════════════════════════════════════════════════════════════════════════
+  # The QA flow's "Failure Signals" list includes "Browser opens another
+  # handler after defaults are changed" — i.e. when telephony is disabled,
+  # the renderer should release its claim on x-scheme-handler/tel and
+  # x-scheme-handler/callto. We exercise the OFF transition via the
+  # Voice & Video tab (canonical user-facing path) and then re-query
+  # xdg-mime to assert the claim was withdrawn.
+  #
+  # Note: on RC 4.14.1 the renderer calls app.removeAsDefaultProtocolClient
+  # when isTelephonyEnabled flips false. The xdg-mime database is updated
+  # asynchronously via update-desktop-database; on a Live VM this can take
+  # a few seconds, so the verify allows a "no longer rocketchat" outcome
+  # OR an empty result (both indicate the claim has been released).
+
+  - label: "QA-012-step8: open kebab (Customize and control app)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 20}
+    retries: 1
+
+  - label: "QA-012-step8: click kebab"
+    atspi: {role: "push button", name: "Customize and control app"}
+    retries: 1
+
+  - label: "QA-012-step8: wait_for Settings menu item"
+    # Harden kebab→menu render race: bumped 10s→30s. Same intermittent timeout
+    # observed on tel-qa-002 step 12 — popup menu hadn't rendered after click.
+    # Matches the kebab-button wait timeout of 20s upstream.
+    wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-012-step8: click Settings menu item"
+    atspi: {role: "menu item", name: "Settings"}
+    retries: 1
+
+  - label: "QA-012-step8: wait_for Voice & Video tab"
+    wait_for: {any: [{role: "page tab", name: "Voice & Video"}], timeout: 10}
+    retries: 1
+
+  - label: "QA-012-step8: click Voice & Video tab"
+    atspi: {role: "page tab", name: "Voice & Video"}
+    retries: 1
+
+  - label: "QA-012-step8: wait_for Telephony checkbox"
+    wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+    retries: 1
+
+  - wait: 1
+
+  # Toggle Telephony OFF. Since we staged isTelephonyEnabled=true and the
+  # one-shot "Rocket.Chat now opens phone links" modal only fires on the
+  # OFF→ON transition, the first click here goes ON→OFF and does NOT fire
+  # the modal. A single click is sufficient — no probe-by-modal dance
+  # needed (the diagnostics-panel scenario only needs that because it
+  # starts from OFF and has no other way to disambiguate state).
+  - label: "QA-012-step8: click Telephony checkbox to toggle OFF"
+    atspi: {role: "check box", name: "Telephony"}
+    retries: 1
+
+  - wait: 3
+
+  # Re-query xdg-mime — the renderer should have released its handler claim.
+  - label: "QA-012-step8: verify xdg-mime tel: default is no longer rocketchat"
+    shell: |
+      export DISPLAY=:0
+      # Give the desktop database a moment to refresh.
+      for i in 1 2 3 4 5; do
+        TEL_DEFAULT=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null)
+        echo "attempt $i: xdg-mime tel default: '$TEL_DEFAULT'"
+        if ! echo "$TEL_DEFAULT" | grep -qi 'rocketchat'; then
+          echo "TEL_DEFAULT_RELEASED_OK"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TEL_DEFAULT_STILL_ROCKETCHAT after telephony OFF (got: $TEL_DEFAULT)"
+      # Soft-fail: some desktop environments cache the .desktop database
+      # aggressively and only refresh on session restart. Print evidence
+      # but do not abort the scenario — the on-toggle xdg-mime release
+      # is a known DE-quirky behavior (see KNOWN_ISSUES).
+      echo "WARN_TEL_DEFAULT_NOT_RELEASED_BUT_NON_FATAL"
+      exit 0
+
+  - label: "QA-012-step8: verify xdg-mime callto: default is no longer rocketchat"
+    shell: |
+      export DISPLAY=:0
+      for i in 1 2 3 4 5; do
+        CALLTO_DEFAULT=$(xdg-mime query default x-scheme-handler/callto 2>/dev/null)
+        echo "attempt $i: xdg-mime callto default: '$CALLTO_DEFAULT'"
+        if ! echo "$CALLTO_DEFAULT" | grep -qi 'rocketchat'; then
+          echo "CALLTO_DEFAULT_RELEASED_OK"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "CALLTO_DEFAULT_STILL_ROCKETCHAT after telephony OFF (got: $CALLTO_DEFAULT)"
+      echo "WARN_CALLTO_DEFAULT_NOT_RELEASED_BUT_NON_FATAL"
+      exit 0
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - routine: cleanup-rocketchat

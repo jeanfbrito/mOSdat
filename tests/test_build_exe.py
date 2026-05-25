@@ -555,12 +555,12 @@ def test_run_build_rejects_target_deb_with_windows_vm(monkeypatch, capsys, tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Local-fallback path triggers `yarn release --win`
+# Local-fallback path triggers local electron-builder packaging
 # ---------------------------------------------------------------------------
 
 def test_run_build_local_fallback_uses_yarn_win(monkeypatch, capsys, tmp_path) -> None:
     """When artifact-first is off and --target exe, the build phase runs yarn
-    release with --win (electron-builder picks the NSIS .exe output).
+    electron-builder with --win and --publish never.
     """
     # Capture all _run invocations so we can assert the release command shape.
     run_calls: list = []
@@ -607,9 +607,12 @@ def test_run_build_local_fallback_uses_yarn_win(monkeypatch, capsys, tmp_path) -
     rc = build_mod.run_build(args)
     assert rc == 0, f"unexpected exit: {rc} (run_calls={run_calls})"
 
-    # Find the release command in the recorded _run calls.
-    release_cmds = [c for c in run_calls if "release" in c]
-    assert release_cmds, f"no release command in {run_calls}"
+    assert ["yarn", "build"] in run_calls
+    # Find the electron-builder command in the recorded _run calls.
+    release_cmds = [c for c in run_calls if "electron-builder" in c]
+    assert release_cmds, f"no electron-builder command in {run_calls}"
     rel = release_cmds[0]
-    assert rel[:2] == ["yarn", "release"]
+    assert rel[:2] == ["yarn", "electron-builder"]
+    assert "--publish" in rel
+    assert "never" in rel
     assert "--win" in rel

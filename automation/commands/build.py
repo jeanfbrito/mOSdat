@@ -619,13 +619,14 @@ def clone_or_update(pr: int, repo: str, clone_dir: Path, *, dry_run: bool) -> in
             return 0
         rc = _run(
             ["git", "-C", str(clone_dir), "fetch", "origin",
-             f"pull/{pr}/head:pr-{pr}-latest", "--force"],
+             f"pull/{pr}/head", "--force"],
             timeout=180,
         )
         if rc != 0:
             return rc
         rc = _run(
-            ["git", "-C", str(clone_dir), "checkout", f"pr-{pr}-latest"],
+            ["git", "-C", str(clone_dir), "checkout", "-B",
+             f"pr-{pr}-latest", "FETCH_HEAD"],
             timeout=30,
         )
         if rc != 0:
@@ -658,7 +659,7 @@ def clone_or_update(pr: int, repo: str, clone_dir: Path, *, dry_run: bool) -> in
 # ---------------------------------------------------------------------------
 
 def build(clone_dir: Path, target: BuildTarget, pr: int, *, dry_run: bool) -> tuple[int, Path]:
-    """Run ``yarn install && yarn release ...``. Returns (rc, log_path)."""
+    """Run install, app build, then release packaging. Returns (rc, log_path)."""
     log_path = Path(f"/tmp/mosdat-build-{pr}.log")
     if not dry_run:
         log_path.write_bytes(b"")  # truncate
@@ -671,22 +672,34 @@ def build(clone_dir: Path, target: BuildTarget, pr: int, *, dry_run: bool) -> tu
         ["yarn", "install", "--frozen-lockfile"] if has_yarn
         else ["npm", "ci"]
     )
-    # `yarn release` already runs `yarn electron-builder --publish onTagOrDraft --x64`.
-    # Append the target flags. Same shape works with npm via `npm run release --`.
+    build_cmd = (
+        ["yarn", "build"] if has_yarn
+        else ["npm", "run", "build"]
+    )
+    # Package locally only. The project `release` script publishes on tag/draft
+    # and requires GH_TOKEN; mOSdat build just needs a local installer artifact.
     release_cmd = (
-        ["yarn", "release", *target.yarn_release_args] if has_yarn
-        else ["npm", "run", "release", "--", *target.yarn_release_args]
+        ["yarn", "electron-builder", "--publish", "never", "--x64", *target.yarn_release_args]
+        if has_yarn
+        else ["npx", "electron-builder", "--publish", "never", "--x64", *target.yarn_release_args]
     )
 
     _log(f"build log: {log_path}")
     if dry_run:
         _log(f"[dry-run] would run: {' '.join(install_cmd)}")
+        _log(f"[dry-run] would run: {' '.join(build_cmd)}")
         _log(f"[dry-run] would run: {' '.join(release_cmd)}")
         return 0, log_path
 
     rc = _run(install_cmd, cwd=clone_dir, timeout=1800, log_file=log_path)
     if rc != 0:
         _log(f"install failed (rc={rc})")
+        _tail_log(log_path)
+        return rc, log_path
+
+    rc = _run(build_cmd, cwd=clone_dir, timeout=1800, log_file=log_path)
+    if rc != 0:
+        _log(f"app build failed (rc={rc})")
         _tail_log(log_path)
         return rc, log_path
 

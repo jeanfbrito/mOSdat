@@ -108,7 +108,12 @@ def cmd_functional(args) -> int:
     test_name = args.test or "rocketchat-smoke"
     from automation.runners.scenario_loader import resolve_test_path, ScenarioNotFoundError
     try:
-        test_file = resolve_test_path(test_name, tests_dir, subdir=vms[0].scenario_subdir)
+        test_file = resolve_test_path(
+            test_name,
+            tests_dir,
+            subdir=vms[0].scenario_subdir,
+            fallback_subdirs=vms[0].scenario_fallback_subdirs,
+        )
     except ScenarioNotFoundError as exc:
         print(f"[mOSdat] ERROR: {exc}")
         return 1
@@ -314,6 +319,7 @@ def cmd_functional(args) -> int:
                         vmid=vm.vmid if checkpoint_config.get("enabled") else None,
                         click_verify_override=getattr(args, "click_verify", "auto"),
                         canary_override=getattr(args, "canary_override", "auto"),
+                        x11_mode=getattr(vm, "x11", "off"),
                         app_process_name=vm_process_name,
                         atspi=atspi_client,
                         uia=uia_client,

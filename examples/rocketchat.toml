@@ -40,6 +40,7 @@ name = "fedora42"
 vmid = 100
 ip = "192.168.13.80"
 desktop = "GNOME Wayland"
+x11 = "auto"
 
 [[vm.package]]
 format = "rpm"
@@ -99,6 +100,7 @@ name = "ubuntu2404"
 vmid = 102
 ip = "192.168.13.82"
 desktop = "GNOME Wayland"
+x11 = "auto"
 
 [[vm.package]]
 format = "deb"
@@ -136,6 +138,7 @@ name = "manjaro"
 vmid = 103
 ip = "192.168.13.83"
 desktop = "KDE Wayland"
+x11 = "auto"
 
 [[vm.package]]
 format = "appimage"
@@ -159,6 +162,7 @@ name = "opensuse"
 vmid = 106
 ip = "192.168.13.84"
 desktop = "KDE X11"
+x11 = "auto"
 
 [[vm.package]]
 format = "rpm"

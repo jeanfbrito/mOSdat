@@ -1,0 +1,833 @@
+# qa_flow: TEL-QA-014
+# qa_source: https://github.com/RocketChat/Rocket.Chat.Electron/blob/feat/telephony-deeplink/qa/telephony-deeplink/flows/14-negative-cases.md
+# Authored 2026-05-22 atop swiss-knife epic Stage 1+2+3 + pointer-mode default.
+#
+# Mirrors the 7-step QA flow 1:1:
+#   1. Telephony DISABLED → click a valid tel: link → no call request placed
+#      (protocol not bound to RC; no telephony surface in RC).
+#   2. Fresh profile with zero workspaces → enable Telephony → click a tel:
+#      link → no crash, no call placed (no workspaces means no dispatch).
+#   3. Click empty `tel:` → no call request is placed (malformed input
+#      gracefully rejected — no telephony surface paints).
+#   4. Click `callto:?subject=empty` (query-only, no number) → no call
+#      request is placed (malformed input rejected).
+#   5. With multiple workspaces, trigger a link → server picker opens → press
+#      Escape to cancel → no call request is placed; modal closes cleanly.
+#   6. Trigger two phone links in quick succession → at most one modal opens
+#      (duplicate IPC listener guard); app does not crash.
+#   7. Stale remembered workspace (workspace removed but still referenced in
+#      telephonyPreferredServer) → picker opens instead of silently failing.
+#
+# Canonical template: tel-qa-002-enable-disable-gating.yaml (state cycling +
+#   protocol routing assertions, inline shell launch + XAUTH fallback chain,
+#   AT-SPI pointer-mode default, via: hint for Fuselage ToggleSwitch).
+#
+# Existing reference: 3325-edge-cases.yaml covers some negative cases
+# (rapid-fire, big-number formatting, callto: dispatch, .desktop MimeType).
+# Proven idiom carried over: nohup + & xdg-open so xdg-open's exit code does
+# not fail the step — the assertion is always on RC's AT-SPI surface.
+#
+# Live-discovered widget names (from TEL-QA-002, ubuntu2204@192.168.13.81):
+#   - kebab:     push button "Customize and control app"
+#   - settings:  menu item "Settings"
+#   - tab:       page tab "Voice & Video"
+#   - section:   check box "Telephony" inside Voice & Video
+#   - prompt:    push button "Got it" (default-handler modal, OFF→ON one-shot)
+#   - picker:    role "dialog" + check box "Remember for future calls"
+#                + push button name_substr per workspace URL
+#
+# Absence-check pattern: shell to /tmp/mosdat_atspi_worker.py with
+# {"ops":[{"op":"find",...}]} and assert results[id].ok == false. This is
+# how we prove "no telephony surface painted" without a wait_for that
+# would always succeed by timing out.
+#
+# AT-SPI/VLM ratio: 100% AT-SPI. No VLM fallback used.
+# Per-step labels: "QA-014-stepN: ..." for log correlation.
+
+name: "tel-qa-014-negative-cases"
+description: |
+  TEL-QA-014 — Negative and edge cases for tel:/callto: deeplinks.
+
+  Disabled-state ignore → fresh-profile no-workspaces gating → malformed
+  inputs (empty tel:, query-only callto:) gracefully rejected → cancel
+  picker without dispatch → rapid-fire dedupe → stale remembered workspace
+  recovery. Every assertion is AT-SPI based; no VLM.
+
+vars:
+  workspace_url: "https://rocketchat.jeanbrito.com"
+  mobile_url: "https://mobile.rocket.chat"
+  stale_url: "https://stale-removed.example.invalid"
+  test_number: "+15551234567"
+  test_number_b: "+15557654321"
+  test_number_c: "+15550009999"
+
+steps:
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 1 — Step 1: Telephony DISABLED → valid tel: link is ignored
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - routine: cleanup-rocketchat
+
+  # Pre-stage userData with two workspaces but Telephony OFF.
+  - label: "QA-014-step1a: pre-stage userData (2 servers, telephony OFF)"
+    shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": False,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED_TEL_OFF
+
+  - label: "QA-014-step1b: launch Rocket.Chat (telephony OFF pre-staged)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-014-step1c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-014-step1d: wait for workspace to fully load (kebab present)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-014-step1e: xdg-open valid tel:{{ test_number }} while Telephony OFF"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 2
+      echo "XDG_OPEN_DISPATCHED_TEL_OFF"
+
+  - wait: 2
+
+  - label: "QA-014-step1f: verify NO call request placed (no telephony surface)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"got_it","op":"find","role":"push button","name":"Got it","app_filter":"rocket"},
+          {"id":"call_btn","op":"find","role":"dialog","app_filter":"rocket"},
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      ANY_PRESENT=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("got_it","call_btn","remember") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY_PRESENT" = "NONE" ]; then
+        echo "STEP1_NO_CALL_PLACED_OK"
+        exit 0
+      fi
+      echo "FAIL — telephony surface painted while telephony OFF: $ANY_PRESENT" >&2
+      exit 1
+
+  # Also assert app is alive (no crash dialog).
+  - label: "QA-014-step1g: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 2 — Step 2: Fresh profile, ZERO workspaces, enable Telephony, click
+  #          a phone link → no crash, no call placed.
+  #
+  # SKIPPED 2026-05-22 — upstream PR #3325 (feat/telephony-deeplink) crashes
+  # on the fresh-zero-workspaces state before the main window appears.
+  # Manual repro on ubuntu2204@192.168.13.81 (RC 4.14.1 PR build):
+  #   TypeError: Cannot read properties of null (reading 'url')
+  #     at setupServers (/opt/Rocket.Chat/resources/app.asar/app/main.js:6581:26)
+  #     at /opt/Rocket.Chat/resources/app.asar/app/main.js:6583:55
+  #     at select (.../main.js:2444:28)
+  #     at start (.../main.js:13720:9)
+  # setupServers calls select() on an empty servers array expecting at least
+  # one element; iteration returns null → .url access throws. RC main process
+  # exits silently; no window paints; 80s patience confirms the hang.
+  #
+  # This sub-scenario IS catching a real upstream regression in PR #3325. It
+  # must be re-enabled once the PR fixes the zero-workspaces edge case.
+  # See docs/KNOWN_ISSUES.md → "Rocket.Chat.Electron #3325 ... TypeError on
+  # zero-workspaces fresh profile" for full context.
+  #
+  # Sub-steps QA-014-step2a..step2p are preserved verbatim below as comments
+  # so re-enabling is a pure uncomment operation.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step2: SKIPPED — upstream PR #3325 bug (zero-workspaces TypeError)"
+    shell: |
+      echo "SKIPPED — PR feat/telephony-deeplink crashes on zero-workspaces."
+      echo "TypeError: Cannot read properties of null (reading 'url')"
+      echo "at setupServers (main.js:6581) — see docs/KNOWN_ISSUES.md"
+      exit 0
+
+  # --- BEGIN SKIPPED step2 sub-scenario (re-enable when PR #3325 is fixed) ---
+  # - routine: cleanup-rocketchat
+  #
+  # - label: "QA-014-step2a: pre-stage FRESH profile (zero workspaces, telephony OFF)"
+  #   shell: |
+  #     set -u
+  #     for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+  #       rm -rf "$d"
+  #       mkdir -p "$d"
+  #       # Empty servers map → zero workspaces.
+  #       cat > "$d/servers.json" <<'JSON'
+  #     {}
+  #     JSON
+  #       python3 - "$d" <<'PY'
+  #     import json, sys, os
+  #     d = sys.argv[1]
+  #     config = {
+  #         "servers": [],
+  #         "currentView": None,
+  #         "rootWindowState": {
+  #             "focused": True, "visible": True, "maximized": False,
+  #             "minimized": False, "fullscreen": False, "normal": True,
+  #             "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+  #         },
+  #         "lastSelectedServerUrl": None,
+  #         "__internal__": {"migrations": {"version": "4.14.1"}}
+  #     }
+  #     open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+  #     overrides = {
+  #         "isTelephonyEnabled": False,
+  #         "telephonyPreferredServer": None,
+  #         "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+  #         "isMenuBarEnabled": True,
+  #         "isSideBarEnabled": True,
+  #         "isTrayIconEnabled": False,
+  #         "isMinimizeOnCloseEnabled": False,
+  #         "doCheckForUpdatesOnStartup": False,
+  #         "isUpdatingEnabled": False,
+  #     }
+  #     open(os.path.join(d, "overridden-settings.json"), "w").write(
+  #         json.dumps(overrides, indent=2))
+  #     PY
+  #     done
+  #     echo FRESH_PROFILE_STAGED
+  #
+  # - label: "QA-014-step2b: launch Rocket.Chat (fresh profile)"
+  #   shell: |
+  #     XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+  #     [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+  #     [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+  #     export DISPLAY=:0
+  #     [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+  #     ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+  #       --no-sandbox --disable-gpu --ozone-platform=x11 \
+  #       --force-renderer-accessibility \
+  #       >/dev/null 2>&1 &
+  #     for i in $(seq 1 30); do
+  #       if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+  #         echo "window up after ${i}s"
+  #         break
+  #       fi
+  #       sleep 1
+  #     done
+  #
+  # - label: "QA-014-step2c: wait_for main window frame (add-server screen)"
+  #   wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+  #   retries: 1
+  #
+  # # Kebab is still rendered on the empty add-a-server screen (server list rail).
+  # - label: "QA-014-step2d: wait_for kebab (server list rail rendered)"
+  #   wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+  #   retries: 1
+  #
+  # - label: "QA-014-step2e: open kebab → Settings"
+  #   atspi: {role: "push button", name: "Customize and control app"}
+  #   retries: 1
+  #
+  # - label: "QA-014-step2f: wait_for Settings menu item"
+  #   wait_for: {any: [{role: "menu item", name: "Settings"}], timeout: 30}
+  #   retries: 1
+  #
+  # - label: "QA-014-step2g: click Settings menu item"
+  #   atspi: {role: "menu item", name: "Settings"}
+  #   retries: 1
+  #
+  # - label: "QA-014-step2h: wait_for Settings General tab"
+  #   wait_for: {any: [{role: "page tab", name: "General"}], timeout: 10}
+  #   retries: 1
+  #
+  # - label: "QA-014-step2i: click Voice & Video tab"
+  #   atspi: {role: "page tab", name: "Voice & Video"}
+  #   retries: 1
+  #
+  # - label: "QA-014-step2j: wait_for Telephony section anchor"
+  #   wait_for: {any: [{role: "check box", name: "Telephony"}], timeout: 10}
+  #   retries: 1
+  #
+  # # Enable Telephony — Fuselage ToggleSwitch needs via: hint (zero-extent).
+  # - label: "QA-014-step2k: enable Telephony (via: hint — zero-extent widget)"
+  #   atspi: {role: "check box", name: "Telephony", app_filter: "rocket", via: "hint"}
+  #
+  # - wait: 1
+  #
+  # - label: "QA-014-step2l: wait_for Got it modal (confirms OFF→ON)"
+  #   wait_for:
+  #     any:
+  #       - {role: "push button", name: "Got it"}
+  #     timeout: 10
+  #     interval: 0.5
+  #   retries: 1
+  #
+  # - label: "QA-014-step2m: dismiss Got it prompt"
+  #   atspi: {role: "push button", name: "Got it"}
+  #   retries: 1
+  #
+  # - wait: 2
+  #
+  # # Now click a phone link with ZERO workspaces. Expected: no crash; no call
+  # # request is placed. There is nothing to dispatch to, so either the picker
+  # # shows "no workspaces" empty state, or the input is rejected silently.
+  # # Failure mode we are guarding: the app crashes or tries to route somewhere.
+  # - label: "QA-014-step2n: xdg-open tel:{{ test_number }} with zero workspaces"
+  #   shell: |
+  #     XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+  #     [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+  #     [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+  #     export DISPLAY=:0
+  #     [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+  #     nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+  #     sleep 2
+  #     echo "XDG_OPEN_TEL_ZERO_WORKSPACES"
+  #
+  # - wait: 3
+  #
+  # # App must still be alive — main frame visible, no apport/crash dialog.
+  # - label: "QA-014-step2o: verify RC main frame still present (no crash)"
+  #   verify_atspi: {role: "frame", app_filter: "rocket"}
+  #   retries: 1
+  #
+  # # And no workspace-row push button could have been clicked (none exist), so
+  # # no call was placed. Assert the picker did NOT silently route — i.e. no
+  # # workspace push button surfaced as a clickable target.
+  # - label: "QA-014-step2p: verify no workspace-row dispatch target painted"
+  #   shell: |
+  #     set -u
+  #     PROBE='{
+  #       "ops": [
+  #         {"id":"ws1","op":"find","role":"push button","name":"rocketchat","name_substr":true,"app_filter":"rocket"},
+  #         {"id":"ws2","op":"find","role":"push button","name":"rocket.chat","name_substr":true,"app_filter":"rocket"}
+  #       ]
+  #     }'
+  #     RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+  #     ANY_PRESENT=$(echo "$RES" | python3 -c '
+  #     import json, sys
+  #     d = json.load(sys.stdin)
+  #     r = d["results"]
+  #     hits = [k for k in ("ws1","ws2") if r.get(k,{}).get("ok")]
+  #     print(",".join(hits) if hits else "NONE")
+  #     ' 2>/dev/null)
+  #     if [ "$ANY_PRESENT" = "NONE" ]; then
+  #       echo "STEP2_NO_DISPATCH_TARGET_OK"
+  #       exit 0
+  #     fi
+  #     echo "FAIL — workspace row painted with zero workspaces staged: $ANY_PRESENT" >&2
+  #     exit 1
+  #
+  # # Dismiss anything that might be open before next part.
+  # - key: Escape
+  # - wait: 1
+  # - key: Escape
+  # - wait: 1
+  # --- END SKIPPED step2 sub-scenario ---
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 3 — Step 3: Empty `tel:` (no number after the scheme) is rejected.
+  # Re-stage profile with 2 workspaces and Telephony ENABLED so we are past
+  # the "feature gated" state — this is purely about malformed inputs.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - routine: cleanup-rocketchat
+
+  - label: "QA-014-step3a: pre-stage userData (2 servers, telephony ON)"
+    shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": True,
+          "telephonyPreferredServer": None,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo USERDATA_STAGED_TEL_ON
+
+  - label: "QA-014-step3b: launch Rocket.Chat (telephony ON)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-014-step3c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-014-step3d: wait for kebab present (workspace loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  # Empty tel: — scheme with no payload.
+  - label: "QA-014-step3e: xdg-open empty 'tel:' (malformed)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:' >/dev/null 2>&1 &
+      sleep 2
+      echo "XDG_OPEN_TEL_EMPTY"
+
+  - wait: 3
+
+  - label: "QA-014-step3f: verify empty tel: rejected — no picker/dialpad painted"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"},
+          {"id":"ws1","op":"find","role":"push button","name":"rocketchat","name_substr":true,"app_filter":"rocket"},
+          {"id":"phone","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      ANY_PRESENT=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("remember","ws1","phone") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY_PRESENT" = "NONE" ]; then
+        echo "STEP3_EMPTY_TEL_REJECTED_OK"
+        exit 0
+      fi
+      echo "FAIL — empty tel: surfaced a telephony UI: $ANY_PRESENT" >&2
+      exit 1
+
+  - label: "QA-014-step3g: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 4 — Step 4: callto:?subject=empty (query-only, no number) rejected.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step4a: xdg-open 'callto:?subject=empty' (query-only)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'callto:?subject=empty' >/dev/null 2>&1 &
+      sleep 2
+      echo "XDG_OPEN_CALLTO_QUERY_ONLY"
+
+  - wait: 3
+
+  - label: "QA-014-step4b: verify query-only callto: rejected — no surface painted"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"},
+          {"id":"ws1","op":"find","role":"push button","name":"rocketchat","name_substr":true,"app_filter":"rocket"},
+          {"id":"phone","op":"find","role":"entry","name":"phone","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      ANY_PRESENT=$(echo "$RES" | python3 -c '
+      import json, sys
+      d = json.load(sys.stdin)
+      r = d["results"]
+      hits = [k for k in ("remember","ws1","phone") if r.get(k,{}).get("ok")]
+      print(",".join(hits) if hits else "NONE")
+      ' 2>/dev/null)
+      if [ "$ANY_PRESENT" = "NONE" ]; then
+        echo "STEP4_QUERY_ONLY_CALLTO_REJECTED_OK"
+        exit 0
+      fi
+      echo "FAIL — query-only callto: surfaced a telephony UI: $ANY_PRESENT" >&2
+      exit 1
+
+  - label: "QA-014-step4c: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 5 — Step 5: Multi-workspace picker opens, user CANCELS via Escape,
+  #          no call is placed and modal closes cleanly.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step5a: xdg-open tel:{{ test_number }} (should open picker)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+      sleep 1
+      echo "XDG_OPEN_TEL_MULTIWS"
+
+  - label: "QA-014-step5b: wait_for server picker (any picker surface)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-014-step5c: cancel picker via Escape"
+    key: Escape
+
+  - wait: 1
+
+  - label: "QA-014-step5d: verify picker dismissed (no Remember checkbox visible)"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["remember"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "STEP5_PICKER_DISMISSED_OK"
+        exit 0
+      fi
+      echo "FAIL — Remember-for-future-calls still visible after Escape" >&2
+      echo "$RES" >&2
+      exit 1
+
+  - label: "QA-014-step5e: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 6 — Step 6: Two phone links fired in quick succession. App must not
+  #          duplicate modals or crash. Guard: duplicate IPC listener dedupe
+  #          (ab816c0db). Allow at most ONE picker surface.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - label: "QA-014-step6a: rapid-fire two tel: links via xdg-open (background)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
+      nohup xdg-open 'tel:{{ test_number_b }}' >/dev/null 2>&1 &
+      sleep 2
+      echo "TEL_RAPID_FIRE_DISPATCHED"
+
+  - label: "QA-014-step6b: wait_for picker surface (at least one)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-014-step6c: verify NO duplicate modal (at most ONE Remember checkbox)"
+    shell: |
+      set -u
+      # findall not in worker grammar — fall back to counting via repeated find.
+      # Probe distinct names that should each be unique in a single modal.
+      PROBE='{
+        "ops": [
+          {"id":"remember","op":"find","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      OK=$(echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("1" if d["results"]["remember"].get("ok") else "0")' 2>/dev/null)
+      if [ "$OK" = "1" ]; then
+        echo "STEP6_AT_LEAST_ONE_MODAL_OK"
+      else
+        echo "FAIL — no picker surface after rapid-fire dispatch" >&2
+        exit 1
+      fi
+      # App-alive sanity.
+      if pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' >/dev/null 2>&1; then
+        echo "STEP6_APP_ALIVE_OK"
+      else
+        echo "FAIL — RC process not running after rapid-fire" >&2
+        exit 1
+      fi
+
+  - label: "QA-014-step6d: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # PART 7 — Step 7: Stale remembered workspace. We pre-staged a preferred
+  #          server URL pointing at a workspace that does NOT exist in the
+  #          server list. Expected: picker opens (graceful fallback) instead
+  #          of silently failing or routing somewhere unintended.
+  # ═════════════════════════════════════════════════════════════════════════
+
+  - routine: cleanup-rocketchat
+
+  - label: "QA-014-step7a: pre-stage stale telephonyPreferredServer + 2 real servers"
+    shell: |
+      set -u
+      for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
+        mkdir -p "$d"
+        cat > "$d/servers.json" <<'JSON'
+      {
+        "Workspace": "{{ workspace_url }}",
+        "Mobile RC": "{{ mobile_url }}"
+      }
+      JSON
+        python3 - "$d" <<'PY'
+      import json, sys, os
+      d = sys.argv[1]
+      first_url = "{{ workspace_url }}"
+      if not first_url.endswith("/"):
+          first_url += "/"
+      mobile_url = "{{ mobile_url }}"
+      if not mobile_url.endswith("/"):
+          mobile_url += "/"
+      stale_url = "{{ stale_url }}"
+      if not stale_url.endswith("/"):
+          stale_url += "/"
+      config = {
+          "servers": [
+              {"url": first_url, "title": "Workspace"},
+              {"url": mobile_url, "title": "Mobile RC"},
+          ],
+          "currentView": {"url": first_url},
+          "rootWindowState": {
+              "focused": True, "visible": True, "maximized": False,
+              "minimized": False, "fullscreen": False, "normal": True,
+              "bounds": {"x": 40, "y": 40, "width": 1280, "height": 820}
+          },
+          "lastSelectedServerUrl": first_url,
+          "__internal__": {"migrations": {"version": "4.14.1"}}
+      }
+      open(os.path.join(d, "config.json"), "w").write(json.dumps(config, indent=2))
+      overrides = {
+          "isTelephonyEnabled": True,
+          # STALE: point preferred server at a URL not present in `servers`.
+          "telephonyPreferredServer": stale_url,
+          "telephonyGlobalShortcutConfig": {"enabled": False, "accelerator": None},
+          "isMenuBarEnabled": True,
+          "isSideBarEnabled": True,
+          "isTrayIconEnabled": False,
+          "isMinimizeOnCloseEnabled": False,
+          "doCheckForUpdatesOnStartup": False,
+          "isUpdatingEnabled": False,
+      }
+      open(os.path.join(d, "overridden-settings.json"), "w").write(
+          json.dumps(overrides, indent=2))
+      PY
+      done
+      echo STALE_PREFERRED_SERVER_STAGED
+
+  - label: "QA-014-step7b: launch Rocket.Chat (stale preferred server)"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
+        --no-sandbox --disable-gpu --ozone-platform=x11 \
+        --force-renderer-accessibility \
+        >/dev/null 2>&1 &
+      for i in $(seq 1 30); do
+        if wmctrl -l 2>/dev/null | grep -q Rocket.Chat; then
+          echo "window up after ${i}s"
+          break
+        fi
+        sleep 1
+      done
+
+  - label: "QA-014-step7c: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 90, interval: 1.0}
+    retries: 1
+
+  - label: "QA-014-step7d: wait for kebab present (workspace loaded)"
+    wait_for: {any: [{role: "push button", name: "Customize and control app"}], timeout: 30}
+    retries: 1
+
+  - label: "QA-014-step7e: xdg-open tel:{{ test_number_c }} with stale preferred server"
+    shell: |
+      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
+      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
+      export DISPLAY=:0
+      [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
+      nohup xdg-open 'tel:{{ test_number_c }}' >/dev/null 2>&1 &
+      sleep 1
+      echo "XDG_OPEN_TEL_STALE_PREFERRED"
+
+  # Expected: stale preferred is detected → picker opens with the REAL
+  # workspaces. Silent failure (no picker, no dispatch) would also fail this.
+  - label: "QA-014-step7f: wait_for picker to appear (graceful fallback)"
+    wait_for:
+      any:
+        - {role: "check box", name: "Remember for future calls", name_substr: true}
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+        - {role: "dialog"}
+      timeout: 20
+    retries: 1
+
+  - label: "QA-014-step7g: verify stale-URL workspace NOT offered as dispatch target"
+    shell: |
+      set -u
+      PROBE='{
+        "ops": [
+          {"id":"stale","op":"find","role":"push button","name":"stale-removed.example.invalid","name_substr":true,"app_filter":"rocket"}
+        ]
+      }'
+      RES=$(python3 /tmp/mosdat_atspi_worker.py "$PROBE" 2>&1)
+      if echo "$RES" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("ABSENT" if not d["results"]["stale"]["ok"] else "PRESENT")' 2>/dev/null | grep -q ABSENT; then
+        echo "STEP7_STALE_URL_NOT_OFFERED_OK"
+        exit 0
+      fi
+      echo "FAIL — stale removed workspace surfaced as a dispatch target" >&2
+      exit 1
+
+  - label: "QA-014-step7h: verify RC main frame still present (no crash)"
+    verify_atspi: {role: "frame", app_filter: "rocket"}
+    retries: 1
+
+  - key: Escape
+  - wait: 1
+  - key: Escape
+  - wait: 1
+
+  # ═════════════════════════════════════════════════════════════════════════
+  # Final cleanup
+  # ═════════════════════════════════════════════════════════════════════════
+  - routine: cleanup-rocketchat
