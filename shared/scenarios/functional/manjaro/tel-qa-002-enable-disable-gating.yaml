@@ -120,10 +120,16 @@ steps:
   # Inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME).
   - label: "QA-002-step1a: launch Rocket.Chat (fresh, telephony OFF pre-staged)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
         --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -152,10 +158,16 @@ steps:
   # rocketchat-desktop as the tel: handler.
   - label: "QA-002-step1d: assert tel: protocol NOT bound to Rocket.Chat (xdg-mime BLOCKED)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       # Previous protocol tests may leave Rocket.Chat as the user default.
       # The OFF-gating assertion starts from a clean per-user MIME association state.
@@ -180,10 +192,16 @@ steps:
   # surface (those only exist when telephony is enabled and dispatched).
   - label: "QA-002-step1e: xdg-open tel:{{ test_number }} (should NO-OP for RC)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       # nohup + & so xdg-open returning non-zero (no handler) does not fail us;
       # the assertion is on RC's AT-SPI surface, not xdg-open's exit code.
@@ -222,7 +240,7 @@ steps:
 
   # ── QA-002-step2: Navigate kebab → Settings → Voice & Video ──────────────
   - label: "QA-002-step2a: click kebab (Customize and control app)"
-    atspi: {role: "push button", name: "Customize and control app"}
+    atspi: {role: "push button", name: "Customize and control app", via: "action"}
     retries: 1
 
   - label: "QA-002-step2b: wait_for Settings menu item in kebab popup"
@@ -233,7 +251,7 @@ steps:
     retries: 1
 
   - label: "QA-002-step2c: click Settings menu item"
-    atspi: {role: "menu item", name: "Settings"}
+    atspi: {role: "menu item", name: "Settings", via: "action"}
     retries: 1
 
   - label: "QA-002-step2d: wait_for Settings General tab"
@@ -245,7 +263,7 @@ steps:
     retries: 1
 
   - label: "QA-002-step2f: click Voice & Video tab"
-    atspi: {role: "page tab", name: "Voice & Video"}
+    atspi: {role: "page tab", name: "Voice & Video", via: "action"}
     retries: 1
 
   - label: "QA-002-step2g: wait_for Telephony section (checkbox is the anchor)"
@@ -278,10 +296,16 @@ steps:
   # ── QA-002-step4: Click callto: while disabled → must be ignored ─────────
   - label: "QA-002-step4a: xdg-open callto:{{ test_number }} (should NO-OP for RC)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup xdg-open 'callto:{{ test_number }}' >/dev/null 2>&1 &
       sleep 2
@@ -357,10 +381,16 @@ steps:
   # ── QA-002-step6: tel: link now routes to the dialpad ────────────────────
   - label: "QA-002-step6a: xdg-open tel:{{ test_number }} (should ROUTE to RC)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
       sleep 1
@@ -392,10 +422,16 @@ steps:
   # ── QA-002-step7: callto: link also routes ───────────────────────────────
   - label: "QA-002-step7a: xdg-open callto:{{ test_number }} (should ROUTE to RC)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup xdg-open 'callto:{{ test_number }}' >/dev/null 2>&1 &
       sleep 1
@@ -425,10 +461,16 @@ steps:
 
   - label: "QA-002-roundtrip: xdg-open tel:{{ test_number }} after OFF (should NO-OP again)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
       sleep 2

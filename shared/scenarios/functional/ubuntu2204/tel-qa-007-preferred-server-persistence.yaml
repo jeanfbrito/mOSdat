@@ -134,10 +134,16 @@ steps:
   # ── QA-007-step1b: Launch Rocket.Chat with a11y flags ────────────────────
   - label: "QA-007-step1b: launch Rocket.Chat (inline, XAUTH fallback chain)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
         --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -160,10 +166,16 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step2a: dispatch tel: link (first time — picker should open)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
         "{{ tel_link }}" >/dev/null 2>&1 &
@@ -247,10 +259,16 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step4a: dispatch tel: link AGAIN (picker should be skipped)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
         "{{ tel_link }}" >/dev/null 2>&1 &
@@ -306,10 +324,16 @@ steps:
 
   - label: "QA-007-step5b: relaunch Rocket.Chat (same userData, preference must persist)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
         --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -332,10 +356,16 @@ steps:
   # ══════════════════════════════════════════════════════════════════════════
   - label: "QA-007-step6a: dispatch tel: link after restart (picker should STILL be skipped)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
         "{{ tel_link }}" >/dev/null 2>&1 &
@@ -412,10 +442,16 @@ steps:
 
   - label: "QA-007-step7c: relaunch Rocket.Chat with reset preference"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
         --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -435,10 +471,16 @@ steps:
 
   - label: "QA-007-step7e: dispatch tel: link after reset (picker MUST re-open)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       nohup /opt/Rocket.Chat/rocketchat-desktop --no-sandbox \
         "{{ tel_link }}" >/dev/null 2>&1 &

@@ -12,17 +12,24 @@ returns the body unchanged.
 import re
 
 # Sentinel that marks an already-injected body so we don't double-inject.
-_PREAMBLE_SENTINEL = "XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.*"
+_PREAMBLE_SENTINEL = "DESKTOP_ENV=$(mktemp)"
 
 # The full preamble to prepend.
 _PREAMBLE = (
-    "XAUTH=$(for pid in $(pgrep -u $(id -u) "
-    "'plasmashell|gnome-shell|kwin_x11' 2>/dev/null); do "
+    "DESKTOP_ENV=$(mktemp)\n"
+    "for pid in $(pgrep -u $(id -u) "
+    "'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do "
     "tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | "
-    "sed -n 's/^XAUTHORITY=//p' | head -1; done | head -1)\n"
+    "grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' "
+    "> \"$DESKTOP_ENV\"; "
+    "grep -q '^DISPLAY=' \"$DESKTOP_ENV\" && "
+    "grep -q '^XAUTHORITY=' \"$DESKTOP_ENV\" && break; done\n"
+    "[ -s \"$DESKTOP_ENV\" ] && . \"$DESKTOP_ENV\"\n"
+    "rm -f \"$DESKTOP_ENV\"\n"
+    "XAUTH=${XAUTHORITY:-}\n"
     "[ -z \"$XAUTH\" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* "
-    "/run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1)\n"
-    "export DISPLAY=:0\n"
+    "/run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1)\n"
+    "export DISPLAY=${DISPLAY:-:0}\n"
     "[ -n \"$XAUTH\" ] && export XAUTHORITY=\"$XAUTH\"\n"
 )
 

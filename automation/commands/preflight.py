@@ -105,12 +105,18 @@ def _check_ssh(ssh) -> tuple[str, str]:
 
 def _check_x11_cookie(ssh) -> tuple[str, str]:
     r = ssh.run(
-        "XAUTH=$(for pid in $(pgrep -u $(id -u) '"
-        "plasmashell|gnome-shell|kwin_x11' 2>/dev/null); do "
+        "DESKTOP_ENV=$(mktemp); "
+        "for pid in $(pgrep -u $(id -u) '"
+        "plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do "
         "tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | "
-        "sed -n 's/^XAUTHORITY=//p' | head -1; done | head -1); "
+        "grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' "
+        "> \"$DESKTOP_ENV\"; "
+        "grep -q '^DISPLAY=' \"$DESKTOP_ENV\" && "
+        "grep -q '^XAUTHORITY=' \"$DESKTOP_ENV\" && break; done; "
+        "[ -s \"$DESKTOP_ENV\" ] && . \"$DESKTOP_ENV\"; rm -f \"$DESKTOP_ENV\"; "
+        "XAUTH=${XAUTHORITY:-}; "
         "[ -z \"$XAUTH\" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* "
-        "/run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1); "
+        "/run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1); "
         "printf '%s\\n' \"$XAUTH\"",
         timeout=10,
     )
@@ -222,13 +228,19 @@ def _check_userdata_dirs(ssh, binary_path: str) -> tuple[str, str]:
     list_before_cmd = "ls -1d \"$HOME/.config/\"Rocket* 2>/dev/null || true"
 
     launch_cmd = (
-        "XAUTH=$(for pid in $(pgrep -u $(id -u) '"
-        "plasmashell|gnome-shell|kwin_x11' 2>/dev/null); do "
+        "DESKTOP_ENV=$(mktemp); "
+        "for pid in $(pgrep -u $(id -u) '"
+        "plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do "
         "tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | "
-        "sed -n 's/^XAUTHORITY=//p' | head -1; done | head -1); "
+        "grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' "
+        "> \"$DESKTOP_ENV\"; "
+        "grep -q '^DISPLAY=' \"$DESKTOP_ENV\" && "
+        "grep -q '^XAUTHORITY=' \"$DESKTOP_ENV\" && break; done; "
+        "[ -s \"$DESKTOP_ENV\" ] && . \"$DESKTOP_ENV\"; rm -f \"$DESKTOP_ENV\"; "
+        "XAUTH=${XAUTHORITY:-}; "
         "[ -z \"$XAUTH\" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* "
-        "/run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1); "
-        "export DISPLAY=:0; [ -n \"$XAUTH\" ] && export XAUTHORITY=\"$XAUTH\"; "
+        "/run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1); "
+        "export DISPLAY=${DISPLAY:-:0}; [ -n \"$XAUTH\" ] && export XAUTHORITY=\"$XAUTH\"; "
         f"nohup {binary_path} --no-sandbox --disable-gpu --ozone-platform=x11 "
         ">/dev/null 2>&1 &"
     )

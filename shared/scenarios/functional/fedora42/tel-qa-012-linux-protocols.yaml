@@ -165,10 +165,16 @@ steps:
 
   - label: "QA-012-launch: cold-start RC with accessibility + telephony ON"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
         --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -330,7 +336,7 @@ steps:
     retries: 1
 
   - label: "QA-012-step8: click kebab"
-    atspi: {role: "push button", name: "Customize and control app"}
+    atspi: {role: "push button", name: "Customize and control app", via: "action"}
     retries: 1
 
   - label: "QA-012-step8: wait_for Settings menu item"
@@ -341,7 +347,7 @@ steps:
     retries: 1
 
   - label: "QA-012-step8: click Settings menu item"
-    atspi: {role: "menu item", name: "Settings"}
+    atspi: {role: "menu item", name: "Settings", via: "action"}
     retries: 1
 
   - label: "QA-012-step8: wait_for Voice & Video tab"
@@ -349,7 +355,7 @@ steps:
     retries: 1
 
   - label: "QA-012-step8: click Voice & Video tab"
-    atspi: {role: "page tab", name: "Voice & Video"}
+    atspi: {role: "page tab", name: "Voice & Video", via: "action"}
     retries: 1
 
   - label: "QA-012-step8: wait_for Telephony checkbox"

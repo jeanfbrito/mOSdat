@@ -149,10 +149,16 @@ steps:
   # locale drift from e.g. LC_NUMERIC.
   - label: "QA-013-step1: launch Rocket.Chat with LANG=en_US.UTF-8"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if locale -a 2>/dev/null | grep -qi '^en_US.utf'; then
         export LANG=en_US.UTF-8
@@ -186,7 +192,7 @@ steps:
     retries: 1
 
   - label: "QA-013-step1: click kebab (Customize and control app)"
-    atspi: {role: "push button", name: "Customize and control app"}
+    atspi: {role: "push button", name: "Customize and control app", via: "action"}
     retries: 1
 
   - label: "QA-013-step1: wait_for Settings menu item"
@@ -194,7 +200,7 @@ steps:
     retries: 1
 
   - label: "QA-013-step1: click Settings menu item"
-    atspi: {role: "menu item", name: "Settings"}
+    atspi: {role: "menu item", name: "Settings", via: "action"}
     retries: 1
 
   - label: "QA-013-step1: verify Settings screen opened (General tab)"
@@ -202,7 +208,7 @@ steps:
     retries: 1
 
   - label: "QA-013-step1: click Voice & Video tab"
-    atspi: {role: "page tab", name: "Voice & Video"}
+    atspi: {role: "page tab", name: "Voice & Video", via: "action"}
     retries: 1
 
   - label: "QA-013-step1: wait_for Telephony section (Voice & Video opened)"
@@ -303,10 +309,16 @@ steps:
   # (or lose their accessible name), so re-finding them is the assertion.
   - label: "QA-013-step5a: resize RC window to narrow {{ narrow_width }}x{{ narrow_height }}"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       WIN_ID=$(wmctrl -l 2>/dev/null | grep Rocket.Chat | head -1 | awk '{print $1}')
       if [ -z "$WIN_ID" ]; then

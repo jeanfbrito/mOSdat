@@ -166,10 +166,16 @@ steps:
   # ── Launch RC (inline shell + XAUTH fallback chain) ──────────────────────
   - label: "QA-008-launch: start Rocket.Chat (telephony ON + accel bound)"
     shell: |
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
         --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -193,7 +199,7 @@ steps:
 
   # ── QA-008-step1: kebab → Settings → Voice & Video → Telephony section ───
   - label: "QA-008-step1a: click kebab (Customize and control app)"
-    atspi: {role: "push button", name: "Customize and control app"}
+    atspi: {role: "push button", name: "Customize and control app", via: "action"}
     retries: 1
 
   - label: "QA-008-step1b: wait_for Settings menu item"
@@ -201,7 +207,7 @@ steps:
     retries: 1
 
   - label: "QA-008-step1c: click Settings"
-    atspi: {role: "menu item", name: "Settings"}
+    atspi: {role: "menu item", name: "Settings", via: "action"}
     retries: 1
 
   - label: "QA-008-step1d: wait_for Settings General tab"
@@ -213,7 +219,7 @@ steps:
     retries: 1
 
   - label: "QA-008-step1f: click Voice & Video tab"
-    atspi: {role: "page tab", name: "Voice & Video"}
+    atspi: {role: "page tab", name: "Voice & Video", via: "action"}
     retries: 1
 
   - label: "QA-008-step1g: wait_for Telephony section (checkbox anchor)"
@@ -249,10 +255,16 @@ steps:
   - label: "QA-008-step2b: launch focus-steal xterm"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if ! wmctrl -l 2>/dev/null | grep -qi xterm; then
         nohup xterm -geometry 80x24+100+100 >/dev/null 2>&1 &
@@ -268,10 +280,16 @@ steps:
   - label: "QA-008-step3: copy {{ phone_e164 }} to clipboard"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
         printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard
@@ -290,10 +308,16 @@ steps:
   - label: "QA-008-step4a: focus xterm + dispatch {{ accelerator }}"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       wmctrl -a xterm 2>/dev/null || true
       sleep 1
@@ -366,10 +390,16 @@ steps:
   - label: "QA-008-step5: copy '{{ phone_uri_raw }}' to clipboard"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
         printf '%s' '{{ phone_uri_raw }}' | xclip -selection clipboard
@@ -387,10 +417,16 @@ steps:
   - label: "QA-008-step6a: focus xterm + dispatch {{ accelerator }}"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       wmctrl -a xterm 2>/dev/null || true
       sleep 1
@@ -449,10 +485,16 @@ steps:
   - label: "QA-008-step7: copy invalid text '{{ invalid_text }}' to clipboard"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
         printf '%s' '{{ invalid_text }}' | xclip -selection clipboard
@@ -464,10 +506,16 @@ steps:
   - label: "QA-008-step8a: focus xterm + dispatch {{ accelerator }} (invalid clipboard)"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       wmctrl -a xterm 2>/dev/null || true
       sleep 1
@@ -540,10 +588,16 @@ steps:
   - label: "QA-008-step9a: dispatch reserved accelerator {{ reserved_accelerator }} (best-effort)"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       wmctrl -a xterm 2>/dev/null || true
       sleep 1
@@ -562,10 +616,16 @@ steps:
   - label: "QA-008-step9c: clipboard=E.164 + previously bound accel still works"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
         printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard
@@ -599,10 +659,16 @@ steps:
   - label: "QA-008-step10a: bring RC to foreground"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       wmctrl -a Rocket.Chat 2>/dev/null || true
       sleep 1
@@ -627,7 +693,7 @@ steps:
   # either dismiss-then-reopen (acceptable) or be absorbed by the menu
   # which the wait_for handles. Each step is single-retry.
   - label: "QA-008-step10c: click kebab (re-open path)"
-    atspi: {role: "push button", name: "Customize and control app"}
+    atspi: {role: "push button", name: "Customize and control app", via: "action"}
     retries: 2
 
   - label: "QA-008-step10d: wait_for Settings menu item"
@@ -635,11 +701,11 @@ steps:
     retries: 1
 
   - label: "QA-008-step10e: click Settings"
-    atspi: {role: "menu item", name: "Settings"}
+    atspi: {role: "menu item", name: "Settings", via: "action"}
     retries: 1
 
   - label: "QA-008-step10f: click Voice & Video tab"
-    atspi: {role: "page tab", name: "Voice & Video"}
+    atspi: {role: "page tab", name: "Voice & Video", via: "action"}
     retries: 1
 
   - label: "QA-008-step10g: wait_for Telephony checkbox"
@@ -661,10 +727,16 @@ steps:
   - label: "QA-008-step11a: clipboard still=E.164; focus xterm + re-fire {{ accelerator }}"
     shell: |
       set -u
-      XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
-      [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-      export DISPLAY=:0
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+      XAUTH=${XAUTHORITY:-}
+      [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/xauth_* /run/user/$(id -u)/gdm/Xauthority "$HOME/.Xauthority" 2>/dev/null | head -1)
+      export DISPLAY=${DISPLAY:-:0}
       [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
       if which xclip >/dev/null 2>&1; then
         printf '%s' '{{ phone_e164 }}' | xclip -selection clipboard

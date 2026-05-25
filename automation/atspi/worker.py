@@ -254,9 +254,23 @@ def _get_node_by_path(root: Any, path: str) -> Optional[Any]:
     return node
 
 
+_ROLE_ALIASES = {
+    "push button": {"push button", "button"},
+    "button": {"button", "push button"},
+}
+
+
+def _role_matches(actual: Optional[str], expected: Optional[str]) -> bool:
+    if expected is None:
+        return True
+    if actual == expected:
+        return True
+    return actual in _ROLE_ALIASES.get(expected, set())
+
+
 def _match(meta: dict, role: Optional[str], name: Optional[str],
            name_substr: bool) -> bool:
-    if role is not None and meta.get("role") != role:
+    if not _role_matches(meta.get("role"), role):
         return False
     if name is None:
         return True

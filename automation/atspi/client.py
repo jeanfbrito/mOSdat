@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import shlex
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -49,6 +50,21 @@ DEFAULT_CALL_TIMEOUT_S = 60
 DEFAULT_WAIT_FOR_TIMEOUT_S = 15.0
 DEFAULT_WAIT_FOR_INTERVAL_S = 0.5
 DEFAULT_APP_FILTER = "rocket"
+
+_ATSPI_SESSION_PREAMBLE = """DESKTOP_ENV=$(mktemp)
+for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+  tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+  grep -q '^DISPLAY=' "$DESKTOP_ENV" && grep -q '^XAUTHORITY=' "$DESKTOP_ENV" && break
+done
+[ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+rm -f "$DESKTOP_ENV"
+if [ -z "${AT_SPI_BUS_ADDRESS:-}" ] && command -v busctl >/dev/null 2>&1; then
+  _MOSDAT_ATSPI=$(busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress 2>/dev/null | sed -e 's/^s //' -e 's/^"//' -e 's/"$//')
+  [ -n "$_MOSDAT_ATSPI" ] && export AT_SPI_BUS_ADDRESS="$_MOSDAT_ATSPI"
+fi
+export DISPLAY=${DISPLAY:-:0}
+[ -n "${XAUTHORITY:-}" ] && export XAUTHORITY
+"""
 
 _LOCAL_WORKER_PATH = Path(__file__).resolve().parent / "worker.py"
 _LOCAL_SETUP_PATH = Path(__file__).resolve().parent / "setup.sh"
@@ -132,6 +148,20 @@ class AtspiClient:
 
     # ----- raw escape hatch -------------------------------------------------
 
+    def _with_session_env(self, command: str) -> str:
+        """Run the worker in the logged-in desktop session when available."""
+        return _ATSPI_SESSION_PREAMBLE + command
+
+    @staticmethod
+    def _is_atspi_not_ready(result: dict) -> bool:
+        errors = result.get("errors") or []
+        if any("atspi_not_ready" in str(err) for err in errors):
+            return True
+        for item in (result.get("results") or {}).values():
+            if isinstance(item, dict) and item.get("error") == "atspi_not_ready":
+                return True
+        return False
+
     def run_batch(
         self,
         ops: list[dict],
@@ -150,10 +180,11 @@ class AtspiClient:
         batch = {"ops": ops, "init": init or {"force_atspi_init": True}}
         payload = json.dumps(batch, separators=(",", ":"))
         timeout = timeout if timeout is not None else self._call_timeout
+        remote_payload: Optional[str] = None
+        local_payload: Optional[Path] = None
 
         if len(payload.encode("utf-8")) <= inline_max_bytes:
             cmd = f"python3 {shlex.quote(self._worker_path)} {shlex.quote(payload)}"
-            r = self._ssh.run(cmd, timeout=timeout)
         else:
             remote_payload = (
                 f"{self._payload_dir.rstrip('/')}/mosdat_atspi_payload_"
@@ -174,28 +205,35 @@ class AtspiClient:
                     f"python3 {shlex.quote(self._worker_path)} "
                     f"< {shlex.quote(remote_payload)}"
                 )
-                r = self._ssh.run(cmd, timeout=timeout)
-                # Best-effort cleanup; failure not fatal.
-                self._ssh.run(f"rm -f {shlex.quote(remote_payload)}",
-                              timeout=10)
             finally:
-                try:
-                    local_payload.unlink()
-                except OSError:
-                    pass
+                if local_payload is not None:
+                    try:
+                        local_payload.unlink()
+                    except OSError:
+                        pass
 
-        if not r.success and not r.stdout:
-            raise AtspiError(
-                f"worker ssh call failed (rc={r.returncode}): {r.stderr}",
-                stderr=r.stderr)
         try:
-            result = json.loads(r.stdout)
-        except Exception as e:
-            raise AtspiError(
-                f"could not parse worker stdout as JSON: {e!r}; "
-                f"first 500 bytes: {r.stdout[:500]!r}",
-                stderr=r.stderr) from e
-        return result
+            for attempt in range(3):
+                r = self._ssh.run(self._with_session_env(cmd), timeout=timeout)
+                if not r.success and not r.stdout:
+                    raise AtspiError(
+                        f"worker ssh call failed (rc={r.returncode}): {r.stderr}",
+                        stderr=r.stderr)
+                try:
+                    result = json.loads(r.stdout)
+                except Exception as e:
+                    raise AtspiError(
+                        f"could not parse worker stdout as JSON: {e!r}; "
+                        f"first 500 bytes: {r.stdout[:500]!r}",
+                        stderr=r.stderr) from e
+                if not self._is_atspi_not_ready(result) or attempt == 2:
+                    return result
+                time.sleep(0.5 * (attempt + 1))
+        finally:
+            if remote_payload is not None:
+                self._ssh.run(f"rm -f {shlex.quote(remote_payload)}", timeout=10)
+
+        raise AtspiError("AT-SPI worker retry loop exited unexpectedly")
 
     # ----- convenience wrappers --------------------------------------------
 
