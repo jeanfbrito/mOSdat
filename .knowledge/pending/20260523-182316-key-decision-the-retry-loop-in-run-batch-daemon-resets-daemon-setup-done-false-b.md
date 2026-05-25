@@ -1,0 +1,17 @@
+---
+date: "2026-05-23"
+project: mosdat
+topic: 'Key decision**: the retry loop in `_run_batch_daemon` resets `_daemon_setup_done=False` before calling'
+kind: decision
+scope: project-shared
+confidence: low
+---
+
+- `tel-qa-002, 006, 007, 013, 014` (both VMs) — `wait_for_timeout` on dialogs/combo-boxes that require the OS-level `tel:` deeplink handler to be registered as default. These VMs don't have RC as the default `tel:` handler yet. Not a transport or scenario logic bug.
+- `tel-qa-010, 011` (both VMs) — `wait_for_timeout` on `isDefault.tel` / `tel: default` labels — same root cause.
+
+**Key decision**: the retry loop in `_run_batch_daemon` resets `_daemon_setup_done=False` before calling `_ensure_daemon_setup` so the setup function doesn't short-circuit. This is correct because a dead tunnel means the daemon may also have been restarted and needs re-registration.</result>
+<usage><total_tokens>72683</total_tokens><tool_uses>20</tool_uses><duration_ms>884364</duration_ms></usage>
+</task-notification>
+
+Assistant: 🟢 **Tunnel fix CONFIRMED**: 0/20 tunnel errors (was 20/20). Plus **+4 PASS**: tel-qa-003 + tel-qa-008 on both OSes.
