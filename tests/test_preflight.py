@@ -39,6 +39,7 @@ from automation.commands.preflight import (
     _check_disk_free,
     _check_no_stale_rc,
     _check_symbol,
+    _resolve_binary_path,
     _check_tool_deps,
     _check_x11_cookie,
     _dry_run_shell_steps,
@@ -63,6 +64,33 @@ def _ssh(stdout="", returncode=0, stderr=""):
 # ---------------------------------------------------------------------------
 # Unit tests for individual check functions
 # ---------------------------------------------------------------------------
+
+
+
+class TestResolveBinaryPath:
+    def test_prefers_installed_app_binary_before_package_commands(self):
+        ssh = MagicMock()
+        ssh.run.return_value = SSHResult(0, "EXISTS\n", "")
+        config = MagicMock()
+        config.app.binary = "/opt/Rocket.Chat/rocketchat-desktop"
+        vm = MagicMock()
+        vm.packages = [MagicMock(app_path="flatpak run chat.rocket.RocketChat")]
+
+        assert _resolve_binary_path(ssh, config, vm) == "/opt/Rocket.Chat/rocketchat-desktop"
+
+    def test_falls_back_to_existing_package_file_path(self):
+        ssh = MagicMock()
+        ssh.run.side_effect = [
+            SSHResult(0, "MISSING\n", ""),
+            SSHResult(0, "EXISTS\n", ""),
+        ]
+        config = MagicMock()
+        config.app.binary = "/opt/Rocket.Chat/rocketchat-desktop"
+        vm = MagicMock()
+        vm.packages = [MagicMock(app_path="/snap/bin/rocketchat-desktop")]
+
+        assert _resolve_binary_path(ssh, config, vm) == "/snap/bin/rocketchat-desktop"
+
 
 class TestCheckX11Cookie:
     def test_pass_when_cookie_found(self):

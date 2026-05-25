@@ -16,9 +16,14 @@ _PREAMBLE_SENTINEL = "XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.*"
 
 # The full preamble to prepend.
 _PREAMBLE = (
-    'XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.*'
-    ' /run/user/$(id -u)/gdm/Xauthority 2>/dev/null | head -1)\n'
-    'export DISPLAY=:0 XAUTHORITY="$XAUTH"\n'
+    "XAUTH=$(for pid in $(pgrep -u $(id -u) "
+    "'plasmashell|gnome-shell|kwin_x11' 2>/dev/null); do "
+    "tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | "
+    "sed -n 's/^XAUTHORITY=//p' | head -1; done | head -1)\n"
+    "[ -z \"$XAUTH\" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* "
+    "/run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1)\n"
+    "export DISPLAY=:0\n"
+    "[ -n \"$XAUTH\" ] && export XAUTHORITY=\"$XAUTH\"\n"
 )
 
 # Regex: shell commands that require an X11 environment.

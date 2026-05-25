@@ -21,6 +21,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 from typing import Optional
@@ -104,13 +105,19 @@ def _check_ssh(ssh) -> tuple[str, str]:
 
 def _check_x11_cookie(ssh) -> tuple[str, str]:
     r = ssh.run(
-        r"ls /run/user/1000/.mutter-Xwaylandauth.* /run/user/1000/gdm/Xauthority 2>/dev/null | head -1",
+        "XAUTH=$(for pid in $(pgrep -u $(id -u) '"
+        "plasmashell|gnome-shell|kwin_x11' 2>/dev/null); do "
+        "tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | "
+        "sed -n 's/^XAUTHORITY=//p' | head -1; done | head -1); "
+        "[ -z \"$XAUTH\" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* "
+        "/run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1); "
+        "printf '%s\\n' \"$XAUTH\"",
         timeout=10,
     )
     path = r.stdout.strip()
     if path:
         return PASS, path
-    return FAIL, "no cookie at /run/user/1000/.mutter-Xwaylandauth.* or /run/user/1000/gdm/Xauthority"
+    return FAIL, "no cookie at mutter/gdm Xauthority paths or $HOME/.Xauthority"
 
 
 def _check_tool_deps(ssh) -> tuple[str, str]:
@@ -126,25 +133,61 @@ def _check_tool_deps(ssh) -> tuple[str, str]:
 
 
 def _check_binary(ssh, binary_path: str) -> tuple[str, str]:
-    r = ssh.run(f"test -f {binary_path} && echo EXISTS || echo MISSING", timeout=10)
+    r = ssh.run(
+        f"test -f {shlex.quote(binary_path)} && echo EXISTS || echo MISSING",
+        timeout=10,
+    )
     if r.stdout.strip() == "EXISTS":
         return PASS, binary_path
     return FAIL, f"not found: {binary_path}"
 
 
+def _resolve_binary_path(ssh, config, vm) -> str:
+    """Choose the concrete executable path that is installed on this VM."""
+    app_binary = config.app.binary
+    r = ssh.run(
+        f"test -f {shlex.quote(app_binary)} && echo EXISTS || echo MISSING",
+        timeout=10,
+    )
+    if r.stdout.strip() == "EXISTS":
+        return app_binary
+    for pkg in vm.packages:
+        if pkg.app_path and "{file}" not in pkg.app_path and " " not in pkg.app_path:
+            r = ssh.run(
+                f"test -f {shlex.quote(pkg.app_path)} && echo EXISTS || echo MISSING",
+                timeout=10,
+            )
+            if r.stdout.strip() == "EXISTS":
+                return pkg.app_path
+    return app_binary
+
+
 def _find_asar(ssh, binary_path: str) -> Optional[str]:
-    """Best-effort: look for app.asar next to the binary's install dir."""
-    install_dir = str(Path(binary_path).parent)
+    """Best-effort: locate app.asar for native packages or AppImage installs."""
+    install_dir = shlex.quote(str(Path(binary_path).parent))
     r = ssh.run(
         f"find {install_dir} -name 'app.asar' -maxdepth 4 2>/dev/null | head -1",
         timeout=15,
+    )
+    if r.stdout.strip():
+        return r.stdout.strip()
+    binary = shlex.quote(binary_path)
+    r = ssh.run(
+        f"test -x {binary} && "
+        "rm -rf /tmp/mosdat-appimage-asar && "
+        "mkdir -p /tmp/mosdat-appimage-asar && "
+        "cd /tmp/mosdat-appimage-asar && "
+        f"{binary} --appimage-extract resources/app.asar >/dev/null 2>&1 && "
+        "test -f squashfs-root/resources/app.asar && "
+        "printf '%s\n' /tmp/mosdat-appimage-asar/squashfs-root/resources/app.asar",
+        timeout=120,
     )
     return r.stdout.strip() or None
 
 
 def _check_symbol(ssh, asar_path: str, symbol: str) -> tuple[str, str]:
     r = ssh.run(
-        f"strings {asar_path} | grep -c {symbol} 2>/dev/null || echo 0",
+        f"grep -a -c {shlex.quote(symbol)} {shlex.quote(asar_path)} 2>/dev/null || true",
         timeout=30,
     )
     count_str = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "0"
@@ -161,13 +204,13 @@ def _check_userdata_dirs(ssh, binary_path: str) -> tuple[str, str]:
     """Kill RC, wipe config dirs, launch 18 s, list new dirs, kill RC."""
     kill_cmd = (
         "for attempt in 1 2 3; do "
-        "  pkill -TERM -f '/opt/Rocket.Chat' 2>/dev/null || true; "
-        "  pkill -TERM -f 'rocketchat-desktop' 2>/dev/null || true; "
+        "  pkill -TERM -f '/opt/[R]ocket[.]Chat|[r]ocketchat-desktop|[.]mount_rocket' 2>/dev/null || true; "
+        "  "
         "  sleep 1; "
-        "  pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' >/dev/null 2>&1 || break; "
+        "  pgrep -af '(/opt/[R]ocket[.]Chat|[r]ocketchat-desktop|[.]mount_rocket)' >/dev/null 2>&1 || break; "
         "done; "
-        "pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true; "
-        "pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true; "
+        "pkill -KILL -f '/opt/[R]ocket[.]Chat|[r]ocketchat-desktop|[.]mount_rocket' 2>/dev/null || true; "
+        ""
         "sleep 1"
     )
     wipe_cmd = (
@@ -179,9 +222,13 @@ def _check_userdata_dirs(ssh, binary_path: str) -> tuple[str, str]:
     list_before_cmd = "ls -1d \"$HOME/.config/\"Rocket* 2>/dev/null || true"
 
     launch_cmd = (
-        "XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1); "
-        "[ -z \"$XAUTH\" ] && XAUTH=/run/user/1000/gdm/Xauthority; "
-        f"export DISPLAY=:0 XAUTHORITY=\"$XAUTH\"; "
+        "XAUTH=$(for pid in $(pgrep -u $(id -u) '"
+        "plasmashell|gnome-shell|kwin_x11' 2>/dev/null); do "
+        "tr '\\0' '\\n' < /proc/$pid/environ 2>/dev/null | "
+        "sed -n 's/^XAUTHORITY=//p' | head -1; done | head -1); "
+        "[ -z \"$XAUTH\" ] && XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* "
+        "/run/user/$(id -u)/gdm/Xauthority \"$HOME/.Xauthority\" 2>/dev/null | head -1); "
+        "export DISPLAY=:0; [ -n \"$XAUTH\" ] && export XAUTHORITY=\"$XAUTH\"; "
         f"nohup {binary_path} --no-sandbox --disable-gpu --ozone-platform=x11 "
         ">/dev/null 2>&1 &"
     )
@@ -189,10 +236,7 @@ def _check_userdata_dirs(ssh, binary_path: str) -> tuple[str, str]:
         "sleep 18; "
         "ls -1d \"$HOME/.config/\"Rocket* 2>/dev/null || true"
     )
-    kill_after_cmd = (
-        "pkill -KILL -f '/opt/Rocket.Chat' 2>/dev/null || true; "
-        "pkill -KILL -f 'rocketchat-desktop' 2>/dev/null || true"
-    )
+    kill_after_cmd = kill_cmd
 
     try:
         ssh.run(kill_cmd, timeout=15)
@@ -224,7 +268,7 @@ def _check_disk_free(ssh) -> tuple[str, str]:
 
 def _check_no_stale_rc(ssh) -> tuple[str, str]:
     r = ssh.run(
-        "pgrep -af '(/opt/Rocket.Chat|rocketchat-desktop)' 2>/dev/null || true",
+        "pgrep -af '(/opt/[R]ocket[.]Chat|[r]ocketchat-desktop|[.]mount_rocket)' 2>/dev/null || true",
         timeout=10,
     )
     procs = [
@@ -405,12 +449,7 @@ def run_preflight(
             any_fail = True
 
         # d. Binary exists
-        binary_path = config.app.binary
-        # prefer per-VM package app_path if set
-        for pkg in vm.packages:
-            if pkg.app_path and "{file}" not in pkg.app_path:
-                binary_path = pkg.app_path
-                break
+        binary_path = _resolve_binary_path(ssh, config, vm)
 
         s, d = _check_binary(ssh, binary_path)
         _print(s, "Binary exists", d)

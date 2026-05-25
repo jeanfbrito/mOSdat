@@ -48,6 +48,7 @@ from automation.commands.build import (
     TARGETS,
     derive_clone_dir,
     match_artifact,
+    _find_installed_asar,
     parse_verify_symbols,
     pick_artifact_url,
     resolve_artifact,
@@ -124,6 +125,8 @@ def test_resolve_target_known_and_unknown() -> None:
     assert target.name == "deb"
     assert target.yarn_release_args == ["--linux", "deb"]
     assert "{artifact}" in target.install_cmd_template
+    assert resolve_target("rpm").dist_glob == "*.rpm"
+    assert resolve_target("appimage").dist_glob == "*.AppImage"
     with pytest.raises(ValueError):
         resolve_target("snap")
 
@@ -161,10 +164,35 @@ def test_match_artifact_returns_newest(tmp_path: Path) -> None:
     assert match_artifact(tmp_path / "missing", "*.deb") is None
 
 
-def test_targets_table_contains_deb_and_exe() -> None:
-    # deb = Linux .deb deploy (Phase 1). exe = Windows NSIS deploy (this task).
-    # rpm / AppImage remain TODO; expand this set when they land.
-    assert set(TARGETS) == {"deb", "exe"}
+
+
+def test_find_installed_asar_extracts_from_appimage_when_native_asar_missing() -> None:
+    class Result:
+        def __init__(self, success, stdout=""):
+            self.success = success
+            self.stdout = stdout
+
+    class SSH:
+        def __init__(self):
+            self.commands = []
+
+        def run(self, cmd, timeout=None):
+            self.commands.append(cmd)
+            if cmd.startswith("ls /opt/*/resources/app.asar"):
+                return Result(False, "")
+            return Result(True, "/tmp/mosdat-appimage-asar/squashfs-root/resources/app.asar\n")
+
+    ssh = SSH()
+    assert _find_installed_asar(ssh) == "/tmp/mosdat-appimage-asar/squashfs-root/resources/app.asar"
+    assert "--appimage-extract resources/app.asar" in ssh.commands[1]
+
+def test_targets_table_contains_native_linux_and_exe() -> None:
+    assert set(TARGETS) == {"deb", "rpm", "appimage", "exe"}
+    assert TARGETS["rpm"].yarn_release_args == ["--linux", "rpm"]
+    assert TARGETS["appimage"].yarn_release_args == ["--linux", "AppImage"]
+    assert "/opt/Rocket.Chat/rocketchat-desktop" in TARGETS["appimage"].install_cmd_template
+    assert "rocketchat-desktop.desktop" in TARGETS["appimage"].install_cmd_template
+    assert "x-scheme-handler/tel" in TARGETS["appimage"].install_cmd_template
 
 
 

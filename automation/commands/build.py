@@ -49,7 +49,7 @@ from typing import Iterable, Optional
 
 
 # ---------------------------------------------------------------------------
-# Target plug-in registry — v1 only ships "deb".
+# Target plug-in registry.
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -70,6 +70,35 @@ TARGETS: dict[str, BuildTarget] = {
             "sudo dpkg -i {artifact} || sudo apt-get install -y -f"
         ),
     ),
+    "rpm": BuildTarget(
+        name="rpm",
+        dist_glob="*.rpm",
+        yarn_release_args=["--linux", "rpm"],
+        install_cmd_template=(
+            "if command -v dnf >/dev/null 2>&1; then "
+            "sudo dnf install -y {artifact} || true; "
+            "sudo rpm -Uvh --force {artifact}; "
+            "elif command -v zypper >/dev/null 2>&1; then "
+            "sudo zypper install -y --allow-unsigned-rpm {artifact} || true; "
+            "sudo rpm -Uvh --force {artifact}; "
+            "else sudo rpm -Uvh --force {artifact}; fi"
+        ),
+    ),
+    "appimage": BuildTarget(
+        name="appimage",
+        dist_glob="*.AppImage",
+        yarn_release_args=["--linux", "AppImage"],
+        install_cmd_template=(
+            "sudo mkdir -p /opt/Rocket.Chat && "
+            "sudo install -m 0755 {artifact} /opt/Rocket.Chat/rocketchat-desktop && "
+            "printf '%s\n' '[Desktop Entry]' 'Type=Application' "
+            "'Name=Rocket.Chat' 'Exec=/opt/Rocket.Chat/rocketchat-desktop %U' "
+            "'Terminal=false' 'Categories=Network;InstantMessaging;' "
+            "'MimeType=x-scheme-handler/tel;x-scheme-handler/callto;' "
+            "| sudo tee /usr/share/applications/rocketchat-desktop.desktop >/dev/null && "
+            "(sudo update-desktop-database /usr/share/applications >/dev/null 2>&1 || true)"
+        ),
+    ),
     "exe": BuildTarget(
         name="exe",
         # electron-builder NSIS output, e.g. ``rocketchat-4.14.1-win-x64.exe``.
@@ -83,8 +112,6 @@ TARGETS: dict[str, BuildTarget] = {
             "Start-Process -FilePath {artifact} -ArgumentList '/S' -Wait"
         ),
     ),
-    # TODO(I3): rpm — yarn release --linux rpm; install via `sudo rpm -i --force`
-    # TODO(I3): AppImage — yarn release --linux AppImage; install = chmod +x + place under /opt
 }
 
 
@@ -289,6 +316,8 @@ def _gh_run_list_builds(repo: str, branch: str) -> list:
 # S3 URL pattern used by the github-actions CI bot.
 # Example: https://s3.us-east-1.wasabisys.com/builds.cloud.rocket.chat/pr-3325/ubuntu-latest/rocketchat-4.14.1-linux-amd64.deb
 _S3_DEB_RE = re.compile(r"https://[^\s)\"']+\.deb")
+_S3_RPM_RE = re.compile(r"https://[^\s)\"']+\.rpm")
+_S3_APPIMAGE_RE = re.compile(r"https://[^\s)\"']+\.AppImage")
 # Windows installer S3 URL pattern (electron-builder NSIS .exe).
 # Example: .../pr-3325/windows-latest/rocketchat-4.14.1-win-x64.exe
 _S3_EXE_RE = re.compile(r"https://[^\s)\"']+\.exe")
@@ -296,6 +325,8 @@ _S3_EXE_RE = re.compile(r"https://[^\s)\"']+\.exe")
 # Map artifact extension → URL regex. New formats only need to register here.
 _ARTIFACT_PATTERNS: dict[str, re.Pattern] = {
     ".deb": _S3_DEB_RE,
+    ".rpm": _S3_RPM_RE,
+    ".AppImage": _S3_APPIMAGE_RE,
     ".exe": _S3_EXE_RE,
 }
 
@@ -713,10 +744,29 @@ def build(clone_dir: Path, target: BuildTarget, pr: int, *, dry_run: bool) -> tu
 # ---------------------------------------------------------------------------
 
 def _find_installed_asar(ssh) -> Optional[str]:
-    """Locate the deployed app.asar on a VM. Pattern: /opt/<appname>/resources/app.asar."""
+    """Locate the deployed app.asar on a VM.
+
+    Native packages place it under ``/opt/<appname>/resources``. AppImage
+    installs keep one executable at ``/opt/Rocket.Chat/rocketchat-desktop``;
+    extract just ``resources/app.asar`` into a stable temp dir for symbol
+    verification.
+    """
     res = ssh.run(
         "ls /opt/*/resources/app.asar 2>/dev/null | head -1",
         timeout=15,
+    )
+    if res.success and res.stdout.strip():
+        return res.stdout.strip()
+    res = ssh.run(
+        "test -x /opt/Rocket.Chat/rocketchat-desktop && "
+        "rm -rf /tmp/mosdat-appimage-asar && "
+        "mkdir -p /tmp/mosdat-appimage-asar && "
+        "cd /tmp/mosdat-appimage-asar && "
+        "/opt/Rocket.Chat/rocketchat-desktop "
+        "--appimage-extract resources/app.asar >/dev/null 2>&1 && "
+        "test -f squashfs-root/resources/app.asar && "
+        "printf '%s\n' /tmp/mosdat-appimage-asar/squashfs-root/resources/app.asar",
+        timeout=120,
     )
     if res.success and res.stdout.strip():
         return res.stdout.strip()
@@ -727,8 +777,8 @@ def _verify_symbols_on_vm(ssh, asar: str, symbols: list[str]) -> list[str]:
     """Return the list of symbols MISSING from the installed asar (count == 0)."""
     missing: list[str] = []
     for sym in symbols:
-        # strings is fast; grep -c returns count (0 means missing)
-        cmd = f"strings {shlex.quote(asar)} | grep -c {shlex.quote(sym)}"
+        # grep -a works on app.asar without requiring binutils/strings on every VM.
+        cmd = f"grep -a -c {shlex.quote(sym)} {shlex.quote(asar)} 2>/dev/null || true"
         res = ssh.run(cmd, timeout=120)
         count = 0
         try:
@@ -964,7 +1014,7 @@ def deploy_to_vm(
         res.missing_symbols = _verify_symbols_on_vm(ssh, asar, verify_symbols)
 
     ver_res = ssh.run(
-        f"strings {shlex.quote(asar)} | grep -m1 -oE '\"version\":\"[^\"]+\"' | head -1",
+        f"grep -a -m1 -oE '\"version\":\"[^\"]+\"' {shlex.quote(asar)} | head -1",
         timeout=60,
     )
     if ver_res.success:
@@ -1005,7 +1055,12 @@ def run_build(args: argparse.Namespace) -> int:
     artifact: Optional[Path] = None
 
     # Phase 1a: try prebuilt artifact from S3 (if --artifact-first)
-    target_ext_map = {"deb": ".deb", "exe": ".exe"}
+    target_ext_map = {
+        "deb": ".deb",
+        "rpm": ".rpm",
+        "appimage": ".AppImage",
+        "exe": ".exe",
+    }
     target_ext = target_ext_map.get(target.name)
     if artifact_first and target_ext is not None:
         artifact = resolve_artifact(pr, repo, target_ext, dry_run=dry_run)
@@ -1133,7 +1188,7 @@ def add_build_subparser(sub) -> None:
     )
     p.add_argument(
         "--target", default="deb", choices=sorted(TARGETS.keys()),
-        help="Build target (deb=Linux .deb; exe=Windows NSIS .exe; rpm/AppImage planned)",
+        help="Build target (deb/rpm/appimage for Linux; exe for Windows NSIS)",
     )
     p.add_argument(
         "--clone-dir", default=None, dest="clone_dir",
