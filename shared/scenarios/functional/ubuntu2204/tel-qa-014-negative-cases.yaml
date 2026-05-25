@@ -285,7 +285,6 @@ steps:
   #     XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
   #     [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
   #     [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-  #     export DISPLAY=:0
   #     [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
   #     ACCESSIBILITY_ENABLED=1 nohup /opt/Rocket.Chat/rocketchat-desktop \
   #       --no-sandbox --disable-gpu --ozone-platform=x11 \
@@ -361,7 +360,6 @@ steps:
   #     XAUTH=$(ls /run/user/1000/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
   #     [ -z "$XAUTH" ] && XAUTH=$(ls /run/user/1000/gdm/Xauthority 2>/dev/null | head -1)
   #     [ -z "$XAUTH" ] && XAUTH="$HOME/.Xauthority"
-  #     export DISPLAY=:0
   #     [ -n "$XAUTH" ] && [ -f "$XAUTH" ] && export XAUTHORITY="$XAUTH"
   #     nohup xdg-open 'tel:{{ test_number }}' >/dev/null 2>&1 &
   #     sleep 2

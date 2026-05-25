@@ -202,7 +202,6 @@ steps:
 
   - label: "QA-012-step2: verify xdg-mime default for tel: is rocketchat-desktop"
     shell: |
-      export DISPLAY=:0
       TEL_DEFAULT=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null)
       echo "xdg-mime tel default: '$TEL_DEFAULT'"
       if echo "$TEL_DEFAULT" | grep -qi 'rocketchat'; then
@@ -222,7 +221,6 @@ steps:
 
   - label: "QA-012-step3: dispatch xdg-open tel:+15551234567"
     shell: |
-      export DISPLAY=:0
       xdg-open "tel:+15551234567"
       echo TEL_XDG_OPEN_DISPATCHED
 
@@ -254,7 +252,6 @@ steps:
   # ── Dismiss the modal so the next dispatch can fire a fresh one ──────────
   - label: "QA-012-step4: dismiss tel: modal (click center to defocus)"
     shell: |
-      export DISPLAY=:0
       xdotool mousemove 960 540 click 1 2>/dev/null || true
       echo DISMISSED_TEL_MODAL
 
@@ -266,7 +263,6 @@ steps:
 
   - label: "QA-012-step5: verify xdg-mime default for callto: is rocketchat-desktop"
     shell: |
-      export DISPLAY=:0
       CALLTO_DEFAULT=$(xdg-mime query default x-scheme-handler/callto 2>/dev/null)
       echo "xdg-mime callto default: '$CALLTO_DEFAULT'"
       if echo "$CALLTO_DEFAULT" | grep -qi 'rocketchat'; then
@@ -282,7 +278,6 @@ steps:
 
   - label: "QA-012-step6: dispatch xdg-open callto:+15551234567"
     shell: |
-      export DISPLAY=:0
       xdg-open "callto:+15551234567"
       echo CALLTO_XDG_OPEN_DISPATCHED
 
@@ -309,7 +304,6 @@ steps:
   # ── Dismiss the callto: modal before the optional toggle-OFF tail ────────
   - label: "QA-012-step7: dismiss callto: modal"
     shell: |
-      export DISPLAY=:0
       xdotool mousemove 960 540 click 1 2>/dev/null || true
       echo DISMISSED_CALLTO_MODAL
 
@@ -379,7 +373,6 @@ steps:
   # Re-query xdg-mime — the renderer should have released its handler claim.
   - label: "QA-012-step8: verify xdg-mime tel: default is no longer rocketchat"
     shell: |
-      export DISPLAY=:0
       # Give the desktop database a moment to refresh.
       for i in 1 2 3 4 5; do
         TEL_DEFAULT=$(xdg-mime query default x-scheme-handler/tel 2>/dev/null)
@@ -400,7 +393,6 @@ steps:
 
   - label: "QA-012-step8: verify xdg-mime callto: default is no longer rocketchat"
     shell: |
-      export DISPLAY=:0
       for i in 1 2 3 4 5; do
         CALLTO_DEFAULT=$(xdg-mime query default x-scheme-handler/callto 2>/dev/null)
         echo "attempt $i: xdg-mime callto default: '$CALLTO_DEFAULT'"

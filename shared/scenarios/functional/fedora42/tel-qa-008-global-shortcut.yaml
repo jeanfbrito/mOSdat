@@ -787,7 +787,6 @@ steps:
 
   # ── Final cleanup ────────────────────────────────────────────────────────
   - shell: |
-      export DISPLAY=:0
       pkill -KILL -x xterm 2>/dev/null || true
       pkill -KILL -x apport-gtk 2>/dev/null || true
       echo XTERM_CLEANUP_OK
