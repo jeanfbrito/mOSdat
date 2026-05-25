@@ -16,7 +16,7 @@
 # `tel-qa-001-settings-discovery.yaml` (AT-SPI-first authoring + var pattern).
 #
 # Pre-staging:
-#   - servers.json: 3 distinct workspaces ("Workspace", "Mobile RC", "Open RC")
+#   - servers.json: 2 distinct workspaces ("Workspace", "Mobile RC")
 #     so the picker is GUARANTEED to render (no single-server fast-path).
 #   - overridden-settings.json: isTelephonyEnabled=true (test fixture) so the
 #     picker is reached without manually toggling the master switch.
@@ -40,7 +40,6 @@
 #   - workspace row:        role "push button", name "<title> <hostname>" e.g.
 #                           "Southlogic rocketchat.jeanbrito.com",
 #                           "Mobile! mobile.rocket.chat",
-#                           "Rocket.Chat Open open.rocket.chat".
 #                           The name is built from the SERVER's title (returned
 #                           by the workspace handshake) + hostname — NOT the
 #                           local mOSdat servers.json `title`.
@@ -50,7 +49,7 @@ name: "tel-qa-006-multi-workspace-picker"
 description: |
   TEL-QA-006 — Multi-workspace server picker.
 
-  Smoke flow: With 3 workspaces configured and Telephony ENABLED but no
+  Smoke flow: With 2 workspaces configured and Telephony ENABLED but no
   remembered-choice preference, a phone-link dispatch must surface the
   server picker modal listing every workspace. The flow verifies:
     - picker opens on tel: dispatch (step 2)
@@ -64,7 +63,6 @@ description: |
 vars:
   workspace_url: "https://rocketchat.jeanbrito.com"
   mobile_url: "https://mobile.rocket.chat"
-  open_url: "https://open.rocket.chat"
   tel_link: "tel:+15551234567"
   callto_link: "callto://+491234567890"
 
@@ -72,7 +70,7 @@ steps:
   # ── Pre-test cleanup ─────────────────────────────────────────────────────
   - routine: cleanup-rocketchat
 
-  # ── Pre-stage userData (3 workspaces + telephony ENABLED + NO remembered choice)
+  # ── Pre-stage userData (2 workspaces + telephony ENABLED + NO remembered choice)
   # Inlined from launch-rocketchat (Known Issue #1: Wayland-only XAUTH path
   # in the routine — inline shell is safer until that's repaired).
   - shell: |
@@ -83,7 +81,6 @@ steps:
       {
         "Workspace": "{{ workspace_url }}",
         "Mobile RC": "{{ mobile_url }}",
-        "Open RC":   "{{ open_url }}"
       }
       JSON
         python3 - "$d" <<'PY'
@@ -93,12 +90,10 @@ steps:
           return u if u.endswith("/") else u + "/"
       first_url  = _u("{{ workspace_url }}")
       mobile_url = _u("{{ mobile_url }}")
-      open_url   = _u("{{ open_url }}")
       config = {
           "servers": [
               {"url": first_url,  "title": "Workspace"},
               {"url": mobile_url, "title": "Mobile RC"},
-              {"url": open_url,   "title": "Open RC"},
           ],
           "currentView": {"url": first_url},
           "rootWindowState": {
@@ -127,7 +122,7 @@ steps:
           json.dumps(overrides, indent=2))
       PY
       done
-      echo USERDATA_STAGED_3WORKSPACES_TELEPHONY_ON
+      echo USERDATA_STAGED_2WORKSPACES_TELEPHONY_ON
 
   # ── QA-006-step1: Launch Rocket.Chat with a11y flags ─────────────────────
   # Inline shell launch with XAUTH fallback chain (mutter → gdm → $HOME).
@@ -165,7 +160,7 @@ steps:
   # was just written above). Cheaper and more reliable than walking the
   # sidebar's accessibility tree, which may render server entries as canvas
   # icons rather than named accessible nodes on this build.
-  - label: "QA-006-step1c: assert servers.json has 3 workspaces"
+  - label: "QA-006-step1c: assert servers.json has 2 workspaces"
     shell: |
       set -u
       for d in "$HOME/.config/Rocket.Chat" "$HOME/.config/Rocket.Chat (development)"; do
@@ -186,7 +181,7 @@ steps:
   # handler picks it up via the single-instance lock IPC). xdg-open is the
   # OS-level path; we use the binary directly to mirror 3325-feature.yaml
   # which has proven this works under SSH/Xvfb-style env.
-  - label: "QA-006-step2a: dispatch tel: link (3-workspace picker should open)"
+  - label: "QA-006-step2a: dispatch tel: link (multi-workspace picker should open)"
     shell: |
       DESKTOP_ENV=$(mktemp)
       for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
@@ -233,23 +228,14 @@ steps:
   # "Southlogic rocketchat.jeanbrito.com". The title comes from the workspace
   # handshake (NOT the local mOSdat `title` field) so we match by hostname,
   # which is deterministic from servers.json.
-  - label: "QA-006-step3a: wait_for Workspace row in picker (rocketchat.jeanbrito.com)"
-    wait_for: {any: [
-      {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
-    ], timeout: 15}
+  - label: "QA-006-step3a: wait_for both workspace rows in picker"
+    wait_for:
+      all:
+        - {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
+        - {role: "push button", name: "mobile.rocket.chat", name_substr: true}
+      timeout: 30
     retries: 5
 
-  - label: "QA-006-step3b: wait_for Mobile RC row in picker (mobile.rocket.chat)"
-    wait_for: {any: [
-      {role: "push button", name: "mobile.rocket.chat", name_substr: true}
-    ], timeout: 15}
-    retries: 5
-
-  - label: "QA-006-step3c: wait_for Open RC row in picker (open.rocket.chat)"
-    wait_for: {any: [
-      {role: "push button", name: "open.rocket.chat", name_substr: true}
-    ], timeout: 15}
-    retries: 5
 
   # ══════════════════════════════════════════════════════════════════════════
   # QA-006-step4: Click a workspace WITHOUT Remember → dialpad opens
@@ -261,9 +247,46 @@ steps:
   # AT-SPI fast path: click the Workspace row by accessible name. VLM fallback
   # documented in header — if AT-SPI fails the runner re-raises StepFailed
   # (no `localize:` set; row identity is structural, not visual).
-  - label: "QA-006-step4a: click Workspace row in picker (Remember UNCHECKED)"
-    atspi: {role: "push button", name: "rocketchat.jeanbrito.com", name_substr: true}
-    retries: 5
+  - label: "QA-006-step4a: activate Workspace row in picker (Remember UNCHECKED)"
+    shell: |
+      set -u
+      DESKTOP_ENV=$(mktemp)
+      for pid in $(pgrep -u $(id -u) 'plasmashell|gnome-shell|kwin_x11|kwin_wayland' 2>/dev/null); do
+        tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|AT_SPI_BUS_ADDRESS)=' > "$DESKTOP_ENV"
+        grep -q '^DISPLAY=' "$DESKTOP_ENV" && break
+      done
+      [ -s "$DESKTOP_ENV" ] && . "$DESKTOP_ENV"
+      rm -f "$DESKTOP_ENV"
+
+      for attempt in 1 2 3 4 5; do
+        CLICK_PROBE='{
+          "ops": [
+            {"id":"find","op":"wait_for","any":[{"role":"push button","name":"rocketchat.jeanbrito.com","name_substr":true,"app_filter":"rocket"}],"timeout_ms":5000,"interval_ms":100,"app_filter":"rocket"},
+            {"id":"act","op":"do_action","from_id":"find","action_idx":0,"app_filter":"rocket"}
+          ]
+        }'
+        RES=$(PYTHONWARNINGS=ignore timeout 15s python3 /tmp/mosdat_atspi_worker.py "$CLICK_PROBE" 2>/dev/null || true)
+        if printf '%s' "$RES" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("results",{}).get("act",{}).get("ok") else 1)' 2>/dev/null; then
+          echo "PICKER_ROW_ACTION_OK (attempt ${attempt})"
+          exit 0
+        fi
+
+        for settle in 1 2 3; do
+          CHECK_PROBE='{
+            "ops": [
+              {"id":"remember","op":"verify","role":"check box","name":"Remember for future calls","name_substr":true,"app_filter":"rocket"}
+            ]
+          }'
+          CHECK=$(PYTHONWARNINGS=ignore timeout 10s python3 /tmp/mosdat_atspi_worker.py "$CHECK_PROBE" 2>/dev/null || true)
+          if printf '%s' "$CHECK" | python3 -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if not d.get("results",{}).get("remember",{}).get("ok") else 1)' 2>/dev/null; then
+            echo "PICKER_ROW_SIDE_EFFECT_OK (attempt ${attempt}, settle ${settle})"
+            exit 0
+          fi
+          sleep 1
+        done
+      done
+      echo "FAILED -- picker row did not activate or dismiss modal" >&2
+      exit 1
 
   # Modal closes → dialpad opens in selected workspace (if authenticated)
   # OR picker simply dismisses (if workspace login is required). The

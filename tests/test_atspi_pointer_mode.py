@@ -98,6 +98,46 @@ class TestViaRouting:
                          input_injector=_injector())
 
 
+
+# ---------------------------------------------------------------------------
+# action-mode mechanics
+# ---------------------------------------------------------------------------
+
+class TestActionMode:
+
+    def test_via_action_waits_and_invokes_matched_path(self):
+        client = _make_client()
+
+        def fake_run_batch(ops, **kwargs):
+            assert ops[0]["op"] == "wait_for"
+            assert ops[0]["any"] == [{
+                "role": "push button", "name": "Login",
+                "name_substr": False, "app_filter": "rocket",
+            }]
+            assert ops[1] == {
+                "id": "act", "op": "do_action", "from_id": "find",
+                "action_idx": 0, "app_filter": "rocket",
+            }
+            return {"ok": True, "results": {
+                "find": {"ok": True, "path": "/0/1/2"},
+                "act": {"ok": True, "path": "/0/1/2", "action_idx": 0},
+            }}
+
+        client.run_batch = MagicMock(side_effect=fake_run_batch)
+        result = client.click("push button", name="Login", via="action")
+        assert result["ok"] is True
+        assert result["via"] == "action"
+
+    def test_via_action_raises_when_wait_misses(self):
+        client = _make_client()
+        client.run_batch = MagicMock(return_value={"ok": False, "results": {
+            "find": {"ok": False, "error": "wait_for_timeout"},
+            "act": {"ok": False, "error": "from_id_not_ok"},
+        }})
+
+        with pytest.raises(AtspiError, match="click failed at find"):
+            client.click("push button", name="Login", via="action")
+
 # ---------------------------------------------------------------------------
 # pointer-mode mechanics
 # ---------------------------------------------------------------------------

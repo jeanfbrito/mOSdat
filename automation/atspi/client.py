@@ -421,11 +421,27 @@ class AtspiClient:
         timeout: Optional[int] = None,
         input_injector: Any = None,  # accepted + ignored for caller symmetry
     ) -> dict:
-        """Find + do_action in one round-trip. Returns the do_action result."""
+        """Wait for a widget and invoke its AT-SPI action in one batch.
+
+        The wait op returns the matched accessible path, and do_action uses
+        that same path. This avoids races where a separate wait_for step sees
+        a transient renderer node, but a later action process cannot re-find it.
+        """
         af = app_filter or self._app_filter
+        wait_ms = 5000
+        if timeout is not None:
+            wait_ms = max(500, int(max(float(timeout) - 1.0, 0.5) * 1000))
         ops = [
-            {"id": "find", "op": "find", "role": role, "name": name,
-             "name_substr": bool(name_substr), "app_filter": af},
+            {
+                "id": "find", "op": "wait_for",
+                "any": [{
+                    "role": role, "name": name,
+                    "name_substr": bool(name_substr),
+                    "app_filter": af,
+                }],
+                "timeout_ms": wait_ms, "interval_ms": 100,
+                "app_filter": af,
+            },
             {"id": "act", "op": "do_action", "from_id": "find",
              "action_idx": int(action_idx), "app_filter": af},
         ]
