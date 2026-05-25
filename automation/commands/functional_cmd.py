@@ -228,6 +228,15 @@ def cmd_functional(args) -> int:
 
             # Inject per-VM app_path (first package with a non-empty app_path)
             vm_vars = dict(vars_)
+            # Per-VM process_name override: Windows packages declare
+            # `process_name = "Rocket.Chat"`; Linux packages omit it and we
+            # fall back to the global app.process_name ("rocketchat-desktop").
+            # Fixes Windows liveness probe matching the wrong basename.
+            vm_process_name = config.app.process_name
+            for pkg in vm.packages:
+                if pkg.process_name:
+                    vm_process_name = pkg.process_name
+                    break
             for pkg in vm.packages:
                 if pkg.app_path:
                     vm_vars.setdefault("app_path", pkg.app_path)
@@ -305,7 +314,7 @@ def cmd_functional(args) -> int:
                         vmid=vm.vmid if checkpoint_config.get("enabled") else None,
                         click_verify_override=getattr(args, "click_verify", "auto"),
                         canary_override=getattr(args, "canary_override", "auto"),
-                        app_process_name=config.app.process_name,
+                        app_process_name=vm_process_name,
                         atspi=atspi_client,
                         uia=uia_client,
                     )
