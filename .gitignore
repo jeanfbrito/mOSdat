@@ -59,6 +59,7 @@ dist/
 
 # Test result artifacts (rebuildable / reproducible — see results/README.md)
 results/functional/
+results/issues/
 results/smoke/*/
 !results/smoke/2026-01-16_fedora42/
 !results/smoke/2026-01-16_ubuntu2204/
@@ -82,4 +83,7 @@ results/**/report.md
 results/**/comment.md
 results/**/summary.json
 results/**/vm-state.json
+results/**/manifest.json
+results/**/*.mp4
+results/**/_concat.txt
 .gitnexus
