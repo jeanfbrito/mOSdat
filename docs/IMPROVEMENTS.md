@@ -11,6 +11,7 @@ Full process retrospective covering the PR #3325 saga: timeline, pivots, traps, 
 ## Tier 1 — kills entire classes of bug
 
 ### I1. `--inject-config` flag (`mosdat functional`) — IMPLEMENTED 2026-05-16
+
 Code: `automation/setup/inject_config.py` (detect_userdata_dirs, detect_app_version, wipe_userdata, write_servers_json, write_config_json, inject orchestrator), `automation/commands/parser.py` (`--inject-config`, `--inject-servers`, `--inject-app-name`, `--inject-install-path`, `--inject-migrations-version`), `automation/main.py` cmd_functional (orchestration call before `runner.run_test`). Tests: `tests/test_inject_config.py` (27 unit tests + 1 opt-in live-VM smoke gated by `MOSDAT_TEST_VM=ubuntu2204`).
 
 Goal: declarative pre-staging of Electron app userData before launch.
@@ -22,6 +23,7 @@ mosdat functional <toml> --vms <vm> --test <name> \
 ```
 
 Behavior:
+
 1. Wipe `~/.config/<app>` AND `~/.config/<app> (development)` on VM.
 2. Auto-detect app name + dev-suffix dir from binary on the VM.
 3. Write `servers.json` from `--inject-servers`.
@@ -34,7 +36,9 @@ Removes ~80 boilerplate lines per scenario + the heredoc/printf/missing-migratio
 Touches: `automation/commands/dispatchers.py`, new `automation/setup/inject_config.py`.
 
 ### I2. `mosdat preflight <scenario> --vms <vms>` — **IMPLEMENTED 2026-05-16**
+
 Single command runs every "should have caught earlier" check before a scenario run:
+
 - YAML + ScenarioModel schema validation
 - VM SSH reachable, X11 cookie present
 - VM has `wmctrl xclip xdotool xdg-mime xdg-open` installed
@@ -48,6 +52,7 @@ Touches: new `automation/commands/preflight.py`.
 Tests: `tests/test_preflight.py` (18 unit tests, mock SSH, no live VM required).
 
 ### I3. `mosdat build --pr <N> --deploy <vms>` — IMPLEMENTED (2026-05-16)
+
 Reproducible PR build+deploy. Eliminates stale-clone class of bug.
 
 Implemented in `automation/commands/build.py` + parser wiring + `tests/test_build_cmd.py`.
@@ -62,6 +67,7 @@ mosdat build --pr 3325 --repo RocketChat/Rocket.Chat.Electron \
 ```
 
 Steps:
+
 1. `gh repo clone` (or update existing) latest PR head.
 2. `yarn install && yarn release --linux deb` (target-aware).
 3. SCP built artifact to each VM `/tmp/`.
@@ -72,12 +78,14 @@ Steps:
 Touches: new `automation/commands/build.py`.
 
 ### I4. Implicit X11 env per VM (TOML) — IMPLEMENTED 2026-05-16
+
 ```toml
 [vm.ubuntu2204]
 x11 = "auto"  # mosdat injects DISPLAY + XAUTHORITY + ozone flag
 ```
 
 Behavior: any `- shell: |` step gets a prepended preamble (only if `x11=auto` and step contains `xdotool|wmctrl|xclip|xdg-|nohup.*/opt/.*-desktop`):
+
 ```bash
 XAUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* /run/user/$(id -u)/gdm/Xauthority 2>/dev/null | head -1)
 export DISPLAY=:0 XAUTHORITY="$XAUTH"
@@ -90,6 +98,7 @@ Code: `automation/transport/x11_preamble.py` (`should_inject`, `inject`), `autom
 ## Tier 2 — order-of-magnitude faster iteration
 
 ### I5. `mosdat replay <result-dir> --step N --verify "<prompt>"` — IMPLEMENTED
+
 Rerun a single verify against the cached screenshot from a previous run. Iterate verify wording in seconds, not minutes.
 
 ```
@@ -102,11 +111,13 @@ Reads screenshot from result dir, re-asks VLM with new prompt, prints yes/no + r
 Touches: new `automation/commands/replay.py`.
 
 ### I6. VLM verify cache by (screenshot SHA, prompt SHA) — IMPLEMENTED
+
 Identical (image, prompt) pairs return cached yes/no. Cache key: `sha256(image_bytes) || sha256(prompt_text) || model`. TTL 24h.
 
 Cuts ~50% off re-run time for partially-changed scenarios.
 
 Touches:
+
 - `automation/transport/vlm_cache.py` (new — SQLite cache, `cache_key`, `get`, `put`, `invalidate`, `clear`, `prune`, `stats`)
 - `automation/vlm/client.py` — `verify()` wired to cache; `set_cache_enabled()` + `_cache_disabled` flag; `MOSDAT_VLM_NOCACHE` env var
 - `automation/commands/parser.py` — `--no-cache` on `functional` + `replay`; `vlm-cache stats|clear|prune` subcommand
@@ -115,6 +126,7 @@ Touches:
 - `tests/test_vlm_cache.py` — round-trip, TTL expiry, env var, concurrent puts
 
 ### I7. `verify: { accept_any: [...] }` native union — IMPLEMENTED 2026-05-16
+
 ```yaml
 - accept_any:
     - "Settings panel open with General tab visible"
@@ -125,6 +137,7 @@ Touches:
 Cleaner than long "either X OR Y" prose; fewer VLM false negatives.
 
 Touches:
+
 - `automation/scenario.py` — `AcceptAnyStep` model; mutual-exclusion validator with `verify`; added to `AnyStep` union.
 - `automation/runners/scenario_loader.py` — `accept_any` field on `FunctionalStep`; parsed + `resolve_vars`.
 - `automation/runners/functional_verify.py` — `_verify_accept_any()`: shared timeout, per-prompt events.
@@ -152,6 +165,7 @@ mosdat functional config.toml --vms ubuntu2204 --test my-scenario \
 ```
 
 Behaviour:
+
 1. `vars:` block in YAML defines scenario defaults (flat string→string; numbers/bools cast to str).
 2. `--var KEY=VALUE` CLI flags override or add vars at run time. Duplicate CLI keys are an error.
 3. `{{ key }}` (Jinja2-compatible, optional surrounding whitespace) is substituted in all
@@ -168,6 +182,7 @@ Variable types: only flat string→string for v1. Numbers/bools in yaml `vars:` 
 str before rendering (`True` → `"True"`, `3` → `"3"`). Nested dicts/lists are not supported.
 
 Touches:
+
 - `automation/runners/var_subst.py` (new — jinja2 rendering engine + regex fallback + MissingVarsError)
 - `automation/runners/scenario_loader.py` — `load_test_yaml` accepts `cli_vars` kwarg;
   renders raw step dicts before ScenarioModel.model_validate.
@@ -200,20 +215,23 @@ mosdat functional config.toml --vms ubuntu2204 --test 3325-master-toggle --from-
 ```
 
 Code:
+
 - `automation/scenario.py` — `PhaseDef` model; `ScenarioModel.phases` field; `_check_phases` validator (unique ids, strictly increasing from_step, from_step >= 1).
 - `automation/commands/parser.py` — `--from-phase ID` and `--until-phase ID` on `mosdat functional`.
 - `automation/main.py` — `_resolve_phases()` helper (phase → step bounds, warn on override, SystemExit on unknown id); called in `cmd_functional` before B4 step slicing; prints `[phases] running ...` log line.
 - `shared/scenarios/functional/3325-master-toggle.yaml` — added `phases:` block (A from_step=1, B from_step=10).
-- `tests/test_scenario_phases.py` — 24 tests (schema + _resolve_phases + demo scenario).
+- `tests/test_scenario_phases.py` — 24 tests (schema + \_resolve_phases + demo scenario).
 
 ### I10. Step labels in logs — IMPLEMENTED 2026-05-16
+
 Use scenario's comment header (`# ── A4: Dispatch tel: → expect modal ───`) as the step label. Log "FAIL: A4 dispatch tel: → expect modal" instead of "FAIL: Step 8".
 
-Parses YAML with ruamel.yaml (round-trip mode) to access comments above each ``- `` step entry.
+Parses YAML with ruamel.yaml (round-trip mode) to access comments above each `- ` step entry.
 Box pattern `# ── <label> ──` takes priority; plain comments fall back; explicit `label:` field wins all.
 Multi-comment blocks joined (space, 80-char cap). Pure-separator lines (`# ════`) are skipped.
 
 Touches:
+
 - `automation/scenario.py` — `label: Optional[str] = None` on `_StepBase`.
 - `automation/runners/scenario_loader.py` — `_extract_step_labels()`, `_parse_comment_label()`, `_tokens_to_comment_lines()` helpers; `load_test_yaml` calls them pre-parse; `parse_step` maps `label` field; `resolve_vars` passes through label.
 - `automation/runners/functional_steps.py` — `step_display` computed as `"N: label"` or `"N"`; used in log lines; emitted as `step_label` field in `step_start` event.
@@ -228,14 +246,15 @@ imports:
   - cleanup-rocketchat
   - install-x11-deps
 steps:
-  - import: cleanup-rocketchat   # dict form (plain YAML, no tag needed)
-  - !import install-x11-deps     # tag form (also supported)
+  - import: cleanup-rocketchat # dict form (plain YAML, no tag needed)
+  - !import install-x11-deps # tag form (also supported)
   - shell: ...
 ```
 
 Fragment files live in `shared/scenarios/imports/<name>.yaml`. Each is a YAML dict with a `steps:` list. Fragment steps are spliced inline at load time; expansion is NOT written to disk.
 
 Behaviour:
+
 1. Both shapes accepted: `- import: name` (dict, standard YAML) and `- !import name` (custom tag, requires tag constructor).
 2. Fragment loaded from `shared/scenarios/imports/<name>.yaml`. Walks up from scenario file to find project root.
 3. Labels in imported steps get `[import:name] ` prefix (box-comment-derived or explicit `label:` field).
@@ -245,6 +264,7 @@ Behaviour:
 7. Manifest mismatch (`!import X` without listing X in top-level `imports:`) → `warnings.warn`, not error.
 
 Canonical fragments shipped in `shared/scenarios/imports/`:
+
 - `cleanup-rocketchat.yaml` — kill-loop + wmctrl close + apport-pkill + wipe both userData dirs.
 - `install-x11-deps.yaml` — apt-get install wmctrl xclip xterm.
 - `launch-rocketchat.yaml` — XAUTH+DISPLAY+ozone nohup launch + wait + workspace login verify (requires `{{ workspace_url }}`).
@@ -252,6 +272,7 @@ Canonical fragments shipped in `shared/scenarios/imports/`:
 Demo: `shared/scenarios/functional/3325-master-toggle.yaml` — step A1 converted from inline 35-line shell block to `- import: cleanup-rocketchat`.
 
 Touches:
+
 - `automation/scenario.py` — `ImportStep` model (`import` alias field); added to `AnyStep` union; `ScenarioModel.imports: list[str]` field.
 - `automation/runners/scenario_loader.py` — `_imports_dir()`, `_load_fragment_steps()`, `_is_import_step()`, `_expand_imports()`, `_register_import_constructor()`, `_warn_manifest_mismatch()`; `load_test_yaml` calls expansion before var substitution.
 - `shared/scenarios/imports/cleanup-rocketchat.yaml` — new fragment.
@@ -261,6 +282,7 @@ Touches:
 - `tests/test_step_imports.py` — 44 tests.
 
 ### I12. Author session → scenario diff — IMPLEMENTED 2026-05-16
+
 After `mosdat author` session, `mosdat author export --base <existing-scenario>` emits a unified diff to insert recorded steps into an existing scenario at a given step index.
 
 ```
@@ -276,24 +298,29 @@ Code: `automation/author_cli.py` (`_export_with_base`, new flags on `export` sub
 Tests: `tests/test_author_diff.py` (8 tests).
 
 ### I13. `mosdat doctor <vms>` — IMPLEMENTED
+
 Mirror of `ctx doctor`. Checks per VM: SSH, X11 cookie path, GNOME version, installed deps, binary presence, expected userData dir, asar grep, disk free in /tmp, current RC process count.
 
 Touches: new `automation/commands/doctor.py`.
 
 ### I14. HTML report enhancements — IMPLEMENTED 2026-05-16
+
 For each step include:
+
 - Exact shell command sent (post X11-injection)
 - VM response stdout/stderr (truncated to 2KB)
 - `config.json` snapshot after shell steps (opt-in via `report_config_snapshots: true` in YAML or `--config-snapshots` CLI flag)
 - Verify prompt text + VLM raw response (not just yes/no), cache hit indicator
 
 New events emitted into events.jsonl (additive, backwards-compatible):
+
 - `shell_step`: `command_sent`, `stdout_tail`, `stderr_tail`, `exit_code`, `duration_ms`
 - `verify_step`: `prompt_text`, `raw_vlm_response`, `verdict`, `cache_hit`, `latency_ms`
 - `accept_any_step`: `prompts`, `per_prompt_verdicts`, `verdict`
 - `config_snapshot`: `content` (head 4KB of config.json), opt-in only
 
 Touches:
+
 - `automation/vlm/input.py` — `shell_result()` returning SSHResult
 - `automation/vlm/client.py` — `verify_with_meta()` returning (verdict, raw, cache_hit)
 - `automation/runners/functional_steps.py` — emits new events; `_emit_config_snapshot()`
@@ -306,9 +333,11 @@ Touches:
 - `tests/test_report_enhancements.py` — 16 unit tests
 
 ### I15. Negative-test fixture suite — IMPLEMENTED 2026-05-16
+
 Deliberately-broken scenarios (wrong selector, deleted binary, killed network) that MUST fail with specific error. Guards against the "passes on broken build" lie.
 
 Fixtures (5):
+
 - `wrong-binary-path.yaml` — launches `/opt/Nonexistent.Chat/rocketchat-desktop` → verify fails (no window)
 - `wrong-selector.yaml` — localize "purple unicorn icon" → VLM localize fails
 - `wrong-verify-prompt.yaml` — verify "giant pink cat on screen" → VLM returns no
@@ -347,6 +376,7 @@ postconditions:
 ```
 
 Usage in scenarios:
+
 ```yaml
 steps:
   - routine: launch-rocketchat
@@ -358,6 +388,7 @@ steps:
 ```
 
 CLI:
+
 ```
 mosdat routines list
 mosdat routines show launch-rocketchat
@@ -370,6 +401,7 @@ Expansion: `automation/routines/runner.py` `expand_call()` — resolves inputs (
 Scenario integration: `automation/runners/scenario_loader.py` recognizes `- routine:` (both short string form and long `{name, with}` form), expands via `expand_call` BEFORE `ScenarioModel.model_validate`. Happens after I11 import expansion, before I8 var substitution. Internal metadata keys (`_routine_event`, `_on_failure`) stripped before schema validation.
 
 Touches:
+
 - `automation/routines/__init__.py` — package init
 - `automation/routines/schema.py` — Pydantic models
 - `automation/routines/loader.py` — `load_routine(slug)`, `list_routines()`, `routines_dir()`
@@ -390,18 +422,21 @@ Touches:
 Schema versioning enforcement for routine YAML files plus a routines-first rewrite of the 3325-master-toggle scenario as a worked example.
 
 **Versioning (Part A):**
+
 - `CURRENT_SCHEMA_VERSION = "v1"` and `SUPPORTED_SCHEMA_VERSIONS = ["v1"]` exported from `automation/routines/__init__.py`.
 - `Routine.schema_version` field validated against supported list; unknown future versions raise `ValidationError` with clear upgrade message.
 - `_migrate_to_current(data)` stub added to `loader.py`, called before `Routine.model_validate` in both `load_routine` and `list_routines`. Documents migration pattern for future schema bumps.
 - `mosdat routines version` subcommand prints current and supported versions.
 
 **Scenario conversion (Part B):**
+
 - `shared/scenarios/functional/3325-master-toggle.yaml`: **236 → 76 lines (-160, -68%)**.
 - Expanded step count: 32 (same behavior, just expressed via routine calls).
 - Inline shell config-staging + launch + kill blocks replaced with `cleanup-rocketchat`, `launch-rocketchat`, `dispatch-tel-link`, `verify-app-alive` routine calls.
 - Also fixed pre-existing bug in `dispatch-tel-link.yaml`: `- wait: "{{ settle_seconds }}"` (string, never rendered) → `- wait: 8` (int, validated correctly).
 
 Touches:
+
 - `automation/routines/__init__.py` — `CURRENT_SCHEMA_VERSION`, `SUPPORTED_SCHEMA_VERSIONS`
 - `automation/routines/schema.py` — `_schema_version_supported` field validator
 - `automation/routines/loader.py` — `_migrate_to_current` stub + wired into `load_routine` / `list_routines`
@@ -423,9 +458,10 @@ mosdat recipes search "alt+key swallowed"
 ```
 
 Seed corpus (6 recipes in `shared/recipes/`):
+
 - `settings-electron-linux` — RC Electron has no accelerator for Settings on Linux; 3 pivots
 - `webview-focus-stealing` — Chromium webview swallows alt+key when input focused; 4 pivots
-- `vnc-keysyms-syntax` — VNC key syntax: single char or _KEYSYMS name, not word aliases; 3 pivots
+- `vnc-keysyms-syntax` — VNC key syntax: single char or \_KEYSYMS name, not word aliases; 3 pivots
 - `vnc-framebuffer-virtio` — Proxmox vga=virtio breaks compositor/Electron framebuffer; 3 pivots
 - `redux-persist-migrations-version` — missing migrations.version resets all config on launch; 3 pivots
 - `second-instance-ipc-xauthority` — deep-link dispatch silently drops without XAUTHORITY; 3 pivots
@@ -435,6 +471,7 @@ Schema: `automation/recipes/schema.py` — Pydantic `Recipe` + `Pivot` models. R
 `mosdat recipes list` skips and warns on invalid files (does not abort).
 
 Touches:
+
 - `shared/recipes/*.yaml` — 6 seed recipe files
 - `automation/recipes/__init__.py` + `automation/recipes/schema.py` — Pydantic schema
 - `automation/commands/recipes.py` — list / show / search implementation
@@ -456,6 +493,7 @@ mosdat lint shared/scenarios/functional/3325-master-toggle.yaml
 ```
 
 Seven WARN rules:
+
 1. **key-combo** — split on `+`, check main key is in `_KEYSYMS`, `_MODIFIERS`, or single char (catches `ctrl+plus`, `alt+comma` spelled as word).
 2. **coord-drift** — `xdotool mousemove \d+ \d+` → "coord drift risk; use VNC native or VLM localize".
 3. **transient-localize** — `localize:` referring to kebab / dropdown / menu / popup → "VLM hallucinates transient popups".
@@ -467,6 +505,7 @@ Seven WARN rules:
 Optional: if scenario has `requires_capabilities:` block with `asar_sha`, lint consults capability manifest (F1c) for mismatch warnings.
 
 Touches:
+
 - `automation/commands/lint.py` (new) — 7 check functions + `run_lint(args) -> int`
 - `automation/commands/parser.py` — `lint` subparser
 - `automation/main.py` — `run_lint` added to dispatch dict
@@ -481,6 +520,7 @@ mosdat trace examples/rocketchat.toml --vms ubuntu2204 [--write-manifest]
 ```
 
 Probes:
+
 - Menu accelerators: `alt+f`, `alt+e`, `alt+v`, `alt+w`, `alt+h`, `F10`
 - Common shortcuts: `ctrl+,`, `ctrl+f`, `ctrl+r`
 - Webview focus stealing: `alt+f` in form-focused vs title-bar-focused context
@@ -493,6 +533,7 @@ Exit 0 (probe complete), 1 (unexpected SWALLOWED results), 2 (setup error).
 Use `--write-manifest` to persist results to `shared/binary_capabilities/<sha>.json`.
 
 Touches:
+
 - `automation/commands/trace.py` (new) — `run_trace(args) -> int`
 - `automation/commands/parser.py` — `trace` subparser
 - `automation/main.py` — `run_trace` added to dispatch dict
@@ -507,13 +548,18 @@ from automation.setup.capability import manifest_path, load_manifest, write_mani
 ```
 
 Schema (`shared/binary_capabilities/<asar_sha>.json`):
+
 ```json
 {
   "asar_sha": "abc123...",
   "captured_at": "ISO date",
   "vm": "ubuntu2204",
-  "accelerators": {"alt+w": "swallowed_in_webview", "ctrl+,": "no_accel", "F10": "open"},
-  "popups": {"sidebar_kebab": "transient_800ms"},
+  "accelerators": {
+    "alt+w": "swallowed_in_webview",
+    "ctrl+,": "no_accel",
+    "F10": "open"
+  },
+  "popups": { "sidebar_kebab": "transient_800ms" },
   "persisted_state_keys": ["isTelephonyEnabled"],
   "test_ids_present": false
 }
@@ -524,6 +570,7 @@ Schema (`shared/binary_capabilities/<asar_sha>.json`):
 `mosdat lint` consults `load_manifest(sha)` when scenario has `requires_capabilities: {asar_sha: ...}`.
 
 Touches:
+
 - `automation/setup/capability.py` (new) — `manifest_path`, `load_manifest`, `write_manifest`, `get_for_vm`, `build_manifest`
 - `tests/test_capability.py` — 5 unit tests (round-trip, missing, sha-mismatch, path, get_for_vm)
 
@@ -536,6 +583,7 @@ Authoring guidance lives in `docs/AUTO-AUTHORING.md` § Routines-first authoring
 ## Implementation order recommendation
 
 Parallelizable (Wave 1, no file overlap):
+
 - I1 inject-config
 - I2 preflight
 - I3 build
@@ -544,12 +592,14 @@ Parallelizable (Wave 1, no file overlap):
 - I13 doctor
 
 Serial after Wave 1 (shared scenario.py touch):
+
 - I4 implicit X11
 - I7 accept_any
 - I8 jinja vars
 - I9 named phases
 
 Polish (Wave 2):
+
 - I10 step labels
 - I11 imports
 - I12 author diff
@@ -584,29 +634,114 @@ Suitable for filing as a GitHub issue or PR cover letter.
 ## Tier 4 — cursor motion (Mn series)
 
 ### M1. Cursor motion research — IMPLEMENTED 2026-05-17
+
 Algorithm survey (WindMouse, Bezier-with-jitter, PyAutoGUI tweens, minimum-jerk). Recommendation: Bezier with jitter.
 Code: `docs/research/cursor-motion.md`.
 
 ### M2. `automation/transport/cursor_motion.py` — IMPLEMENTED 2026-05-17
+
 `generate_path(start, end, *, profile, duration_ms, frame_count, jitter_amplitude, control_offset_ratio, emit_cap_ms, seed) -> list[Step]`. Four profiles: `instant`, `linear`, `bezier` (default), `windmouse`. Distance-scaled frame count (8–16) and duration (80–300 ms). Pins landing point exactly on target.
 Code: `automation/transport/cursor_motion.py`.
 
 ### M3. Wire `generate_path` into `InputInjector.move_smooth` — IN PROGRESS
+
 `automation/vlm/input.py` `InputInjector` to call `generate_path` for every cursor move, tracking current position for the start argument.
 
 ### M4. Step schema: `motion:` + `dwell_ms:` fields — IMPLEMENTED 2026-05-17
+
 Per-step overrides on `click:` and `hover:` steps. `motion: instant|linear|bezier|windmouse`, `dwell_ms: <int>` (ms cursor rests on element before click fires).
 
 ### M5. `CursorConfig` TOML `[cursor]` block — IMPLEMENTED 2026-05-17
+
 Global defaults: `profile`, `duration_ms`, `hover_dwell_ms`, `seed`. Pydantic model with range validators.
 Code: `automation/config.py` `CursorConfig`.
 
 ### M6. `--cursor-instant` CLI flag — IMPLEMENTED 2026-05-17
+
 Forces `profile = "instant"` for the run. For fast CI where hover-sensitive interactions are not exercised.
 
 ### M7. F2 recipe `cursor-teleport-misses-hover-handlers` — IMPLEMENTED 2026-05-17
+
 Symptoms, root cause (no intermediate `pointermove` events), and three ordered pivots.
 Code: `shared/recipes/cursor-teleport-misses-hover-handlers.yaml`.
 
 ### M8. F1 `mosdat trace --probe-hover <x,y>` — IMPLEMENTED 2026-05-17
+
 Detects whether a UI element at given coordinates requires cursor motion to activate (fires a pointer-enter handler). Adds `motion_required: true` to the capability manifest for that coordinate.
+
+---
+
+## Tier 5 — documentation drift found during 2026-08-10 usage audit
+
+Found while auditing what real test usage revealed vs what `lessons.md` still
+claims. No code changes needed for T1/T2 — the fixes already shipped
+(2026-05-01, commit `363cb62`); only the doc is stale. T3 is a genuine gap.
+
+### T1. Close stale "GPU passthrough exclusivity" open loop in `lessons.md`
+
+`lessons.md`'s "Open loops / known limitations" section (around line 30) still
+lists "GPU passthrough exclusivity not enforced framework-side... See task #43
+for fix" as open. It was fixed 2026-05-01 in commit `363cb62`:
+`automation/proxmox/gpu.py` has `_host_gpu_lock()` (per-Proxmox-host,
+`fcntl.flock`) and `gpu_lock()` (per-PCI-address), wired into
+`GPUManager.attach_to_vm()` / `detach_from_current()`, with
+`ProxmoxLockTimeout` and passing concurrency tests in
+`tests/test_concurrent_safety.py` (contention, timeout, exception-safe
+release).
+
+Fix: verify the lock code and tests still pass, then rewrite the "Open loops"
+entry to record it as closed (keep a one-line historical note + commit ref,
+don't just delete — the framework-design rationale is worth keeping).
+
+### T2. Correct "Visual regression is opt-in only" open loop in `lessons.md`
+
+Same section lists visual regression (SSIM-diff) as not integrated / task #42.
+The tooling shipped: `automation/visual.py`, `mosdat visual --capture/--check`
+(SSIM, default threshold 0.95), CLI-wired in
+`automation/commands/dispatchers.py` and `automation/main.py`, documented in
+`docs/runbooks/visual-regression.md`, tested in `tests/test_visual.py`.
+
+What's actually still true: it is a manually-invoked side command, not an
+automatic gate inside `mosdat functional` / `mosdat confirm`.
+
+Fix: reword the `lessons.md` entry from "not yet integrated" to "shipped
+2026-05-01, remains opt-in by design — not auto-run inside functional/confirm."
+If auto-running it by default is wanted, that's a _new_ decision to make
+explicitly, not a leftover bug to close silently.
+
+### T3. Promote "verify diagnosis before committing" lesson out of the VNC post-mortem
+
+`docs/post-mortems/2026-05-18-vnc-stale-capture.md` (Postscript section)
+documents that after the real VNC capture-race fix landed, two more
+root-cause diagnoses were committed in sequence before the actual bug
+(bool `str()` coercion in `automation/runners/var_subst.py:85`) was found —
+one diagnosis was later shown to be fabricated: it asserted a Redux-persist
+SIGTRAP that does not exist anywhere in Rocket.Chat.Electron's source or in
+any captured crash dump.
+
+This is currently only visible to someone who reads that specific
+post-mortem file. It's a repeatable risk for any agent doing root-cause work
+in this project, not a one-off.
+
+Fix: add a new entry to `lessons.md` (not buried in a post-mortem) stating
+the rule plainly: a subagent's root-cause claim is a hypothesis, not a
+verified finding, until it's grepped against actual source / crash artifacts.
+Require that check before the claim is asserted in a commit message or
+lessons.md entry. Cross-reference the VNC post-mortem for the worked example
+instead of duplicating its narrative.
+
+### T4. Confirm whether the 2026-07-08 `HARNESS_ERROR` (issue #3308) recurs
+
+The most recent captured real test run (`results/`, issue #3308,
+2026-07-08) returned `HARNESS_ERROR` with environment-detection fields
+(app_version, OS, display_server, ozone backend) all unpopulated (`—`)
+rather than a scenario assertion failure. Only one instance was sampled —
+not yet confirmed as a recurring pattern, and it may be an expected
+limitation of environment detection inside a Flatpak sandbox rather than a
+regression.
+
+Fix: not a code fix yet. Re-run the #3308 scenario (or check for more recent
+runs since 2026-07-08) and confirm whether the same fields come back
+unpopulated. If it recurs, file it as a proper lesson with root cause; if
+it was a one-off (e.g. a VM that hadn't finished booting), close this note
+without a code change.
