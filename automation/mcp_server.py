@@ -21,6 +21,7 @@ from automation.mcp_tools import (
     _deploy,
     _list_scenarios,
     _list_vms,
+    _readiness,
     _run_functional,
     _run_smoke,
     _ssh_tool,
@@ -105,7 +106,7 @@ def handle_tools_call(req: Request) -> str:
 
     try:
         if name == "mosdat_list_vms":
-            return _list_vms(req, ok)
+            return jsonrpc_result(req, _list_vms(args))
         elif name == "mosdat_vm_start":
             return _vm_start(req, args["vm_name"], ok)
         elif name == "mosdat_vm_stop":
@@ -121,7 +122,9 @@ def handle_tools_call(req: Request) -> str:
         elif name == "mosdat_run_functional":
             return jsonrpc_result(req, _run_functional(args))
         elif name == "mosdat_list_scenarios":
-            return _list_scenarios(req, args.get("path"), jsonrpc_result=ok)
+            return jsonrpc_result(req, _list_scenarios(args))
+        elif name == "mosdat_readiness":
+            return jsonrpc_result(req, _readiness(args))
         elif name == "mosdat_ssh":
             return _ssh_tool(req, args["vm_name"], args["command"], args.get("timeout", 30), jsonrpc_result=ok)
         else:

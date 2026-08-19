@@ -79,6 +79,33 @@ Host (Ubuntu 24.04)          Proxmox (192.168.13.85)
 
 See [docs/HARDWARE.md](docs/HARDWARE.md) for full specs.
 
+## Agent-facing MCP tools
+
+mOSdat exposes a stdio JSON-RPC MCP server via the `mosdat-mcp` entry point
+(`python -m automation.mcp_server`). In-scope tools return a uniform envelope
+`{ok, error, degraded, ...}`. `verdict: "fail"` on `mosdat_run_functional` means
+the scenario ran and asserted unsuccessfully — never an environment problem
+(`env_not_ready: true` is the discriminator; or call `mosdat_readiness` first).
+
+Tools (11):
+
+| Tool | Purpose |
+|------|---------|
+| `mosdat_list_vms` | Configured VMs (`name`, `vmid`, `os_type`, `status`) |
+| `mosdat_list_scenarios` | Runnable scenarios (`name`, `path`, `platform`, `step_count`) |
+| `mosdat_readiness` | Go/no-go: SSH, deps, disk, optional `expect_pr`/`expect_symbol`, `busy` |
+| `mosdat_build` | Clone → build → optional deploy → verify-symbol |
+| `mosdat_deploy` | Install an existing artifact |
+| `mosdat_run_functional` | Run a scenario; `verdict` is `pass`/`fail`/`error` |
+| `mosdat_run_smoke` | Launch + basic UI check |
+| `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | Proxmox VM power |
+| `mosdat_ssh` | Run a command on a VM |
+
+Walkthrough: [specs/001-agent-desktop-testing/quickstart.md](specs/001-agent-desktop-testing/quickstart.md).
+Full I/O contract: [specs/001-agent-desktop-testing/contracts/mcp-tools.md](specs/001-agent-desktop-testing/contracts/mcp-tools.md).
+
+---
+
 ## Key Files
 
 | File | Purpose |

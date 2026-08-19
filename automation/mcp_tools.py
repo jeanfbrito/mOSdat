@@ -255,6 +255,158 @@ def _busy_envelope(vmid: int) -> dict:
     return _envelope(False, error=f"vm busy: {vmid} held by another operation")
 
 
+def _check_item(label: str, status: str, detail: str = "") -> dict:
+    return {"label": label, "status": status, "detail": detail or ""}
+
+
+def _ssh_client(vm):
+    """Build an SSHClient for a VMConfig (connect_timeout matches doctor)."""
+    from automation.transport.ssh import SSHClient
+
+    return SSHClient(vm.ip, user=vm.user or "root", connect_timeout=8)
+
+
+def _env_not_ready_envelope(vm_name: str, reason: str, **fields) -> dict:
+    """FR-003 discriminator: environment problem, not a scenario assertion failure.
+
+    ``verdict`` is always ``"error"`` — never ``"fail"``. ``env_not_ready`` is
+    the field an agent should inspect to tell this apart from an in-run
+    exception (which also uses ``verdict: "error"`` but omits the flag).
+    """
+    prefix = "environment not ready: "
+    error = reason if str(reason).startswith(prefix) else prefix + reason
+    payload = {
+        "env_not_ready": True,
+        "verdict": "error",
+        "steps": [],
+        "artifacts": [],
+        "vm": vm_name,
+    }
+    payload.update(fields)
+    return _envelope(False, error=error, **payload)
+
+
+def _run_env_precheck(vm) -> Optional[dict]:
+    """Cheap pre-run probe: SSH reachability + required tool deps.
+
+    Returns an env-not-ready envelope if the VM cannot currently host a
+    scenario run, else ``None``. Reuses ``doctor.check_ssh`` / ``check_deps``
+    rather than reimplementing SSH. Linux-only dep checks are skipped on
+    Windows (doctor itself skips Windows VMs).
+    """
+    from automation.commands.doctor import check_deps, check_ssh
+
+    ssh = _ssh_client(vm)
+    ssh_res = check_ssh(ssh)
+    if ssh_res.status != "PASS":
+        detail = ssh_res.detail or "unreachable"
+        return _env_not_ready_envelope(
+            vm.name, f"VM {vm.name} is unreachable ({detail})"
+        )
+    if getattr(vm, "is_windows", False):
+        return None
+    dep_results = check_deps(ssh)
+    missing = [
+        r.label.split(":", 1)[-1] for r in dep_results if r.status == "FAIL"
+    ]
+    if missing:
+        return _env_not_ready_envelope(
+            vm.name,
+            f"VM {vm.name} is missing dependencies ({', '.join(missing)})",
+        )
+    return None
+
+
+def _read_deployed_version(ssh) -> Optional[str]:
+    """Installed app version via the same asar grep ``deploy_to_vm`` uses."""
+    import shlex
+
+    from automation.commands.build import _find_installed_asar
+
+    try:
+        asar = _find_installed_asar(ssh)
+    except Exception:
+        return None
+    if not asar:
+        return None
+    ver_res = ssh.run(
+        f"grep -a -m1 -oE '\"version\":\"[^\"]+\"' {shlex.quote(asar)} | head -1",
+        timeout=60,
+    )
+    raw = (getattr(ver_res, "stdout", None) or "").strip()
+    if not raw:
+        return None
+    if ":" in raw:
+        rhs = raw.split(":", 1)[1].strip().strip('"')
+        return rhs or None
+    return raw
+
+
+def _expected_build_check(ssh, deployed_version, expect_pr, expect_symbol) -> dict:
+    """``deployed_build_matches_expected`` check for ``mosdat_readiness``."""
+    from automation.commands.build import _find_installed_asar, _verify_symbols_on_vm
+
+    reasons: list[str] = []
+    asar = None
+    try:
+        asar = _find_installed_asar(ssh)
+    except Exception as e:
+        return _check_item(
+            "deployed_build_matches_expected",
+            "FAIL",
+            f"could not inspect installed build: {e}",
+        )
+
+    if expect_pr is not None and expect_pr != "":
+        try:
+            pr = int(expect_pr)
+        except (TypeError, ValueError):
+            return _check_item(
+                "deployed_build_matches_expected",
+                "FAIL",
+                f"invalid expect_pr {expect_pr!r} — expected an integer",
+            )
+        version = deployed_version or ""
+        ver_l = version.lower()
+        matched = f"pr{pr}" in ver_l or f"#{pr}" in version
+        if not matched and asar:
+            missing = _verify_symbols_on_vm(ssh, asar, [f"pr{pr}"])
+            matched = not missing
+        if not matched:
+            found = version or "(unknown)"
+            reasons.append(f"expected PR #{pr}, found {found}")
+
+    if expect_symbol:
+        symbols = _parse_verify_symbols(expect_symbol)
+        if not asar:
+            reasons.append("no installed app.asar — cannot verify symbols")
+        elif symbols:
+            missing = _verify_symbols_on_vm(ssh, asar, symbols)
+            if missing:
+                reasons.append(f"missing symbols: {', '.join(missing)}")
+
+    if reasons:
+        return _check_item(
+            "deployed_build_matches_expected", "FAIL", "; ".join(reasons)
+        )
+    return _check_item(
+        "deployed_build_matches_expected", "PASS", deployed_version or ""
+    )
+
+
+def _raw_step_count(path: Path) -> int:
+    """Top-level YAML ``steps:`` length (discovery; not post-expansion)."""
+    try:
+        import yaml
+
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        steps = data.get("steps") or []
+        return len(steps) if isinstance(steps, list) else 0
+    except Exception:
+        return 0
+
+
 def _deploy_dict(res) -> dict:
     return {
         "vm": getattr(res, "vm", ""),
@@ -401,8 +553,34 @@ TOOL_DEFINITIONS = [
         "inputSchema": {
             "type": "object",
             "properties": {
+                "platform": {
+                    "type": "string",
+                    "description": "Filter by platform: linux | windows (omit for all)",
+                },
                 "path": {"type": "string", "description": "Scenarios directory (default: shared/scenarios/)"},
             },
+        },
+    },
+    {
+        "name": "mosdat_readiness",
+        "description": (
+            "Check whether a target VM is ready (SSH reachable, tool deps, "
+            "disk, optional deployed-build match) before a build/deploy/run"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "vm": {"type": "string", "description": "VM name (e.g. ubuntu2404)"},
+                "vm_name": {"type": "string", "description": "VM name (alias of vm)"},
+                "expect_pr": {
+                    "type": "number",
+                    "description": "PR number expected to be deployed (omit to skip)",
+                },
+                "expect_symbol": {
+                    "description": "Symbol(s) expected in the deployed app.asar (string or list)",
+                },
+            },
+            "required": ["vm"],
         },
     },
     {
@@ -424,20 +602,51 @@ TOOL_DEFINITIONS = [
 # ── Tool implementations ────────────────────────────────────────────────────
 
 
-def _list_vms(req: Request, jsonrpc_result) -> str:
-    api = _get_proxmox_api()
-    endpoint = f"/nodes/{api.config.node}/qemu"
-    data = api.get(endpoint).get("data", [])
-    vms = [
-        {
-            "name": vm.get("name", f"VM-{vm['vmid']}"),
-            "vmid": vm["vmid"],
-            "status": vm.get("status", "unknown"),
-            "node": api.config.node,
-        }
-        for vm in data
-    ]
-    return jsonrpc_result(req, {"vms": vms})
+def _list_vms(args: Optional[dict] = None) -> dict:
+    """mosdat_list_vms: configured VMs in the uniform envelope (FR-004)."""
+    try:
+        cfg = _config()
+    except FileNotFoundError as e:
+        return _envelope(False, error=str(e), vms=[])
+
+    status_by_vmid: dict[int, str] = {}
+    status_by_name: dict[str, str] = {}
+    degraded: list[str] = []
+    try:
+        api = _get_proxmox_api()
+        node = getattr(getattr(api, "config", None), "node", None) or "pve"
+        data = api.get(f"/nodes/{node}/qemu").get("data", []) or []
+        for row in data:
+            try:
+                vmid = int(row.get("vmid"))
+            except (TypeError, ValueError):
+                continue
+            status = row.get("status") or "unknown"
+            status_by_vmid[vmid] = status
+            name = row.get("name")
+            if name:
+                status_by_name[str(name)] = status
+    except Exception:
+        degraded.append("proxmox_unreachable")
+
+    configured = getattr(cfg, "vms", None) or list(cfg.vm_by_name.values())
+    vms = []
+    for vm in configured:
+        vmid = getattr(vm, "vmid", None)
+        status = "unknown"
+        if vmid is not None:
+            status = status_by_vmid.get(int(vmid), "unknown")
+        if status == "unknown":
+            status = status_by_name.get(getattr(vm, "name", ""), "unknown")
+        vms.append(
+            {
+                "name": vm.name,
+                "vmid": vm.vmid,
+                "os_type": getattr(vm, "os_type", None) or "linux",
+                "status": status,
+            }
+        )
+    return _envelope(True, degraded=degraded, vms=vms)
 
 
 def _vm_start(req: Request, vm_name: str, jsonrpc_result) -> str:
@@ -917,6 +1126,12 @@ def _run_functional(args: dict) -> dict:
         return err
 
     t0 = time.perf_counter()
+    env_err = _run_env_precheck(vm)
+    if env_err:
+        env_err["elapsed_ms"] = round((time.perf_counter() - t0) * 1000)
+        env_err["scenario"] = scenario
+        return env_err
+
     try:
         cfg = _config()
         raw = _invoke_functional_runner(vm, cfg, meta["resolved_path"], args)
@@ -952,22 +1167,114 @@ def _run_functional(args: dict) -> dict:
     )
 
 
-def _list_scenarios(req: Request, path: str = None, *, jsonrpc_result) -> str:
-    base = Path(path) if path else FRAMEWORK / "shared" / "scenarios"
-    if not base.exists():
-        return jsonrpc_result(req, {"scenarios": [], "path": str(base)})
+def _list_scenarios(args: Optional[dict] = None) -> dict:
+    """mosdat_list_scenarios: uniform envelope + per-entry ``platform`` (FR-004)."""
+    args = args or {}
+    platform = args.get("platform") or None
+    if platform == "":
+        platform = None
+    if platform is not None and platform not in ("linux", "windows"):
+        return _envelope(
+            False,
+            error=f"unknown platform '{platform}' — available: linux, windows",
+            scenarios=[],
+        )
 
-    files = sorted(base.rglob("*.yaml"))
-    scenarios_base = FRAMEWORK / "shared" / "scenarios"
-    scenarios = [
-        {
-            "path": str(f.relative_to(scenarios_base) if scenarios_base in f.parents else f),
-            "name": f.stem,
-            "size": f.stat().st_size,
-        }
-        for f in files
-    ]
-    return jsonrpc_result(req, {"scenarios": scenarios, "path": str(base)})
+    path_arg = args.get("path")
+    if path_arg:
+        base = Path(path_arg)
+        files = sorted(p for p in base.rglob("*.yaml") if p.is_file()) if base.exists() else []
+    else:
+        files = _iter_scenario_yaml()
+
+    by_stem: dict[str, Path] = {}
+    for path in files:
+        if platform and _scenario_platform_from_path(path) != platform:
+            continue
+        prev = by_stem.get(path.stem)
+        if prev is None or ("functional" in path.parts and "functional" not in prev.parts):
+            by_stem[path.stem] = path
+
+    scenarios = []
+    for stem in sorted(by_stem):
+        path = by_stem[stem]
+        try:
+            rel = str(path.relative_to(FRAMEWORK))
+        except ValueError:
+            rel = str(path)
+        scenarios.append(
+            {
+                "name": stem,
+                "path": rel,
+                "platform": _scenario_platform_from_path(path),
+                "step_count": _raw_step_count(path),
+            }
+        )
+    return _envelope(True, scenarios=scenarios)
+
+
+def _readiness(args: dict) -> dict:
+    """mosdat_readiness: wrap doctor/preflight checks into a go/no-go answer."""
+    from automation.commands.doctor import check_deps, check_disk_tmp, check_ssh
+
+    vm_name = args.get("vm") or args.get("vm_name")
+    vm, err = _resolve_vm(vm_name)
+    if err:
+        return err
+
+    expect_pr = args.get("expect_pr")
+    expect_symbol = args.get("expect_symbol")
+    busy = _vm_busy(vm.vmid)
+    checks: list[dict] = []
+    reachable = False
+    deployed_version: Optional[str] = None
+
+    ssh = _ssh_client(vm)
+    ssh_res = check_ssh(ssh)
+    checks.append(_check_item("ssh_reachable", ssh_res.status, ssh_res.detail))
+    reachable = ssh_res.status == "PASS"
+
+    if reachable:
+        if not getattr(vm, "is_windows", False):
+            dep_results = check_deps(ssh)
+            missing = [
+                r.label.split(":", 1)[-1]
+                for r in dep_results
+                if r.status == "FAIL"
+            ]
+            if missing:
+                checks.append(
+                    _check_item("tool_deps", "FAIL", f"missing: {', '.join(missing)}")
+                )
+            else:
+                found = [r.label.split(":", 1)[-1] for r in dep_results]
+                checks.append(_check_item("tool_deps", "PASS", ", ".join(found)))
+
+            disk = check_disk_tmp(ssh)
+            # doctor WARNs below 1 GB; readiness treats that as not-ready (FAIL)
+            # so an agent gets a go/no-go rather than a soft warning.
+            disk_status = "PASS" if disk.status == "PASS" else "FAIL"
+            checks.append(_check_item("disk_tmp", disk_status, disk.detail))
+
+        deployed_version = _read_deployed_version(ssh)
+        if (expect_pr is not None and expect_pr != "") or expect_symbol:
+            checks.append(
+                _expected_build_check(ssh, deployed_version, expect_pr, expect_symbol)
+            )
+
+    ready = bool(checks) and all(c["status"] == "PASS" for c in checks)
+    return _envelope(
+        True,
+        ready=ready,
+        vm={
+            "name": vm.name,
+            "vmid": vm.vmid,
+            "reachable": reachable,
+            "deployed_version": deployed_version,
+            "busy": busy,
+        },
+        checks=checks,
+    )
 
 
 def _ssh_tool(req: Request, vm_name: str, command: str, timeout: int = 30, *, jsonrpc_result) -> str:
