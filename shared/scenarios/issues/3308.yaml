@@ -31,10 +31,11 @@ bug_signal: >
   screens. This is the bug.
 
 precondition_check: >
-  the Rocket.Chat application window is visible on screen — either the
-  server-URL entry form, a login form, or a chat UI is rendered. Anything
-  that proves RC actually launched on this VM, even if it's behind the
-  picker overlay.
+  a Rocket.Chat application window is visible on screen — a window whose
+  title bar says 'Rocket.Chat' or that shows the app menu bar
+  (File/Edit/View/Window/Help) counts, even if its content area is still
+  blank/dark or covered by a dialog overlay. Server-URL form, login form,
+  or chat UI also count. Anything proving the RC desktop app launched.
 
 steps:
   # ---- pre-test cleanup: clean-slate state, no servers registered ----
