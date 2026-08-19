@@ -34,6 +34,25 @@ Maps to `VMConfig` (`automation/config.py`).
 `reachable`/`deployed_version` are the readiness-check fields (new); `busy` is new,
 derived from attempting a non-blocking probe of the existing lock file.
 
+## Readiness Result
+
+Maps to the `mosdat_readiness` tool. Wraps `doctor.check_ssh` / `check_deps` /
+`check_disk_tmp` plus optional deployed-build matching
+(`_verify_symbols_on_vm` / asar version grep from `build.py`). This is a
+successfully-determined go/no-go, not a tool error: `ok` stays `true` even when
+`ready` is `false`.
+
+| Field | Type | Notes |
+|---|---|---|
+| `ok` | bool | `true` unless the VM name itself is invalid (FR-005) |
+| `ready` | bool | `true` only when every entry in `checks` is `PASS` |
+| `vm` | object | `{name, vmid, reachable, deployed_version, busy}` — `busy` is advisory and does **not** by itself flip `ready` |
+| `checks` | array[{label, status, detail}] | Labels include `ssh_reachable`, `tool_deps`, `disk_tmp`, and (when `expect_pr`/`expect_symbol` is set) `deployed_build_matches_expected`. Status is `PASS` or `FAIL` |
+
+Doctor's disk `< 1 GB` WARN is mapped to `FAIL` here so the agent gets a hard
+no-go rather than a soft warning. Linux-only dep/disk checks are skipped on
+Windows VMs (matching `doctor.py`).
+
 ## Run Result
 
 Maps to the ordinary (non-`confirm`) per-VM path used by `cmd_functional` and
@@ -53,10 +72,33 @@ from research.md Decision 2, and reconstructs per-step outcomes from
 | `ok` | bool | Overall envelope success (the call itself completed without error). A test `fail` is still `ok: true` — the tool finished and produced a verdict |
 | `error` | string \| null | Set when `ok` is false (tool/environment error, not a scenario assertion failure) |
 | `degraded` | array[string] | e.g. `["vlm_unavailable"]` — present even when `ok` is true |
-| `verdict` | string | `"pass"` \| `"fail"` \| `"error"` — `passed is True` → `pass`; `passed is False` → `fail`; an exception during the run → `error` |
+| `verdict` | string | `"pass"` \| `"fail"` \| `"error"` — `passed is True` → `pass`; `passed is False` → `fail`; an exception during the run → `error`. `"fail"` is **only** used when the scenario actually executed and asserted unsuccessfully — never for an environment problem (see Environment-not-ready below) |
 | `steps` | array[StepOutcome] | One entry per executed step, from `events.jsonl` `step_end` records when present; otherwise synthesized from `passed` + step count |
 | `artifacts` | array[string] | Screenshot/log file paths collected from the run's `screenshot_dir` |
 | `elapsed_ms` | int | Wall time of the handler's `run_test` invocation, measured by the MCP layer |
+| `env_not_ready` | bool (optional) | Present and `true` only when the run was refused because the VM is currently unusable (see below). Absent on ordinary pass/fail/error-during-run responses |
+
+### Environment-not-ready (pre-run, `mosdat_run_functional`)
+
+Ordinary runs still return `(passed, log)` from `FunctionalRunner.run_test()`. That
+path is **not** used when the VM is known but not currently runnable (SSH
+unreachable, required tool dependencies missing). The handler probes
+`doctor.check_ssh` / `doctor.check_deps` first and, on failure, returns without
+invoking the runner. This is distinct from FR-005 (unknown VM/scenario) and from
+a scenario assertion failure.
+
+| Field | Type | Notes |
+|---|---|---|
+| `ok` | bool | Always `false` — the run was not attempted |
+| `error` | string | Always prefixed `environment not ready: ...` (names the VM and the reason, e.g. `VM ubuntu2404 is unreachable (ssh timeout)`) |
+| `env_not_ready` | bool | Always `true` — the discriminator an agent inspects. An in-run exception uses `verdict: "error"` too but **omits** this flag |
+| `verdict` | string | Always `"error"`. **Never** `"fail"` — `fail` is reserved for an executed scenario that asserted unsuccessfully (FR-003 / User Story 2 Acceptance Scenario 3) |
+| `steps` | array | Always `[]` |
+| `artifacts` | array | Always `[]` |
+| `elapsed_ms` | int | Wall time of the pre-check |
+
+A scenario assertion failure remains `ok: true`, `verdict: "fail"`, no
+`env_not_ready` field.
 
 ### StepOutcome (nested)
 

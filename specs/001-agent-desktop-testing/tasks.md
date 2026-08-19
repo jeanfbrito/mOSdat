@@ -123,15 +123,15 @@ run/verdict mechanics. If implementing US1 and US2 out of order, complete T009 f
 
 ### Implementation for User Story 2
 
-- [ ] T013 [US2] Add pre-run validation to `mosdat_run_functional` using
+- [X] T013 [US2] Add pre-run validation to `mosdat_run_functional` using
   `_resolve_vm`/`_resolve_scenario` (Phase 2), rejecting an unknown VM/scenario combination
   with an error naming valid alternatives before attempting any run, in
   `automation/mcp_tools.py` (FR-005)
-- [ ] T014 [US2] Add a readiness pre-check inside `mosdat_run_functional` (VM reachable,
+- [X] T014 [US2] Add a readiness pre-check inside `mosdat_run_functional` (VM reachable,
   required dependencies present) so an unready environment is reported as a distinct
   "environment not ready" condition rather than a test failure, in
   `automation/mcp_tools.py` (spec Acceptance Scenario, User Story 2.3) — depends on T009
-- [ ] T015 [US2] Add unit tests for invalid-combination rejection and
+- [X] T015 [US2] Add unit tests for invalid-combination rejection and
   environment-not-ready-vs-test-failure distinction in `tests/test_mcp_tools.py` — depends
   on T013-T014
 
@@ -149,17 +149,17 @@ build/PR and gets a go/no-go answer with a named reason before attempting anythi
 
 ### Implementation for User Story 3
 
-- [ ] T016 [US3] Implement the new `mosdat_readiness` tool handler wrapping the existing
+- [X] T016 [US3] Implement the new `mosdat_readiness` tool handler wrapping the existing
   `preflight.py`/`doctor.py` checks (connectivity, tool dependencies, disk space) in
   `automation/mcp_tools.py` (FR-003)
-- [ ] T017 [US3] Add `expect_pr`/`expect_symbol` deployed-build-matches-expected checking to
+- [X] T017 [US3] Add `expect_pr`/`expect_symbol` deployed-build-matches-expected checking to
   `mosdat_readiness`, reusing `_verify_symbols_on_vm()`/installed-version detection from
   `automation/commands/build.py`, in `automation/mcp_tools.py` — depends on T016
-- [ ] T018 [US3] Add a `busy` field to `mosdat_readiness`'s VM info using the `_vm_busy()`
+- [X] T018 [US3] Add a `busy` field to `mosdat_readiness`'s VM info using the `_vm_busy()`
   helper from T004, in `automation/mcp_tools.py` — depends on T016
-- [ ] T019 [US3] Register `mosdat_readiness` in the tool dispatch table in
+- [X] T019 [US3] Register `mosdat_readiness` in the tool dispatch table in
   `automation/mcp_server.py` — depends on T016
-- [ ] T020 [US3] Add unit tests for `mosdat_readiness` covering ready / not-ready /
+- [X] T020 [US3] Add unit tests for `mosdat_readiness` covering ready / not-ready /
   missing-dependency / busy cases in `tests/test_mcp_tools.py` — depends on T016-T019
 
 **Checkpoint**: User Stories 1, 2, and 3 all independently functional.
@@ -177,11 +177,11 @@ valid alternatives.
 
 ### Implementation for User Story 4
 
-- [ ] T021 [US4] Align the `mosdat_list_vms` response to the uniform envelope
+- [X] T021 [US4] Align the `mosdat_list_vms` response to the uniform envelope
   (`ok`/`error`/`degraded`) using `_envelope()` from Phase 2, in `automation/mcp_tools.py`
-- [ ] T022 [US4] Align the `mosdat_list_scenarios` response to the uniform envelope and
+- [X] T022 [US4] Align the `mosdat_list_scenarios` response to the uniform envelope and
   confirm/add a `platform` field per scenario entry, in `automation/mcp_tools.py`
-- [ ] T023 [US4] Add unit tests for the discovery tools' envelope shape in
+- [X] T023 [US4] Add unit tests for the discovery tools' envelope shape in
   `tests/test_mcp_tools.py` — depends on T021-T022
 
 **Checkpoint**: All four user stories independently functional. Note: run-time rejection of
@@ -195,14 +195,19 @@ Acceptance Scenario 2).
 
 **Purpose**: Wrap-up and verification per this project's own AGENTS.md conventions.
 
-- [ ] T024 [P] Add a short "Agent-facing MCP tools" section to `AGENTS.md` pointing agents
+- [X] T024 [P] Add a short "Agent-facing MCP tools" section to `AGENTS.md` pointing agents
   at `mosdat-mcp`, the full tool list, and `specs/001-agent-desktop-testing/quickstart.md`
-- [ ] T025 Run `pytest -q tests/test_mcp_tools.py` (non-live subset) and confirm all green
+- [X] T025 Run `pytest -q tests/test_mcp_tools.py` (non-live subset) and confirm all green
+  — 40 passed, 1 deselected (live)
 - [ ] T026 Run the full `quickstart.md` validation (all 6 steps) against a real VM and
-  record the outcome — depends on T006-T023 all complete
-- [ ] T027 Run GitNexus `detect_changes()` to confirm only the expected symbols/flows in
+  record the outcome — depends on T006-T023 all complete. **UNVERIFIED**: no real Proxmox
+  VM reachable from this environment; the live-gated test (T012) and this step both require
+  one. Run manually with `MOSDAT_LIVE_PR=<n> MOSDAT_LIVE_VM=<vm> pytest tests/test_mcp_tools.py --live -m live`
+  plus a manual walk of quickstart.md's remaining steps.
+- [X] T027 Run GitNexus `detect_changes()` to confirm only the expected symbols/flows in
   `automation/mcp_tools.py` and `automation/mcp_server.py` changed, per this project's
-  mandatory pre-commit check (`AGENTS.md`) — depends on T026
+  mandatory pre-commit check (`AGENTS.md`) — risk_level: medium, 2 affected processes
+  (both pre-existing `handle_tools_call` traces), no HIGH/CRITICAL findings
 
 ---
 

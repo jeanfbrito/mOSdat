@@ -143,6 +143,35 @@ clean pass. If the target VM/scenario combination is invalid, `ok: false`,
 `error: "unknown scenario 'X' for platform Y — available: [...]"` listing valid
 alternatives (FR-005), and no run is attempted.
 
+If the VM/scenario combination is valid but the environment is not currently
+runnable (SSH unreachable, or required tool dependencies such as `wmctrl` missing),
+the tool returns **without** invoking the runner. This is FR-003 / User Story 2
+Acceptance Scenario 3 — an environment problem, not a test failure:
+
+```json
+{
+  "ok": false,
+  "error": "environment not ready: VM ubuntu2404 is unreachable (ssh timeout)",
+  "degraded": [],
+  "env_not_ready": true,
+  "verdict": "error",
+  "steps": [],
+  "artifacts": [],
+  "elapsed_ms": 12,
+  "vm": "ubuntu2404",
+  "scenario": "rocketchat-smoke-linux"
+}
+```
+
+Rules:
+- `verdict` is `"error"`, **never** `"fail"`. `fail` is reserved for an executed
+  scenario that asserted unsuccessfully (`ok: true`, `verdict: "fail"`).
+- `env_not_ready: true` is the discriminator. An exception raised *during* the
+  run also uses `verdict: "error"` but omits `env_not_ready`.
+- `error` is always prefixed `environment not ready:`.
+- The pre-check reuses `doctor.check_ssh` / `doctor.check_deps` (Linux deps
+  skipped on Windows). It does not run the full doctor/preflight suite.
+
 ## `mosdat_ssh` (existing — no contract change; out of scope for this feature's FRs)
 
 Left as-is; not part of the spec's discovery/readiness/build/run/result surface.
