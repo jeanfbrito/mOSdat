@@ -113,13 +113,13 @@ def handle_tools_call(req: Request) -> str:
         elif name == "mosdat_vm_status":
             return _vm_status(req, args["vm_name"], ok)
         elif name == "mosdat_build":
-            return _build(req, args, ok, err)
+            return jsonrpc_result(req, _build(args))
         elif name == "mosdat_deploy":
-            return _deploy(req, args["vm_name"], args["package_path"], ok, err)
+            return jsonrpc_result(req, _deploy(args))
         elif name == "mosdat_run_smoke":
             return _run_smoke(req, args["vm_name"], args.get("timeout", 120), jsonrpc_result=ok, jsonrpc_error=err)
         elif name == "mosdat_run_functional":
-            return _run_functional(req, args, jsonrpc_result=ok, jsonrpc_error=err)
+            return jsonrpc_result(req, _run_functional(args))
         elif name == "mosdat_list_scenarios":
             return _list_scenarios(req, args.get("path"), jsonrpc_result=ok)
         elif name == "mosdat_ssh":

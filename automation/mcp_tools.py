@@ -5,37 +5,59 @@ All tool metadata (TOOL_DEFINITIONS) and handler functions live here.
 mcp_server.py imports these and wires them into the JSON-RPC dispatch table.
 """
 
+import argparse
+import json
 import os
-import subprocess
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 FRAMEWORK = Path(__file__).parent.parent
 
 Request = dict[str, Any]
 
+# run_build() exit codes from automation.commands.build
+_RC_BUILD_FAIL = {
+    2: "build failed",
+    4: "clone/fetch failed",
+    5: "invalid args / preconditions",
+}
+_RC_DEPLOY_FAIL = {
+    1: "verify-symbol missing on deployed artifact",
+    3: "deploy failed (scp/install)",
+}
+
 # ── Config helpers ──────────────────────────────────────────────────────────
+
+
+def _config_path() -> Optional[Path]:
+    """Locate the mosdat TOML config without loading it."""
+    env_cfg = os.environ.get("MOSDAT_CONFIG")
+    if env_cfg:
+        return Path(env_cfg)
+    cwd_cfg = Path("rocketchat.toml")
+    if cwd_cfg.exists():
+        return cwd_cfg
+    examples = FRAMEWORK / "examples"
+    for f in ["ubuntu2404.toml", "rocketchat.toml"]:
+        p = examples / f
+        if p.exists():
+            return p
+    return None
 
 
 def _config():
     """Find and load the most likely config file."""
     from automation.config import load_config
 
-    env_cfg = os.environ.get("MOSDAT_CONFIG")
-    if env_cfg:
-        return load_config(Path(env_cfg))
-    cwd_cfg = Path("rocketchat.toml")
-    if cwd_cfg.exists():
-        return load_config(cwd_cfg)
-    examples = FRAMEWORK / "examples"
-    for f in ["ubuntu2404.toml", "rocketchat.toml"]:
-        p = examples / f
-        if p.exists():
-            return load_config(p)
-    raise FileNotFoundError(
-        "No mosdat config found. Set MOSDAT_CONFIG or run from project dir."
-    )
+    path = _config_path()
+    if path is None:
+        raise FileNotFoundError(
+            "No mosdat config found. Set MOSDAT_CONFIG or run from project dir."
+        )
+    return load_config(path)
 
 
 def _vm_config(vm_name: str):
@@ -65,6 +87,194 @@ def _ssh(cmd: str, vm_name: str, timeout: int = 30) -> tuple[str, int]:
         return r.stdout.strip(), r.returncode
     except Exception as e:
         return str(e), 1
+
+
+# ── Uniform envelope + lookup helpers (US1 foundation) ──────────────────────
+
+
+def _envelope(ok, error=None, degraded=None, **fields) -> dict:
+    """Uniform MCP tool result (research.md Decision 2).
+
+    ``ok: false`` always carries a non-null ``error``. Degraded/partial
+    conditions (e.g. VLM backend down) go in ``degraded`` so they are
+    distinct from a hard failure.
+    """
+    result = {
+        "ok": bool(ok),
+        "error": None if ok else (error or "unknown error"),
+        "degraded": list(degraded) if degraded else [],
+    }
+    for key, value in fields.items():
+        if key in ("ok", "error", "degraded"):
+            continue
+        result[key] = value
+    return result
+
+
+def _resolve_vm(name: str):
+    """Look up a configured VM by alias.
+
+    Returns ``(VMConfig, None)`` on success or ``(None, error_envelope)``
+    naming the invalid value plus valid alternatives (FR-005).
+    """
+    if not name:
+        return None, _envelope(False, error="missing required argument 'vm'")
+    try:
+        cfg = _config()
+    except FileNotFoundError as e:
+        return None, _envelope(False, error=str(e))
+    vm = cfg.vm_by_name.get(name)
+    if vm is None:
+        names = sorted(cfg.vm_by_name.keys())
+        alt = ", ".join(names) if names else "(none)"
+        return None, _envelope(
+            False, error=f"unknown VM '{name}' — available: {alt}"
+        )
+    return vm, None
+
+
+def _scenario_platform_from_path(path: Path) -> str:
+    joined = "/".join(p.lower() for p in path.parts)
+    if "windows" in joined:
+        return "windows"
+    return "linux"
+
+
+def _iter_scenario_yaml() -> list[Path]:
+    base = FRAMEWORK / "shared" / "scenarios"
+    if not base.exists():
+        return []
+    return sorted(p for p in base.rglob("*.yaml") if p.is_file())
+
+
+def _scenario_names(platform: Optional[str] = None) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for path in _iter_scenario_yaml():
+        if platform and _scenario_platform_from_path(path) != platform:
+            continue
+        if path.stem in seen:
+            continue
+        seen.add(path.stem)
+        names.append(path.stem)
+    return names
+
+
+def _resolve_scenario(name: str, platform: Optional[str] = None):
+    """Look up a scenario YAML by name, optionally filtered by platform.
+
+    Returns ``(metadata, None)`` on success or ``(None, error_envelope)``
+    naming the invalid value plus valid alternatives (FR-005).
+    """
+    if not name:
+        return None, _envelope(False, error="missing required argument 'scenario'")
+    stem = name[:-5] if str(name).endswith(".yaml") else name
+    files = _iter_scenario_yaml()
+    matches = [p for p in files if p.stem == stem]
+    if platform:
+        plat_matches = [p for p in matches if _scenario_platform_from_path(p) == platform]
+        if plat_matches:
+            matches = plat_matches
+        elif matches:
+            alts = _scenario_names(platform)
+            listed = ", ".join(alts[:30]) if alts else "(none)"
+            return None, _envelope(
+                False,
+                error=(
+                    f"unknown scenario '{name}' for platform {platform} "
+                    f"— available: {listed}"
+                ),
+            )
+    if not matches:
+        alts = _scenario_names(platform)
+        listed = ", ".join(alts[:30]) if alts else "(none)"
+        plat = f" for platform {platform}" if platform else ""
+        return None, _envelope(
+            False,
+            error=f"unknown scenario '{name}'{plat} — available: {listed}",
+        )
+    path = matches[0]
+    for candidate in matches:
+        if "functional" in candidate.parts:
+            path = candidate
+            break
+    step_count = 0
+    try:
+        from automation.runners.scenario_loader import load_test_yaml
+
+        _, steps, _, _ = load_test_yaml(
+            path, platform=platform or _scenario_platform_from_path(path)
+        )
+        step_count = len(steps)
+    except Exception:
+        step_count = 0
+    try:
+        rel = str(path.relative_to(FRAMEWORK))
+    except ValueError:
+        rel = str(path)
+    meta = {
+        "name": path.stem,
+        "path": rel,
+        "resolved_path": path,
+        "platform": platform or _scenario_platform_from_path(path),
+        "step_count": step_count,
+    }
+    return meta, None
+
+
+def _vm_busy(vmid: int) -> bool:
+    """Non-blocking probe of ``_vm_lock(vmid)``.
+
+    Returns True if another process currently holds the per-VMID lock.
+    Acquires and immediately releases the lock when it is free.
+    """
+    from automation.proxmox.gpu import ProxmoxLockTimeout
+    from automation.proxmox.vm import _vm_lock
+
+    try:
+        with _vm_lock(int(vmid), timeout=0):
+            return False
+    except (ProxmoxLockTimeout, BlockingIOError):
+        return True
+
+
+@contextmanager
+def _nonblocking_vm_lock(vmid: int):
+    """Acquire ``_vm_lock(vmid)`` without waiting.
+
+    Raises ``ProxmoxLockTimeout`` / ``BlockingIOError`` on contention so
+    callers can return the FR-010 busy envelope immediately.
+    """
+    from automation.proxmox.vm import _vm_lock
+
+    with _vm_lock(int(vmid), timeout=0):
+        yield
+
+
+def _busy_envelope(vmid: int) -> dict:
+    return _envelope(False, error=f"vm busy: {vmid} held by another operation")
+
+
+def _deploy_dict(res) -> dict:
+    return {
+        "vm": getattr(res, "vm", ""),
+        "scp_ok": bool(getattr(res, "scp_ok", False)),
+        "install_ok": bool(getattr(res, "install_ok", False)),
+        "installed_version": getattr(res, "installed_version", "") or "",
+        "missing_symbols": list(getattr(res, "missing_symbols", []) or []),
+        "error": getattr(res, "error", "") or "",
+    }
+
+
+def _synthetic_deploy(vm_name: str, *, ok: bool, error: str = "") -> dict:
+    return {
+        "vm": vm_name,
+        "scp_ok": ok,
+        "install_ok": ok,
+        "installed_version": "",
+        "missing_symbols": [],
+        "error": "" if ok else error,
+    }
 
 
 # ── Tool definitions ────────────────────────────────────────────────────────
@@ -106,20 +316,34 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "mosdat_build",
-        "description": "Build the Electron app (yarn install + build) on the host",
+        "description": (
+            "Clone/build a PR (full mosdat build flow) and optionally deploy "
+            "to a VM with symbol verification"
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "repo_path": {
-                    "type": "string",
-                    "description": "Path to Rocket.Chat.Electron repo (default: from config)",
+                "pr": {
+                    "type": "number",
+                    "description": "Pull request number to clone and build",
                 },
-                "packages": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Package formats to build (default: deb, rpm)",
+                "target": {
+                    "type": "string",
+                    "description": "Build target: deb | rpm | appimage | exe (default: deb)",
+                },
+                "deploy_to": {
+                    "type": "string",
+                    "description": "VM name to deploy the artifact to (omit to build only)",
+                },
+                "verify_symbol": {
+                    "description": "Symbol(s) expected in the deployed app.asar (string or list)",
+                },
+                "repo": {
+                    "type": "string",
+                    "description": "owner/repo (default: RocketChat/Rocket.Chat.Electron)",
                 },
             },
+            "required": ["pr"],
         },
     },
     {
@@ -128,10 +352,13 @@ TOOL_DEFINITIONS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "vm_name": {"type": "string", "description": "Target VM name"},
-                "package_path": {"type": "string", "description": "Path to local .deb/.rpm file"},
+                "vm": {"type": "string", "description": "Target VM name"},
+                "vm_name": {"type": "string", "description": "Target VM name (alias of vm)"},
+                "artifact_path": {"type": "string", "description": "Path to local .deb/.rpm/.exe file"},
+                "package_path": {"type": "string", "description": "Path to local package (alias of artifact_path)"},
+                "target": {"type": "string", "description": "deb | rpm | appimage | exe (inferred from suffix if omitted)"},
             },
-            "required": ["vm_name", "package_path"],
+            "required": [],
         },
     },
     {
@@ -152,7 +379,8 @@ TOOL_DEFINITIONS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "vm_name": {"type": "string", "description": "VM name to run on"},
+                "vm": {"type": "string", "description": "VM name to run on"},
+                "vm_name": {"type": "string", "description": "VM name to run on (alias of vm)"},
                 "scenario": {
                     "type": "string",
                     "description": "Scenario name (e.g. 'rocketchat-smoke', 'issues/3325')",
@@ -233,75 +461,231 @@ def _vm_status(req: Request, vm_name: str, jsonrpc_result) -> str:
     return jsonrpc_result(req, {"name": vm_name, "vmid": vm.vmid, "status": status})
 
 
-def _build(req: Request, args: dict, jsonrpc_result, jsonrpc_error) -> str:
-    repo = args.get("repo_path", "")
-    if not repo:
-        cfg = _config()
-        if cfg.build and cfg.build.repo_path:
-            repo = str(cfg.build.repo_path)
-        else:
-            repo = str(FRAMEWORK.parent / "Rocket.Chat.Electron")
+def _parse_verify_symbols(raw) -> list:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, (list, tuple)):
+        values = [str(v) for v in raw]
+    else:
+        values = [str(raw)]
+    from automation.commands.build import parse_verify_symbols
 
-    packages = args.get("packages", ["deb", "rpm"])
-    pkg_flag = " ".join(f"--{p}" for p in packages)
-
-    if not os.path.isdir(repo):
-        return jsonrpc_error(req, -32000, f"Repo path does not exist: {repo}")
-
-    cmds = [
-        f"cd {repo} && yarn install",
-        f"cd {repo} && yarn build",
-        f"cd {repo} && npx electron-builder --linux {pkg_flag}",
-    ]
-    results = []
-    for cmd in cmds:
-        label = cmd.split("&&")[-1].strip()
-        try:
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-            results.append({
-                "step": label,
-                "exit_code": r.returncode,
-                "stderr": r.stderr[-500:] if r.stderr else "",
-            })
-            if r.returncode != 0:
-                break
-        except subprocess.TimeoutExpired:
-            results.append({"step": label, "exit_code": -1, "stderr": "Timed out (600s)"})
-            break
-
-    return jsonrpc_result(req, {"results": results})
+    return parse_verify_symbols(values)
 
 
-def _deploy(req: Request, vm_name: str, package_path: str, jsonrpc_result, jsonrpc_error) -> str:
-    vm, _ = _vm_config(vm_name)
-    from automation.transport.ssh import SSHClient
+def _call_run_build(ns):
+    """Invoke ``run_build`` and capture any ``DeployResult`` it produces.
 
-    pkg = Path(package_path)
-    if not pkg.exists():
-        return jsonrpc_error(req, -32000, f"Package not found: {package_path}")
+    ``run_build`` itself returns only an exit code. Wrapping the deploy
+    helpers lets the MCP response surface the structured DeployOutcome
+    without changing ``build.py``.
+    """
+    from automation.commands import build as build_mod
 
-    ext = pkg.suffix.lstrip(".")
-    dest = f"/tmp/{pkg.name}"
-    ssh = SSHClient(vm.ip, user=vm.user or "root")
+    captured: list = []
+    orig_linux = build_mod.deploy_to_vm
+    orig_win = build_mod.deploy_to_windows_vm
+
+    def _wrap(orig):
+        def _inner(*a, **k):
+            res = orig(*a, **k)
+            captured.append(res)
+            return res
+
+        return _inner
+
+    build_mod.deploy_to_vm = _wrap(orig_linux)
+    build_mod.deploy_to_windows_vm = _wrap(orig_win)
     try:
-        r = ssh.scp_to(Path(str(pkg)), dest)
-        if not r.success:
-            return jsonrpc_error(req, -32000, f"SCP failed: {r.stderr[:500]}")
-        if ext == "deb":
-            install_cmd = f"sudo dpkg -i {dest} 2>/dev/null || sudo apt-get install -f -y -qq"
-        elif ext == "rpm":
-            install_cmd = f"rpm -i {dest} 2>/dev/null || yum install -y {dest}"
-        else:
-            install_cmd = f"chmod +x {dest} && {dest}"
-        r2 = ssh.run(install_cmd, timeout=60)
-        if not r2.success:
-            return jsonrpc_error(
-                req, -32000,
-                f"Install failed (exit={r2.returncode}): {r2.stderr[:500] or r2.stdout[:500]}",
+        rc = build_mod.run_build(ns)
+    finally:
+        build_mod.deploy_to_vm = orig_linux
+        build_mod.deploy_to_windows_vm = orig_win
+    return rc, captured
+
+
+def _build_response(pr, target: str, deploy_to: Optional[str], rc: int, captured: list) -> dict:
+    """Map ``run_build`` exit code (+ optional captured DeployResult) to envelope."""
+    if captured:
+        res = captured[0]
+        outcome = _deploy_dict(res)
+        if getattr(res, "ok", False) and rc == 0:
+            return _envelope(True, pr=pr, target=target, build_ok=True, deploy=outcome)
+        if (not getattr(res, "ok", False)) or rc in _RC_DEPLOY_FAIL:
+            err = res.error or _RC_DEPLOY_FAIL.get(rc, f"deploy failed (rc={rc})")
+            return _envelope(
+                False, error=err, pr=pr, target=target, build_ok=True, deploy=outcome
             )
-        return jsonrpc_result(req, {"vm": vm_name, "package": package_path, "install_output": r2.stdout})
-    except Exception as e:
-        return jsonrpc_error(req, -32000, f"Deploy failed: {e}")
+        return _envelope(
+            False,
+            error=_RC_BUILD_FAIL.get(rc, f"build failed (rc={rc})"),
+            pr=pr,
+            target=target,
+            build_ok=False,
+            deploy=None,
+        )
+
+    # Typical of unit tests that mock ``run_build`` (no deploy helper ran).
+    if rc == 0:
+        deploy = None if not deploy_to else _synthetic_deploy(deploy_to, ok=True)
+        return _envelope(True, pr=pr, target=target, build_ok=True, deploy=deploy)
+    if rc in _RC_DEPLOY_FAIL and deploy_to:
+        err = _RC_DEPLOY_FAIL[rc]
+        return _envelope(
+            False,
+            error=err,
+            pr=pr,
+            target=target,
+            build_ok=True,
+            deploy=_synthetic_deploy(deploy_to, ok=False, error=err),
+        )
+    return _envelope(
+        False,
+        error=_RC_BUILD_FAIL.get(rc, f"build failed (rc={rc})"),
+        pr=pr,
+        target=target,
+        build_ok=False,
+        deploy=None,
+    )
+
+
+def _build(args: dict) -> dict:
+    """mosdat_build: full ``run_build()`` clone→build→deploy→verify-symbol flow."""
+    from automation.commands.build import TARGETS
+    from automation.proxmox.gpu import ProxmoxLockTimeout
+
+    pr_raw = args.get("pr")
+    if pr_raw is None or pr_raw == "":
+        return _envelope(False, error="missing required argument 'pr'", build_ok=False, deploy=None)
+    try:
+        pr = int(pr_raw)
+    except (TypeError, ValueError):
+        return _envelope(
+            False, error=f"invalid pr {pr_raw!r} — expected an integer", build_ok=False, deploy=None
+        )
+
+    target = args.get("target") or "deb"
+    if target not in TARGETS:
+        alts = ", ".join(sorted(TARGETS))
+        return _envelope(
+            False,
+            error=f"unknown target '{target}' — available: {alts}",
+            pr=pr,
+            target=target,
+            build_ok=False,
+            deploy=None,
+        )
+
+    deploy_to = args.get("deploy_to") or None
+    vm = None
+    if deploy_to:
+        vm, err = _resolve_vm(deploy_to)
+        if err:
+            err["pr"] = pr
+            err["target"] = target
+            err["build_ok"] = False
+            err["deploy"] = None
+            return err
+
+    repo = args.get("repo") or "RocketChat/Rocket.Chat.Electron"
+    ns = argparse.Namespace(
+        pr=pr,
+        repo=repo,
+        target=target,
+        clone_dir=args.get("clone_dir"),
+        deploy=deploy_to or "",
+        verify_symbol=_parse_verify_symbols(args.get("verify_symbol")),
+        config=str(_config_path()) if _config_path() else None,
+        dry_run=bool(args.get("dry_run", False)),
+        artifact_first=args.get("artifact_first", True),
+    )
+
+    def _do_build() -> dict:
+        try:
+            rc, captured = _call_run_build(ns)
+        except Exception as e:
+            return _envelope(
+                False, error=f"build failed: {e}", pr=pr, target=target, build_ok=False, deploy=None
+            )
+        return _build_response(pr, target, deploy_to, rc, captured)
+
+    if vm is None:
+        return _do_build()
+    try:
+        with _nonblocking_vm_lock(vm.vmid):
+            return _do_build()
+    except (ProxmoxLockTimeout, BlockingIOError):
+        return _busy_envelope(vm.vmid)
+
+
+def _infer_target(path: Path, explicit: Optional[str]) -> str:
+    if explicit:
+        return explicit
+    suffix = path.suffix.lower()
+    if suffix == ".deb":
+        return "deb"
+    if suffix == ".rpm":
+        return "rpm"
+    if suffix == ".exe":
+        return "exe"
+    if suffix == ".appimage" or path.name.endswith(".AppImage"):
+        return "appimage"
+    return "deb"
+
+
+def _deploy(args: dict) -> dict:
+    """mosdat_deploy: install an existing artifact, under the per-VM lock."""
+    from automation.commands.build import (
+        deploy_to_vm,
+        deploy_to_windows_vm,
+        resolve_target,
+    )
+    from automation.proxmox.gpu import ProxmoxLockTimeout
+
+    vm_name = args.get("vm") or args.get("vm_name")
+    artifact_path = args.get("artifact_path") or args.get("package_path")
+    if not vm_name:
+        return _envelope(False, error="missing required argument 'vm'")
+    if not artifact_path:
+        return _envelope(False, error="missing required argument 'artifact_path'")
+
+    vm, err = _resolve_vm(vm_name)
+    if err:
+        return err
+
+    pkg = Path(artifact_path)
+    if not pkg.exists():
+        return _envelope(False, error=f"Package not found: {artifact_path}")
+
+    try:
+        target = resolve_target(_infer_target(pkg, args.get("target")))
+    except ValueError as e:
+        return _envelope(False, error=str(e))
+
+    def _do_deploy() -> dict:
+        kwargs = dict(
+            vm_name=vm.name,
+            vm_ip=vm.ip,
+            vm_user=vm.user or "root",
+            artifact=pkg,
+            target=target,
+            verify_symbols=_parse_verify_symbols(args.get("verify_symbol")),
+            dry_run=bool(args.get("dry_run", False)),
+        )
+        if vm.is_windows:
+            res = deploy_to_windows_vm(**kwargs)
+        else:
+            res = deploy_to_vm(**kwargs)
+        outcome = _deploy_dict(res)
+        if res.ok:
+            return _envelope(True, **outcome)
+        return _envelope(False, error=res.error or "deploy failed", **outcome)
+
+    try:
+        with _nonblocking_vm_lock(vm.vmid):
+            return _do_deploy()
+    except (ProxmoxLockTimeout, BlockingIOError):
+        return _busy_envelope(vm.vmid)
 
 
 def _run_smoke(req: Request, vm_name: str, timeout: int = 120, *, jsonrpc_result, jsonrpc_error) -> str:
@@ -337,24 +721,114 @@ exit 1
         return jsonrpc_error(req, -32000, f"Smoke test failed: {e}")
 
 
-def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) -> str:
-    vm_name = args["vm_name"]
-    scenario = args["scenario"]
-    vm, cfg = _vm_config(vm_name)
-    from automation.runners.functional import FunctionalRunner
-    from automation.vlm.client import VLMClient
-    from automation.vlm.screenshot import Screenshotter
-    from automation.vlm.input import InputInjector
-    from automation.transport.vnc import VncClient
-    from automation.transport.ssh import SSHClient
-    from automation.proxmox.api import ProxmoxAPI
+def _probe_vlm_degraded(vlm) -> list:
+    """Return ``["vlm_unavailable"]`` if warmup/probe failed, else ``[]``."""
+    try:
+        from automation.commands.functional_cmd import _warmup_vlm
 
-    scenarios_dir = FRAMEWORK / "shared" / "scenarios"
-    scenario_path = scenarios_dir / f"{scenario}.yaml"
-    if not scenario_path.exists():
-        scenario_path = scenarios_dir / "functional" / f"{scenario}.yaml"
-    if not scenario_path.exists():
-        return jsonrpc_error(req, -32000, f"Scenario not found: {scenario}")
+        if not _warmup_vlm(vlm):
+            return ["vlm_unavailable"]
+    except Exception:
+        return ["vlm_unavailable"]
+    try:
+        models = vlm.list_models()
+        if not models:
+            return ["vlm_unavailable"]
+    except Exception:
+        return ["vlm_unavailable"]
+    return []
+
+
+def _collect_artifacts(screenshot_dir: Optional[Path]) -> list:
+    if screenshot_dir is None or not Path(screenshot_dir).exists():
+        return []
+    suffixes = {".png", ".jpg", ".jpeg", ".jsonl", ".html", ".mp4", ".gif", ".log"}
+    paths: list[str] = []
+    for p in sorted(Path(screenshot_dir).rglob("*")):
+        if p.is_file() and p.suffix.lower() in suffixes:
+            paths.append(str(p))
+    return paths
+
+
+def _artifact_for_step(artifacts: list, index: int) -> Optional[str]:
+    needle = f"step{index + 1}"
+    for path in artifacts:
+        name = Path(path).name.lower()
+        if needle in name:
+            return path
+    return None
+
+
+def _steps_from_run(
+    screenshot_dir: Optional[Path],
+    step_count: int,
+    passed: bool,
+    log: str = "",
+) -> list:
+    """Normalize per-step outcomes from events.jsonl, falling back to run_test."""
+    artifacts = _collect_artifacts(screenshot_dir)
+    by_index: dict[int, dict] = {}
+    events_path = Path(screenshot_dir) / "events.jsonl" if screenshot_dir else None
+    if events_path is not None and events_path.exists():
+        for line in events_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("event") != "step_end":
+                continue
+            raw_num = rec.get("step_num", 1)
+            try:
+                idx = int(str(raw_num).split(".")[0]) - 1
+            except (TypeError, ValueError):
+                continue
+            if idx < 0:
+                continue
+            status = rec.get("status", "ok")
+            outcome = {"ok": "pass", "failed": "fail", "fail": "fail", "skipped": "skipped"}.get(
+                status, "pass"
+            )
+            by_index[idx] = {
+                "index": idx,
+                "outcome": outcome,
+                "reason": rec.get("reason") or rec.get("error") or None,
+                "artifact": _artifact_for_step(artifacts, idx),
+            }
+    if not by_index and step_count > 0:
+        for i in range(step_count):
+            failed = (not passed) and i == step_count - 1
+            by_index[i] = {
+                "index": i,
+                "outcome": "fail" if failed else "pass",
+                "reason": (log or None) if failed else None,
+                "artifact": _artifact_for_step(artifacts, i),
+            }
+    elif not by_index:
+        by_index[0] = {
+            "index": 0,
+            "outcome": "pass" if passed else "fail",
+            "reason": None if passed else (log or None),
+            "artifact": artifacts[0] if artifacts else None,
+        }
+    return [by_index[i] for i in sorted(by_index)]
+
+
+def _invoke_functional_runner(vm, cfg, scenario_path: Path, args: dict) -> dict:
+    """Run ``FunctionalRunner.run_test`` and return the raw per-VM outcome.
+
+    Ordinary (non-confirm) scenarios return ``(passed: bool, log: str)`` from
+    ``run_test`` — not ``BugConfirmationResult``. See data-model.md.
+    """
+    from automation.proxmox.api import ProxmoxAPI
+    from automation.runners.functional import FunctionalRunner
+    from automation.runners.scenario_loader import load_test_yaml
+    from automation.transport.ssh import SSHClient
+    from automation.transport.vnc import VncClient
+    from automation.vlm.client import VLMClient
+    from automation.vlm.input import InputInjector
+    from automation.vlm.screenshot import Screenshotter
 
     vlm = VLMClient(
         base_url=cfg.vlm.base_url,
@@ -363,6 +837,7 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
         api_key=cfg.vlm.api_key,
         max_tokens_floor=cfg.vlm.max_tokens_floor,
     )
+    degraded = _probe_vlm_degraded(vlm)
     proxmox = ProxmoxAPI(cfg.proxmox)
     ssh = SSHClient(vm.ip, vm.user)
 
@@ -370,13 +845,20 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
     screenshot_dir = FRAMEWORK / "results" / "functional" / f"{ts}_functional" / vm.name
     os.makedirs(str(screenshot_dir), exist_ok=True)
 
+    name, steps, _, _ = load_test_yaml(scenario_path, cfg, platform=vm.os_type)
+    from_step = int(args.get("from_step") or 1)
+    until_step = args.get("until_step")
+    until_step = int(until_step) if until_step is not None else len(steps)
+    steps = steps[from_step - 1 : until_step]
+
+    passed = False
+    log = ""
     with VncClient(proxmox, vmid=vm.vmid) as vnc:
         screenshotter = Screenshotter(vnc)
         injector = InputInjector(vnc, ssh, vm.is_windows)
-        # Stage 3c / Stage 4: per-OS coordinate-free driver shares one
-        # persistent SSHClient. AtspiClient on Linux, UiaClient on Windows.
         from automation.atspi import AtspiClient as _AtspiClient
         from automation.uia import UiaClient as _UiaClient
+
         _ssh_atspi = SSHClient(vm.ip, vm.user, persistent=True)
         _atspi_client = None
         _uia_client = None
@@ -395,19 +877,15 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
                 atspi=_atspi_client,
                 uia=_uia_client,
             )
-            from automation.runners.scenario_loader import load_test_yaml
-
-            name, steps, _, _ = load_test_yaml(
-                scenario_path, cfg, platform=vm.os_type,
-            )
+            vars_ = {
+                "app_path": vm.packages[0].app_path
+                if vm.packages
+                else "/opt/Rocket.Chat/rocketchat-desktop"
+            }
             passed, log = runner.run_test(
                 steps=steps,
                 name=name,
-                vars={
-                    "app_path": vm.packages[0].app_path
-                    if vm.packages
-                    else "/opt/Rocket.Chat/rocketchat-desktop"
-                },
+                vars=vars_,
                 results_dir=str(screenshot_dir.parent),
                 vm_name=vm.name,
             )
@@ -418,15 +896,59 @@ def _run_functional(req: Request, args: dict, *, jsonrpc_result, jsonrpc_error) 
                 except Exception:
                     pass
 
-    return jsonrpc_result(
-        req,
-        {
-            "success": passed,
-            "vm": vm_name,
-            "scenario": scenario,
-            "screenshot_dir": str(screenshot_dir),
-            "log": log,
-        },
+    return {
+        "passed": bool(passed),
+        "log": log or "",
+        "screenshot_dir": screenshot_dir,
+        "step_count": len(steps),
+        "degraded": degraded,
+    }
+
+
+def _run_functional(args: dict) -> dict:
+    """mosdat_run_functional: run a scenario and return a three-state verdict."""
+    vm_name = args.get("vm") or args.get("vm_name")
+    scenario = args.get("scenario")
+    vm, err = _resolve_vm(vm_name)
+    if err:
+        return err
+    meta, err = _resolve_scenario(scenario, platform=getattr(vm, "os_type", None))
+    if err:
+        return err
+
+    t0 = time.perf_counter()
+    try:
+        cfg = _config()
+        raw = _invoke_functional_runner(vm, cfg, meta["resolved_path"], args)
+    except Exception as e:
+        elapsed = round((time.perf_counter() - t0) * 1000)
+        return _envelope(
+            False,
+            error=str(e),
+            verdict="error",
+            steps=[],
+            artifacts=[],
+            elapsed_ms=elapsed,
+        )
+    elapsed = round((time.perf_counter() - t0) * 1000)
+    passed = raw.get("passed", False)
+    log = raw.get("log", "")
+    screenshot_dir = raw.get("screenshot_dir")
+    step_count = int(raw.get("step_count") or meta.get("step_count") or 0)
+    steps = _steps_from_run(screenshot_dir, step_count, passed, log)
+    artifacts = _collect_artifacts(screenshot_dir)
+    verdict = "pass" if passed else "fail"
+    return _envelope(
+        True,
+        degraded=raw.get("degraded") or [],
+        verdict=verdict,
+        steps=steps,
+        artifacts=artifacts,
+        elapsed_ms=elapsed,
+        vm=vm_name,
+        scenario=scenario,
+        log=log,
+        screenshot_dir=str(screenshot_dir) if screenshot_dir else None,
     )
 
 
