@@ -90,6 +90,33 @@
   Any Win11 scenario that launches a GUI app must kill these processes first.
 - **Ref**: Discovered during H1.1 windows11 smoke iteration (iter 1-3).
 
+## `mosdat build --target exe` needs Wine to cross-build from macOS — fixed via on-VM native build
+
+- **Status**: RESOLVED — `automation/commands/build.py::build_on_windows_vm()`.
+- **Issue**: `electron-builder`'s Windows (NSIS) packaging invokes a Wine-dependent
+  step (via its bundled `app-builder` helper) when run from a non-Windows host.
+  Modern macOS (Catalina+) dropped 32-bit executable support, which this
+  specific Wine invocation needs, so `mosdat build --target exe` always failed
+  on the packaging step when run from a Mac, even though the build got as far
+  as producing partial `win-arm64` MSI/ZIP output before failing:
+  `⨯ macOS Catalina doesn't support 32-bit executables and as result Wine cannot
+  run Windows 32-bit applications too`. The `app-builder` binary itself was not
+  broken (ran fine standalone) — it's specifically the Wine-dependent packaging
+  path that fails.
+- **Fix**: `run_build()` now detects a pure-Windows `--deploy` list with
+  `--target exe` and builds NATIVELY on the target Windows VM over SSH instead
+  of locally — clone, `yarn install`/`build`, `electron-builder --win`, then
+  install in place (no SCP needed, no Wine involved at all since it's real
+  Windows). See `build_on_windows_vm()`. A mixed Windows+Linux `--deploy` list
+  in one call still uses the old host-side build+SCP path for now (out of
+  scope for the initial fix — rare in practice).
+- **Affects**: Any future PR/branch built with `--target exe` from a
+  non-Windows mosdat host. No longer requires Wine installed anywhere.
+- **Ref**: Discovered and fixed building PR #3464
+  (`fix/windows-notification-quick-reply`) live against `windows10`
+  (192.168.13.87), 2026-08-20. See the Node.js entry below for a related gotcha
+  hit along the way.
+
 ## Windows VMs: stale Node.js breaks Electron builds run natively on the VM (ERR_REQUIRE_ESM)
 
 - **Status**: Fixed on `windows10` by upgrading Node; other Windows VMs (`windows11`) may

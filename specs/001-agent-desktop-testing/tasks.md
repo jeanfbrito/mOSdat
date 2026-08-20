@@ -204,18 +204,23 @@ Acceptance Scenario 2).
   - `mosdat_readiness` (Step 3): proven live — correctly reported `ready: false` /
     `ssh_reachable: FAIL` while the VM was off, then `ready: true` once it was up and SSH
     was authorized.
-  - `mosdat_build` (Step 4, PR #3464, target `exe`): the tool's failure-reporting contract
-    was proven live (`build_ok: false`, `deploy: null`, no deploy attempted — spec
-    Acceptance Scenario 2) but the *underlying* `run_build()` could not succeed against a
-    Windows target from this host — this Mac has no Wine, which electron-builder needs for
-    a Windows-target cross-build (see KNOWN_ISSUES.md). Worked around by building natively
-    on `windows10` itself (manual clone + `yarn build` + `electron-builder --win`, outside
-    the `mosdat_build` tool) — surfaced its own known issue (stale Node on the VM; also
-    documented). `mosdat_build`'s full success path against a real target (Linux, where no
-    Wine constraint exists) was not exercised live this session.
+  - `mosdat_build` (Step 4, PR #3464, target `exe`): initially proven only as a clean
+    failure (`build_ok: false`, `deploy: null`, no deploy attempted — spec Acceptance
+    Scenario 2), since this Mac has no Wine, which `electron-builder` needs for a
+    Windows-target cross-build. **Since then, fixed properly**: `run_build()` now builds
+    natively on the target Windows VM over SSH instead of cross-compiling
+    (`build_on_windows_vm()` in `automation/commands/build.py`) — no Wine needed anywhere.
+    Re-ran the real `mosdat_build` tool (not manual steps) against PR #3464 targeting
+    `windows10`: `ok: true`, `build_ok: true`, `deploy.install_ok: true`,
+    `deploy.installed_version: "4.17.0-alpha.1"`. Along the way this also caught and fixed a
+    real integration bug: `mcp_tools.py`'s `_call_run_build` only monkey-patched
+    `deploy_to_vm`/`deploy_to_windows_vm` to capture their `DeployResult`, not the new
+    `build_on_windows_vm` — so the first live run of the fixed code silently returned an
+    empty `installed_version` despite a successful install. Fixed and covered by a
+    regression test (`test_build_captures_build_on_windows_vm_result`).
   - `mosdat_deploy`: not exercised via the tool this session (the Windows artifact was
-    installed manually via the same silent-NSIS `/S` command `deploy_to_windows_vm()` uses,
-    since it was already on the VM from the native build — no SCP needed).
+    installed via `mosdat_build`'s remote-build path directly, which installs in place —
+    no separate SCP+deploy step applies to the Windows-native-build case).
   - `mosdat_run_functional` (Step 4 cont'd): proven live and in full — ran
     `tel-qa-001-settings-discovery` against the freshly-built, freshly-installed PR #3464
     exe; returned `ok: true`, `verdict: "fail"` (a real scenario step timeout at "wait for
