@@ -41,6 +41,7 @@ authorized yet, stale toolchain, wrong build already installed).
 | "Run this scenario again" (build already there) | `mosdat_run_functional({vm, scenario})` directly — skip the build |
 | "Is `<vm>` ready for a run?" | `mosdat_readiness({vm})` |
 | "What can I even test?" | `mosdat_list_vms({})` + `mosdat_list_scenarios({})` |
+| "Test the server side of PR #N" (a Rocket.Chat server PR, not the Electron app) | `mosdat_server_provision({ref})`, poll until `state: "ready"`, then pass its `url` as `server_url` to `mosdat_run_functional` |
 | VM is powered off | `mosdat_vm_start({vm_name})`, then poll `mosdat_readiness` until `ready: true` — Windows VMs can take a few minutes to boot before SSH responds |
 
 Builds and runs are genuinely slow: a Linux `.deb` build is a few minutes, a
@@ -92,11 +93,14 @@ assume the VM is broken.
 | `mosdat_readiness` | `vm`, `expect_pr?`, `expect_symbol?` | Go/no-go: SSH, deps, disk, optional deployed-build match, `busy` flag |
 | `mosdat_build` | `pr`, `target?` (deb/rpm/appimage/exe, default deb), `deploy_to?`, `verify_symbol?`, `repo?` | Full clone→build→(deploy)→verify-symbol flow. Windows targets now build natively on the VM |
 | `mosdat_deploy` | `vm`, `artifact_path`, `target?` | Install an already-built local artifact onto a VM (no clone/build) |
-| `mosdat_run_functional` | `vm`, `scenario`, `from_step?`, `until_step?`, `timeout?` | VLM-driven UI test; returns `verdict`/`steps`/`artifacts` |
+| `mosdat_run_functional` | `vm`, `scenario`, `from_step?`, `until_step?`, `timeout?`, `server_url?` | VLM-driven UI test; returns `verdict`/`steps`/`artifacts`. `server_url` overrides the scenario's configured `workspace_url` for this call only — point it at a `mosdat_server_provision` result (or any other already-running server) instead of the default static workspace |
 | `mosdat_run_smoke` | `vm_name`, `timeout?` | Cheap launch + basic UI check, no full scenario |
 | `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | `vm_name` | Proxmox VM power control/status |
 | `mosdat_ssh` | `vm_name`, `command` | Arbitrary shell command on a VM — escape hatch, not the normal path |
 | `mosdat_ssh_bootstrap` | `vm`, `pubkey_path?` | Windows only. If `mosdat_readiness`/any tool reports SSH unreachable on a Windows VM, call this before troubleshooting further — it installs this host's key via the VNC console (no password needed, as long as the desktop is unlocked) and no-ops if SSH already works |
+| `mosdat_server_provision` | `ref` (PR/tag/`develop`) | Idempotent: brings up (or reports the state of an already-running) test Rocket.Chat server for `ref`. `state` is `ready`/`starting`/`failed`; `url` appears once the container's port is known — pass it as `server_url` to `mosdat_run_functional` |
+| `mosdat_server_teardown` | `ref` | Tears down the provisioned server for `ref`. Idempotent — `torn_down: false` if none existed, never an error. Never touches a server the user handed you directly as a `server_url` |
+| `mosdat_server_list` | *(none)* | Lists all currently provisioned server instances (`ref`, `state`, `url`, `elapsed_ms`) |
 
 ## Platform notes
 

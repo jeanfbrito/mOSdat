@@ -305,6 +305,15 @@ def build_parser() -> argparse.ArgumentParser:
     from automation.commands.ssh_bootstrap import add_ssh_bootstrap_subparser
     add_ssh_bootstrap_subparser(sub)
 
+    from automation.commands.rc_server import (
+        add_server_list_subparser,
+        add_server_provision_subparser,
+        add_server_teardown_subparser,
+    )
+    add_server_provision_subparser(sub)
+    add_server_teardown_subparser(sub)
+    add_server_list_subparser(sub)
+
     # mosdat author
     _add_author_subparser(sub)
 

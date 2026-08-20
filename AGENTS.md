@@ -87,7 +87,7 @@ mOSdat exposes a stdio JSON-RPC MCP server via the `mosdat-mcp` entry point
 the scenario ran and asserted unsuccessfully — never an environment problem
 (`env_not_ready: true` is the discriminator; or call `mosdat_readiness` first).
 
-Tools (12):
+Tools (15):
 
 | Tool | Purpose |
 |------|---------|
@@ -96,14 +96,18 @@ Tools (12):
 | `mosdat_readiness` | Go/no-go: SSH, deps, disk, optional `expect_pr`/`expect_symbol`, `busy` |
 | `mosdat_build` | Clone → build → optional deploy → verify-symbol |
 | `mosdat_deploy` | Install an existing artifact |
-| `mosdat_run_functional` | Run a scenario; `verdict` is `pass`/`fail`/`error` |
+| `mosdat_run_functional` | Run a scenario; `verdict` is `pass`/`fail`/`error`. Optional `server_url` overrides the scenario's configured `workspace_url` for this call only (e.g. point at a `mosdat_server_provision` result) |
 | `mosdat_run_smoke` | Launch + basic UI check |
 | `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | Proxmox VM power |
 | `mosdat_ssh` | Run a command on a VM |
 | `mosdat_ssh_bootstrap` | Install this host's SSH public key onto an unlocked Windows VM via VNC |
+| `mosdat_server_provision` | Idempotent: provision (or return the state of an already-running) test Rocket.Chat server for a `ref` (PR/tag/`develop`); `state` is `ready`/`starting`/`failed`, `url` present once known |
+| `mosdat_server_teardown` | Tear down the provisioned server for a `ref`; idempotent (`torn_down: false` if none existed) |
+| `mosdat_server_list` | List all currently provisioned server instances (`ref`, `state`, `url`, `elapsed_ms`) |
 
 Walkthrough: [specs/001-agent-desktop-testing/quickstart.md](specs/001-agent-desktop-testing/quickstart.md).
 Full I/O contract: [specs/001-agent-desktop-testing/contracts/mcp-tools.md](specs/001-agent-desktop-testing/contracts/mcp-tools.md).
+Server provisioning contract: [specs/002-test-server-provisioning/contracts/server-tools.md](specs/002-test-server-provisioning/contracts/server-tools.md).
 
 ---
 

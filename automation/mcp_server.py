@@ -24,6 +24,9 @@ from automation.mcp_tools import (
     _readiness,
     _run_functional,
     _ssh_bootstrap,
+    _server_provision,
+    _server_list,
+    _server_teardown,
     _run_smoke,
     _ssh_tool,
     _vm_start,
@@ -128,6 +131,12 @@ def handle_tools_call(req: Request) -> str:
             return jsonrpc_result(req, _readiness(args))
         elif name == "mosdat_ssh_bootstrap":
             return jsonrpc_result(req, _ssh_bootstrap(args))
+        elif name == "mosdat_server_provision":
+            return jsonrpc_result(req, _server_provision(args))
+        elif name == "mosdat_server_teardown":
+            return jsonrpc_result(req, _server_teardown(args))
+        elif name == "mosdat_server_list":
+            return jsonrpc_result(req, _server_list(args))
         elif name == "mosdat_ssh":
             return _ssh_tool(req, args["vm_name"], args["command"], args.get("timeout", 30), jsonrpc_result=ok)
         else:

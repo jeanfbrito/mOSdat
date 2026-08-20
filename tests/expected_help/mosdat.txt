@@ -1,11 +1,11 @@
 usage: mosdat [-h]
-              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,ssh-bootstrap,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
+              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,ssh-bootstrap,server-provision,server-teardown,server-list,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
               ...
 
 mOSdat - Multi-OS Desktop App Testing with GPU passthrough
 
 positional arguments:
-  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,ssh-bootstrap,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
+  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,ssh-bootstrap,server-provision,server-teardown,server-list,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
     run                 Full test matrix run
     test                Quick test with pre-built package
     functional          Run VLM functional UI tests
@@ -23,6 +23,11 @@ positional arguments:
                         verify on VMs
     ssh-bootstrap       Install this host's SSH public key onto a Windows VM
                         via the unlocked VNC console
+    server-provision    Provision a Rocket.Chat server matching a published
+                        image reference
+    server-teardown     Stop and remove a provisioned Rocket.Chat server
+                        instance
+    server-list         List currently managed Rocket.Chat server instances
     author              Agent client for the live authoring API
     draft               Generate functional test scenario YAML from change
                         descriptions

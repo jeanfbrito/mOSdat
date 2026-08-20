@@ -643,6 +643,11 @@ def main() -> int:
     from automation.commands.replay import run_replay
     from automation.commands.build import run_build
     from automation.commands.ssh_bootstrap import run_ssh_bootstrap
+    from automation.commands.rc_server import (
+        run_server_list,
+        run_server_provision,
+        run_server_teardown,
+    )
     from automation.commands.doctor import run_doctor
     from automation.commands.recipes import run_recipes
     from automation.commands.routines import run_routines
@@ -683,6 +688,9 @@ def main() -> int:
         "replay": run_replay,
         "build": run_build,
         "ssh-bootstrap": run_ssh_bootstrap,
+        "server-provision": run_server_provision,
+        "server-teardown": run_server_teardown,
+        "server-list": run_server_list,
         "doctor": run_doctor,
         "vlm-cache": cmd_vlm_cache,
         "recipes": run_recipes,

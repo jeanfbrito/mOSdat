@@ -543,6 +543,10 @@ TOOL_DEFINITIONS = [
                 "timeout": {"type": "number", "description": "Scenario timeout in seconds (default: 900)"},
                 "from_step": {"type": "number", "description": "Start from step N (1-indexed)"},
                 "until_step": {"type": "number", "description": "Stop after step N"},
+                "server_url": {
+                    "type": "string",
+                    "description": "Override the scenario's configured workspace_url for this call only; omit to use today's default.",
+                },
             },
             "required": ["vm_name", "scenario"],
         },
@@ -606,6 +610,60 @@ TOOL_DEFINITIONS = [
                 },
             },
             "required": ["vm"],
+        },
+    },
+    {
+        "name": "mosdat_server_provision",
+        "description": (
+            "Provision a Rocket.Chat server matching a published image "
+            "reference (PR/release/RC/develop) via Docker Compose. Idempotent: "
+            "re-invoking for a matching already-running instance returns its "
+            "current state (starting/ready) without starting a duplicate."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "PR (pr-<N> or bare <N>), release/RC tag, or develop"
+                    ),
+                },
+            },
+            "required": ["ref"],
+        },
+    },
+    {
+        "name": "mosdat_server_teardown",
+        "description": (
+            "Stop and remove a provisioned Rocket.Chat server instance "
+            "(Compose down -v). Idempotent: no matching instance for the "
+            "reference is not an error."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": (
+                        "PR (pr-<N> or bare <N>), release/RC tag, or develop"
+                    ),
+                },
+            },
+            "required": ["ref"],
+        },
+    },
+    {
+        "name": "mosdat_server_list",
+        "description": (
+            "List currently managed Rocket.Chat server instances "
+            "(Docker Compose projects mosdat has provisioned), each "
+            "probed once for ready/starting state."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
     {
@@ -1082,7 +1140,16 @@ def _invoke_functional_runner(vm, cfg, scenario_path: Path, args: dict) -> dict:
     screenshot_dir = FRAMEWORK / "results" / "functional" / f"{ts}_functional" / vm.name
     os.makedirs(str(screenshot_dir), exist_ok=True)
 
-    name, steps, _, _ = load_test_yaml(scenario_path, cfg, platform=vm.os_type)
+    server_url = args.get("server_url") or None
+    effective_workspace_url = server_url or getattr(cfg.functional, "workspace_url", None)
+    load_kwargs = {"platform": vm.os_type}
+    if server_url:
+        # Override point for double-brace scenarios (I8: cli_vars wins over the
+        # scenario's own `vars:` block). Scoped to explicit overrides only, so
+        # scenarios relying on their YAML-baked default keep working when no
+        # server_url is supplied and no config default is configured either.
+        load_kwargs["cli_vars"] = {"workspace_url": server_url}
+    name, steps, _, _ = load_test_yaml(scenario_path, cfg, **load_kwargs)
     from_step = int(args.get("from_step") or 1)
     until_step = args.get("until_step")
     until_step = int(until_step) if until_step is not None else len(steps)
@@ -1117,7 +1184,8 @@ def _invoke_functional_runner(vm, cfg, scenario_path: Path, args: dict) -> dict:
             vars_ = {
                 "app_path": vm.packages[0].app_path
                 if vm.packages
-                else "/opt/Rocket.Chat/rocketchat-desktop"
+                else "/opt/Rocket.Chat/rocketchat-desktop",
+                "workspace_url": effective_workspace_url,
             }
             passed, log = runner.run_test(
                 steps=steps,
@@ -1375,6 +1443,75 @@ def _ssh_bootstrap(args: dict) -> dict:
             return _do()
     except (ProxmoxLockTimeout, BlockingIOError):
         return _busy_envelope(vm.vmid)
+
+
+def _server_provision(args: dict) -> dict:
+    """mosdat_server_provision: provision a Rocket.Chat server for a published image ref."""
+    from automation.commands.rc_server import provision_server
+
+    raw = args.get("ref") if isinstance(args, dict) else None
+    ref = raw.strip() if isinstance(raw, str) else raw
+    if not ref:
+        return _envelope(False, error="ref is required", ref="", state="failed")
+
+    result = provision_server(ref, dry_run=False)
+    if result.state == "failed":
+        extra = {}
+        if result.elapsed_ms > 0:
+            extra["elapsed_ms"] = result.elapsed_ms
+        return _envelope(
+            False,
+            error=result.error,
+            ref=result.ref,
+            state="failed",
+            **extra,
+        )
+    return _envelope(
+        True,
+        ref=result.ref,
+        state=result.state,
+        url=result.url,
+        elapsed_ms=result.elapsed_ms,
+    )
+
+
+def _server_teardown(args: dict) -> dict:
+    """mosdat_server_teardown: stop and remove a provisioned server instance."""
+    from automation.commands.rc_server import teardown_server
+
+    raw = args.get("ref") if isinstance(args, dict) else None
+    ref = raw.strip() if isinstance(raw, str) else raw
+    if not ref:
+        return _envelope(False, error="ref is required", ref="", torn_down=False)
+
+    result = teardown_server(ref)
+    if result.error:
+        return _envelope(
+            False, error=result.error, ref=result.ref, torn_down=result.torn_down
+        )
+    return _envelope(True, ref=result.ref, torn_down=result.torn_down)
+
+
+def _server_list(args: Optional[dict] = None) -> dict:
+    """mosdat_server_list: discover currently managed server instances."""
+    from automation.commands.rc_server import DAEMON_ERROR, list_instances
+
+    try:
+        instances = list_instances()
+    except RuntimeError as e:
+        return _envelope(False, error=str(e) or DAEMON_ERROR, instances=[])
+    return _envelope(
+        True,
+        instances=[
+            {
+                "ref": inst.ref,
+                "state": inst.state,
+                "url": inst.url,
+                "elapsed_ms": inst.elapsed_ms,
+            }
+            for inst in instances
+        ],
+    )
 
 
 def _ssh_tool(req: Request, vm_name: str, command: str, timeout: int = 30, *, jsonrpc_result) -> str:

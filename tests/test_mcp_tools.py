@@ -37,6 +37,7 @@ from automation.mcp_tools import (  # noqa: E402
     _busy_envelope,
     _deploy,
     _envelope,
+    _invoke_functional_runner,
     _list_scenarios,
     _list_vms,
     _readiness,
@@ -544,6 +545,99 @@ def test_run_functional_test_fail_is_not_env_not_ready(
     assert result["ok"] is True
     assert result["verdict"] == "fail"
     assert not result.get("env_not_ready")
+
+
+# ---------------------------------------------------------------------------
+# T013/T014 — mosdat_run_functional server_url override (002 US2)
+# ---------------------------------------------------------------------------
+
+
+def test_run_functional_tool_definition_has_server_url_field():
+    """T013: TOOL_DEFINITIONS advertises the new optional server_url field."""
+    tool = next(t for t in TOOL_DEFINITIONS if t["name"] == "mosdat_run_functional")
+    props = tool["inputSchema"]["properties"]
+    assert "server_url" in props
+    assert props["server_url"]["type"] == "string"
+    assert "server_url" not in tool["inputSchema"].get("required", [])
+
+
+@pytest.fixture
+def mock_invoke_functional_deps(monkeypatch):
+    """Mock every I/O dependency of ``_invoke_functional_runner`` (VNC/SSH/VLM/
+    Proxmox/atspi/uia) and record the ``load_test_yaml``/``run_test`` calls so
+    tests can assert on the ``cli_vars``/``vars_`` threaded through.
+    """
+    load_test_yaml_calls: list[dict] = []
+    run_test_calls: list[dict] = []
+
+    def fake_load_test_yaml(path, cfg, **kwargs):
+        load_test_yaml_calls.append(kwargs)
+        return ("fake-scenario", [], {}, {})
+
+    class FakeVncClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeRunner:
+        def __init__(self, **kw):
+            pass
+
+        def run_test(self, **kw):
+            run_test_calls.append(kw)
+            return True, "PASS: 0 steps"
+
+    monkeypatch.setattr("automation.runners.scenario_loader.load_test_yaml", fake_load_test_yaml)
+    monkeypatch.setattr("automation.runners.functional.FunctionalRunner", FakeRunner)
+    monkeypatch.setattr("automation.transport.vnc.VncClient", FakeVncClient)
+    monkeypatch.setattr("automation.transport.ssh.SSHClient", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr("automation.vlm.client.VLMClient", lambda **kw: MagicMock())
+    monkeypatch.setattr("automation.vlm.input.InputInjector", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr("automation.vlm.screenshot.Screenshotter", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr("automation.proxmox.api.ProxmoxAPI", lambda cfg: MagicMock())
+    monkeypatch.setattr("automation.atspi.AtspiClient", lambda **kw: MagicMock())
+    monkeypatch.setattr("automation.uia.UiaClient", lambda **kw: MagicMock())
+    monkeypatch.setattr("automation.mcp_tools._probe_vlm_degraded", lambda vlm: [])
+
+    return {"load_test_yaml_calls": load_test_yaml_calls, "run_test_calls": run_test_calls}
+
+
+def test_invoke_functional_runner_threads_server_url_override(
+    mock_registry, mock_invoke_functional_deps, tmp_path
+):
+    """T014: an explicit server_url overrides workspace_url for both the
+    double-brace (cli_vars) and single-brace (vars_) templating paths."""
+    vm = _make_vm()
+    override = "http://192.168.13.20:54217"
+    _invoke_functional_runner(vm, mock_registry, tmp_path / "scenario.yaml", {"server_url": override})
+
+    load_calls = mock_invoke_functional_deps["load_test_yaml_calls"]
+    assert load_calls[0]["cli_vars"] == {"workspace_url": override}
+
+    run_calls = mock_invoke_functional_deps["run_test_calls"]
+    assert run_calls[0]["vars"]["workspace_url"] == override
+
+
+def test_invoke_functional_runner_defaults_workspace_url_from_config(
+    mock_registry, mock_invoke_functional_deps, tmp_path
+):
+    """T014: omitting server_url keeps existing behavior, but now vars_ always
+    carries workspace_url from config (fixing the pre-existing bug where
+    single-brace scenarios saw the literal '{workspace_url}' placeholder)."""
+    mock_registry.functional.workspace_url = "https://configured.example.com"
+    vm = _make_vm()
+    _invoke_functional_runner(vm, mock_registry, tmp_path / "scenario.yaml", {})
+
+    load_calls = mock_invoke_functional_deps["load_test_yaml_calls"]
+    assert "cli_vars" not in load_calls[0]
+
+    run_calls = mock_invoke_functional_deps["run_test_calls"]
+    assert run_calls[0]["vars"]["workspace_url"] == "https://configured.example.com"
 
 
 # ---------------------------------------------------------------------------
