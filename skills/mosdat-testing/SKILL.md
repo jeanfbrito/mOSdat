@@ -47,9 +47,13 @@ authorized yet, stale toolchain, wrong build already installed).
 Builds and runs are genuinely slow: a Linux `.deb` build is a few minutes, a
 Windows `.exe` build (now built natively on the VM, not cross-compiled) can take
 ~5-10 minutes, and a VLM-driven scenario run is tens of seconds to a couple of
-minutes. Run these in the background / don't block the conversation waiting —
-poll or check back rather than sitting on a single long foreground call if your
-environment supports background execution.
+minutes. `mosdat_server_provision`'s *first* call for a given `ref` is also a
+single blocking call (no separate status-check tool) — typically ready in
+30-90s, but can take up to its `timeout` (default 180s) on a cold image pull;
+re-invoking for a `ref` that's already up/starting returns immediately instead
+of provisioning again. Run these in the background / don't block the
+conversation waiting — poll or check back rather than sitting on a single long
+foreground call if your environment supports background execution.
 
 ## Reading the result — this is the part that actually matters
 
@@ -122,3 +126,9 @@ assume the VM is broken.
   a specific code change actually made it into the build under test — pass a
   string that should appear in the built app if (and only if) the PR's change is
   present, when the user wants proof beyond "the PR number matched."
+- **`mosdat_server_provision` needs Docker running on the mosdat host** (not a
+  VM) — `ok: false` with an error naming the Docker daemon means Docker Desktop
+  itself isn't running there, not a problem with the `ref`. A `ref` with no
+  published server image (e.g. a fork PR) fails by name with no fallback —
+  don't retry with a different `ref` guessing it'll work, that's the correct,
+  final answer for that PR.
