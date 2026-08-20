@@ -301,6 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
     from automation.commands.build import add_build_subparser
     add_build_subparser(sub)
 
+    # mosdat ssh-bootstrap  (Windows VNC key install)
+    from automation.commands.ssh_bootstrap import add_ssh_bootstrap_subparser
+    add_ssh_bootstrap_subparser(sub)
+
     # mosdat author
     _add_author_subparser(sub)
 

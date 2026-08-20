@@ -642,6 +642,7 @@ def main() -> int:
     from automation.commands.preflight import run_preflight
     from automation.commands.replay import run_replay
     from automation.commands.build import run_build
+    from automation.commands.ssh_bootstrap import run_ssh_bootstrap
     from automation.commands.doctor import run_doctor
     from automation.commands.recipes import run_recipes
     from automation.commands.routines import run_routines
@@ -681,6 +682,7 @@ def main() -> int:
         "preflight": cmd_preflight,
         "replay": run_replay,
         "build": run_build,
+        "ssh-bootstrap": run_ssh_bootstrap,
         "doctor": run_doctor,
         "vlm-cache": cmd_vlm_cache,
         "recipes": run_recipes,

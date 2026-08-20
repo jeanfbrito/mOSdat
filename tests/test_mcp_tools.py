@@ -43,6 +43,7 @@ from automation.mcp_tools import (  # noqa: E402
     _resolve_scenario,
     _resolve_vm,
     _run_functional,
+    _ssh_bootstrap,
     _vm_busy,
 )
 
@@ -680,6 +681,28 @@ def test_readiness_unknown_vm_lists_alternatives(mock_registry):
     assert "ubuntu2404" in result["error"]
 
 
+def test_readiness_windows_ssh_fail_hints_bootstrap(mock_registry, mock_doctor_ready, monkeypatch):
+    from automation.commands.doctor import CheckResult
+
+    win = _make_vm("windows10", 104, "windows")
+    mock_registry.vm_by_name["windows10"] = win
+    mock_registry.vms.append(win)
+    monkeypatch.setattr(
+        "automation.commands.doctor.check_ssh",
+        lambda ssh: CheckResult("SSH reachable", "FAIL", "Permission denied"),
+    )
+    result = _readiness({"vm": "windows10"})
+    assert result["ok"] is True
+    assert result["ready"] is False
+    ssh_check = next(c for c in result["checks"] if c["label"] == "ssh_reachable")
+    assert ssh_check["status"] == "FAIL"
+    assert "mosdat_ssh_bootstrap" in ssh_check["detail"]
+    linux = _readiness({"vm": "ubuntu2404"})
+    linux_ssh = next(c for c in linux["checks"] if c["label"] == "ssh_reachable")
+    assert linux_ssh["status"] == "FAIL"
+    assert "mosdat_ssh_bootstrap" not in linux_ssh["detail"]
+
+
 # ---------------------------------------------------------------------------
 # T023 — discovery tools envelope
 # ---------------------------------------------------------------------------
@@ -749,6 +772,71 @@ def test_list_scenarios_unknown_platform():
     assert "amiga" in result["error"]
     assert "linux" in result["error"]
     assert result["scenarios"] == []
+
+
+# ---------------------------------------------------------------------------
+# mosdat_ssh_bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_ssh_bootstrap_registered_in_tool_definitions_and_dispatch():
+    names = [t["name"] for t in TOOL_DEFINITIONS]
+    assert "mosdat_ssh_bootstrap" in names
+    import inspect
+
+    from automation import mcp_server
+
+    src = inspect.getsource(mcp_server.handle_tools_call)
+    assert "mosdat_ssh_bootstrap" in src
+    assert "_ssh_bootstrap" in src
+
+
+def test_ssh_bootstrap_unknown_vm_lists_alternatives(mock_registry, monkeypatch):
+    boot = MagicMock()
+    monkeypatch.setattr(
+        "automation.commands.ssh_bootstrap.bootstrap_windows_ssh", boot,
+    )
+    result = _ssh_bootstrap({"vm": "missing-vm"})
+    assert result["ok"] is False
+    assert "missing-vm" in result["error"]
+    assert "ubuntu2404" in result["error"]
+    boot.assert_not_called()
+
+
+def test_ssh_bootstrap_rejects_non_windows(mock_registry, monkeypatch):
+    boot = MagicMock()
+    monkeypatch.setattr(
+        "automation.commands.ssh_bootstrap.bootstrap_windows_ssh", boot,
+    )
+    result = _ssh_bootstrap({"vm": "ubuntu2404"})
+    assert result["ok"] is False
+    assert "non-Windows" in result["error"]
+    boot.assert_not_called()
+
+
+def test_ssh_bootstrap_lock_rejection(mock_registry, monkeypatch, tmp_path):
+    from automation.proxmox.gpu import ProxmoxLockTimeout
+
+    win = _make_vm("windows10", 104, "windows")
+    mock_registry.vm_by_name["windows10"] = win
+    mock_registry.vms.append(win)
+    pub = tmp_path / "id_ed25519.pub"
+    pub.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake test@host\n")
+
+    @contextmanager
+    def _busy(vmid, timeout=300):
+        raise ProxmoxLockTimeout("held")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("automation.proxmox.vm._vm_lock", _busy)
+    boot = MagicMock()
+    monkeypatch.setattr(
+        "automation.commands.ssh_bootstrap.bootstrap_windows_ssh", boot,
+    )
+    result = _ssh_bootstrap({"vm": "windows10", "pubkey_path": str(pub)})
+    assert result["ok"] is False
+    assert result["error"] == "vm busy: 104 held by another operation"
+    boot.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

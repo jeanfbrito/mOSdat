@@ -1,11 +1,11 @@
 usage: mosdat [-h]
-              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
+              {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,ssh-bootstrap,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
               ...
 
 mOSdat - Multi-OS Desktop App Testing with GPU passthrough
 
 positional arguments:
-  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
+  {run,test,functional,confirm,validate,list-vms,report,dashboard,live,build,ssh-bootstrap,author,draft,preflight,replay,vlm-cache,lint,trace,atspi-dump,doctor,visual,recipes,routines}
     run                 Full test matrix run
     test                Quick test with pre-built package
     functional          Run VLM functional UI tests
@@ -21,6 +21,8 @@ positional arguments:
                         in real time
     build               I3: clone a PR, build the Electron app, deploy +
                         verify on VMs
+    ssh-bootstrap       Install this host's SSH public key onto a Windows VM
+                        via the unlocked VNC console
     author              Agent client for the live authoring API
     draft               Generate functional test scenario YAML from change
                         descriptions

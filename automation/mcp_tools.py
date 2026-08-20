@@ -584,6 +584,31 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "mosdat_ssh_bootstrap",
+        "description": (
+            "Install this host's SSH public key onto a Windows VM whose "
+            "console is unlocked but SSH is not yet authorized. Drives the "
+            "Proxmox VNC console with VLM localize/verify (no hardcoded "
+            "coordinates). No-ops if SSH already works; aborts on a "
+            "lock/sign-in screen. Windows VMs only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "vm": {"type": "string", "description": "VM name (must be os_type=windows)"},
+                "vm_name": {"type": "string", "description": "VM name (alias of vm)"},
+                "pubkey_path": {
+                    "type": "string",
+                    "description": (
+                        "Path to an SSH public key (default: ~/.ssh/id_ed25519.pub, "
+                        "falling back to ~/.ssh/id_rsa.pub)"
+                    ),
+                },
+            },
+            "required": ["vm"],
+        },
+    },
+    {
         "name": "mosdat_ssh",
         "description": "Run an arbitrary shell command on a VM",
         "inputSchema": {
@@ -1234,7 +1259,14 @@ def _readiness(args: dict) -> dict:
 
     ssh = _ssh_client(vm)
     ssh_res = check_ssh(ssh)
-    checks.append(_check_item("ssh_reachable", ssh_res.status, ssh_res.detail))
+    ssh_detail = ssh_res.detail
+    if ssh_res.status == "FAIL" and getattr(vm, "os_type", "linux") == "windows":
+        hint = (
+            "next step: mosdat_ssh_bootstrap (install this host's SSH "
+            "public key via the unlocked VM console)"
+        )
+        ssh_detail = f"{ssh_detail} — {hint}" if ssh_detail else hint
+    checks.append(_check_item("ssh_reachable", ssh_res.status, ssh_detail))
     reachable = ssh_res.status == "PASS"
 
     if reachable:
@@ -1278,6 +1310,71 @@ def _readiness(args: dict) -> dict:
         },
         checks=checks,
     )
+
+
+def _ssh_bootstrap(args: dict) -> dict:
+    """mosdat_ssh_bootstrap: VNC-console SSH key install on a Windows VM."""
+    from automation.commands.ssh_bootstrap import bootstrap_windows_ssh, read_pubkey
+    from automation.proxmox.gpu import ProxmoxLockTimeout
+
+    vm_name = args.get("vm") or args.get("vm_name")
+    vm, err = _resolve_vm(vm_name)
+    if err:
+        return err
+
+    os_type = getattr(vm, "os_type", "linux")
+    if os_type != "windows":
+        return _envelope(
+            False,
+            error=(
+                "ssh-bootstrap is not supported for non-Windows VMs "
+                f"(os_type={os_type!r})"
+            ),
+        )
+
+    try:
+        pubkey = read_pubkey(args.get("pubkey_path"))
+    except (OSError, ValueError) as e:
+        return _envelope(False, error=str(e))
+
+    cfg = _config()
+
+    def _do() -> dict:
+        from automation.proxmox.api import ProxmoxAPI
+        from automation.vlm.client import VLMClient
+
+        proxmox = ProxmoxAPI(cfg.proxmox)
+        vlm_cfg = cfg.vlm
+        vlm = VLMClient(
+            base_url=vlm_cfg.base_url,
+            model=vlm_cfg.model,
+            verify_model=getattr(vlm_cfg, "verify_model", None) or None,
+            api_key=getattr(vlm_cfg, "api_key", "") or "",
+            max_tokens_floor=getattr(vlm_cfg, "max_tokens_floor", 0) or 0,
+        )
+        result = bootstrap_windows_ssh(
+            vm.name,
+            vm.ip,
+            vm.user or "root",
+            int(vm.vmid),
+            proxmox,
+            vlm,
+            pubkey,
+            dry_run=False,
+        )
+        return _envelope(
+            result.ok,
+            error=result.error or None,
+            already_working=result.already_working,
+            steps=result.steps,
+            vm=vm.name,
+        )
+
+    try:
+        with _nonblocking_vm_lock(vm.vmid):
+            return _do()
+    except (ProxmoxLockTimeout, BlockingIOError):
+        return _busy_envelope(vm.vmid)
 
 
 def _ssh_tool(req: Request, vm_name: str, command: str, timeout: int = 30, *, jsonrpc_result) -> str:
