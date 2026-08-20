@@ -96,6 +96,7 @@ assume the VM is broken.
 | `mosdat_run_smoke` | `vm_name`, `timeout?` | Cheap launch + basic UI check, no full scenario |
 | `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | `vm_name` | Proxmox VM power control/status |
 | `mosdat_ssh` | `vm_name`, `command` | Arbitrary shell command on a VM — escape hatch, not the normal path |
+| `mosdat_ssh_bootstrap` | `vm`, `pubkey_path?` | Windows only. If `mosdat_readiness`/any tool reports SSH unreachable on a Windows VM, call this before troubleshooting further — it installs this host's key via the VNC console (no password needed, as long as the desktop is unlocked) and no-ops if SSH already works |
 
 ## Platform notes
 
@@ -105,6 +106,11 @@ assume the VM is broken.
   being built — that's a VM environment issue to flag to the user, not a code
   problem, and not something to silently "fix" by upgrading system software on
   someone's VM without saying so.
+- **Windows SSH not authorized yet**: don't hand-roll a fix — call
+  `mosdat_ssh_bootstrap({vm})`. It only proceeds if the VM's desktop is unlocked
+  (aborts on a lock/sign-in screen rather than guessing) and is a no-op if SSH
+  already works, so it's safe to call speculatively whenever readiness reports
+  SSH down on a Windows VM.
 - **PR number**: if working inside the Rocket.Chat.Electron repo and the user
   says "this PR"/"my change" without a number, check the current branch/PR via
   `gh pr view` rather than asking — but still confirm the target VM.
