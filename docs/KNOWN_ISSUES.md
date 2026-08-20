@@ -209,6 +209,31 @@
 - **Fix (non-admin account)**: the normal per-user path works —
   `Add-Content -Force -Path "$env:USERPROFILE\.ssh\authorized_keys" -Value $key` (no
   `administrators_authorized_keys`, no `icacls` ACL step needed).
+- **Fix (no password known, but the VM has an active unlocked desktop session)**: skip SSH
+  entirely and drive the Proxmox VNC console directly — mosdat already has this
+  (`automation.transport.vnc.VncClient`, the same primitive the functional test runner uses).
+  Take a screenshot first (`vnc.capture()`) to confirm the desktop is actually unlocked, not
+  a login/lock screen (if it's locked, you're back to needing the password). Then:
+  ```python
+  from automation.mcp_tools import _config
+  from automation.proxmox.api import ProxmoxAPI
+  from automation.transport.vnc import VncClient
+  cfg = _config()
+  with VncClient(ProxmoxAPI(cfg.proxmox), vmid=<vmid>) as vnc:
+      vnc.click(<search-box-x>, <search-box-y>)   # from the screenshot
+      vnc.type_text("powershell")
+      # click "Run as administrator" in the search result details pane, then
+      # click "Yes" on the UAC prompt (screenshot each step — coordinates
+      # depend on what's actually rendered, don't assume fixed positions)
+      vnc.type_text("$key = '<pubkey>'"); vnc.key("enter")
+      vnc.type_text('Add-Content -Force -Path "$env:ProgramData\\ssh\\administrators_authorized_keys" -Value $key'); vnc.key("enter")
+      vnc.type_text('icacls.exe "$env:ProgramData\\ssh\\administrators_authorized_keys" /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"'); vnc.key("enter")
+  ```
+  Type the raw commands (not a base64 blob) — there's no SSH-shell-quoting problem over VNC,
+  only keystroke-injection reliability, so shorter/readable commands are easier to verify
+  from a screenshot. An elevated ("Run as administrator") shell is required — a normal
+  Start-menu-launched PowerShell runs with a UAC-filtered token even for an Administrators-
+  group account and silently can't write to `%ProgramData%\ssh\`.
 - **Where the VM password comes from**: `MOSDAT_VM_PASSWORD`/`DEFAULT_VM_PASSWORD` (see
   `.env`) are scenario template variables (`{{ vm_password }}`) for typing a password into
   an on-screen login step — they are NOT read by `SSHClient` (`automation/transport/ssh.py`)
@@ -222,7 +247,9 @@
   the "too many authentication failures" variant even once the right key IS installed
   server-side, if `IdentitiesOnly=yes` isn't set for that host.
 - **Ref**: Discovered getting `windows10` (192.168.13.87, PR #3464 live validation) working
-  under a fresh SSH client environment, 2026-08-19.
+  under a fresh SSH client environment, 2026-08-19. Recurred on `windows11`
+  (192.168.13.86) the next day with a different, unknown password — fixed via the
+  VNC-console path above since that VM's desktop session was already unlocked.
 
 ## Issue 3308: screen-share picker IS reproducible on first launch (clean install)
 
