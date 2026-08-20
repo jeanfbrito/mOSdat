@@ -694,6 +694,7 @@ def _call_run_build(ns):
     captured: list = []
     orig_linux = build_mod.deploy_to_vm
     orig_win = build_mod.deploy_to_windows_vm
+    orig_win_remote = build_mod.build_on_windows_vm
 
     def _wrap(orig):
         def _inner(*a, **k):
@@ -705,11 +706,13 @@ def _call_run_build(ns):
 
     build_mod.deploy_to_vm = _wrap(orig_linux)
     build_mod.deploy_to_windows_vm = _wrap(orig_win)
+    build_mod.build_on_windows_vm = _wrap(orig_win_remote)
     try:
         rc = build_mod.run_build(ns)
     finally:
         build_mod.deploy_to_vm = orig_linux
         build_mod.deploy_to_windows_vm = orig_win
+        build_mod.build_on_windows_vm = orig_win_remote
     return rc, captured
 
 

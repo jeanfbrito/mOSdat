@@ -273,6 +273,39 @@ def test_build_success_with_deploy(mock_registry, mock_run_build):
     assert result["deploy"]["install_ok"] is True
 
 
+def test_build_captures_build_on_windows_vm_result(monkeypatch):
+    """Regression: _call_run_build's monkey-patch must also wrap
+    build_on_windows_vm, not just deploy_to_vm/deploy_to_windows_vm — found
+    live running mosdat_build against a real Windows VM, where the captured
+    DeployResult was silently dropped and installed_version came back empty
+    despite a successful install.
+    """
+    from automation.commands import build as build_mod
+
+    fake_vms = {"windows10": _make_vm("windows10", 104, "windows")}
+    cfg = SimpleNamespace(vm_by_name=fake_vms, vms=list(fake_vms.values()))
+    monkeypatch.setattr("automation.mcp_tools._config", lambda: cfg)
+
+    sentinel = build_mod.DeployResult(
+        vm="windows10", scp_ok=True, install_ok=True,
+        installed_version="4.17.0-alpha.1",
+    )
+
+    def fake_run_build(ns):
+        build_mod.build_on_windows_vm(
+            "windows10", "192.168.13.87", "jean", ns.pr, ns.repo,
+            build_mod.TARGETS["exe"], [], dry_run=False,
+        )
+        return 0
+
+    monkeypatch.setattr(build_mod, "build_on_windows_vm", lambda *a, **k: sentinel)
+    monkeypatch.setattr(build_mod, "run_build", fake_run_build)
+
+    result = _build({"pr": 3464, "target": "exe", "deploy_to": "windows10"})
+    assert result["ok"] is True
+    assert result["deploy"]["installed_version"] == "4.17.0-alpha.1"
+
+
 def test_build_unknown_vm_lists_alternatives(mock_registry, mock_run_build):
     result = _build({"pr": 1, "target": "deb", "deploy_to": "missing-vm"})
     assert result["ok"] is False
