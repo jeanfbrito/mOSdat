@@ -6,7 +6,11 @@
 
 Before testing a VM, ensure:
 
-1. **SSH key access**: `ssh-copy-id <vm-user>@<VM_IP>` (password: use your local secret store)
+1. **SSH key access**: `ssh-copy-id <vm-user>@<VM_IP>` (password: use your local secret store).
+   **Windows VMs**: `ssh-copy-id` does NOT work against Windows OpenSSH Server — it ships a
+   POSIX `sh -c` script the Windows shell can't run. See
+   [KNOWN_ISSUES.md](../KNOWN_ISSUES.md#windows-ssh-copy-id-fails-manual-key-install-required)
+   for the manual fix.
 2. **Passwordless sudo**: `echo "jean ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/jean`
 3. **Test dependencies**: `Xvfb`, `weston` installed
    - Fedora: `sudo dnf install -y xorg-x11-server-Xvfb weston`

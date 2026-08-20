@@ -90,6 +90,113 @@
   Any Win11 scenario that launches a GUI app must kill these processes first.
 - **Ref**: Discovered during H1.1 windows11 smoke iteration (iter 1-3).
 
+## Windows VMs: stale Node.js breaks Electron builds run natively on the VM (ERR_REQUIRE_ESM)
+
+- **Status**: Fixed on `windows10` by upgrading Node; other Windows VMs (`windows11`) may
+  have the same stale version and need the same fix the first time a native on-VM build is
+  attempted.
+- **Issue**: `windows10` shipped with Node v20.18.1. Rocket.Chat.Electron's current
+  `package.json` requires `"engines": {"node": ">=24.11.1"}` and pins `packageManager`
+  to `yarn@4.6.0` via corepack. Running `yarn build` under Node 20 fails during Electron's
+  postinstall with:
+  ```
+  Error [ERR_REQUIRE_ESM]: require() of ES Module .../node_modules/electron/node_modules/@electron/get/dist/index.js
+  from .../node_modules/electron/install.js not supported.
+  ```
+  Because `$ErrorActionPreference = "Stop"` in a PowerShell script does **not** stop on a
+  non-PowerShell process's non-zero exit code, the script kept going to
+  `electron-builder`, which then failed differently and more confusingly: the asar it
+  packaged was missing `app/main.js` (`Application entry file "app\main.js" ... was not
+  found in this archive`) — a downstream symptom of the incomplete `yarn build`, not a
+  separate root cause. Always check `$LASTEXITCODE` after each `yarn`/external-process
+  call in a build script, don't rely on `$ErrorActionPreference` alone.
+- **Fix — upgrade Node** (no `winget`/`nvm-windows` needed; direct MSI works):
+  ```powershell
+  Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.19.0/node-v24.19.0-x64.msi" -OutFile "$env:TEMP\node.msi"
+  Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\node.msi`" /qn /norestart" -Wait
+  ```
+  (`winget` itself failed with "Failed in attempting to update the source" on this VM —
+  don't rely on it; direct nodejs.org MSI download works and needs no source configuration.)
+  Then activate the pinned yarn version via corepack — do NOT rely on whatever `corepack`
+  downloads by default (it silently gave classic Yarn 1.22.22 the first time, not 4.6.0):
+  ```powershell
+  corepack enable
+  corepack prepare yarn@4.6.0 --activate
+  ```
+- **Affects**: Any Windows VM used for a native on-VM build (as opposed to mOSdat's normal
+  build-on-host-then-deploy flow) of a project whose `engines.node` has moved past what
+  was originally imaged onto the VM. Check `node --version` against the target repo's
+  `package.json` `engines` field before starting a native Windows build.
+- **Ref**: Discovered building PR #3464 (`fix/windows-notification-quick-reply`) natively
+  on `windows10` (192.168.13.87) for live validation of the agent-desktop-testing MCP
+  tooling, 2026-08-20.
+
+## Windows: ssh-copy-id fails, manual key install required
+
+- **Status**: Workaround documented; use the commands below.
+- **Issue**: `ssh-copy-id` sends a POSIX `sh -c 'exec sh -c "cd; umask 077; ..."'` script to
+  install the key — Windows OpenSSH Server has no POSIX shell (default shell is
+  `powershell.exe` or `cmd.exe`), so the command fails immediately:
+  `exec : The term 'exec' is not recognized...`. Additionally, if the SSH user is a member
+  of the local `Administrators` group, Windows OpenSSH Server ignores the per-user
+  `~/.ssh/authorized_keys` file entirely and only reads
+  `%ProgramData%\ssh\administrators_authorized_keys` (with strict ACL requirements) — so
+  even manually appending to the per-user file silently does nothing for admin accounts.
+- **Symptom before the fix**: `ssh -i <key> user@winvm` returns
+  `Permission denied (publickey,password,keyboard-interactive)` for a key that "should"
+  work, or — if an `ssh-agent` is running with several unrelated keys loaded and no
+  `Host`-specific stanza exists in `~/.ssh/config` for that VM's IP — the client cycles
+  through every local identity file and the connection is dropped with
+  `Too many authentication failures` before ever reaching the right key or a password
+  prompt.
+- **Diagnose**: confirm which failure mode you're in before fixing anything:
+  ```bash
+  # Does the account name even matter, or is auth itself failing?
+  ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 -o ConnectTimeout=8 \
+    <user>@<VM_IP> echo ok
+  # "Too many authentication failures" (no password prompt reached) → too many local
+  # identities being offered; "Permission denied (publickey,password,...)" cleanly →
+  # this specific key genuinely isn't authorized yet (the real fix below).
+
+  # Is the account a local admin? (changes which authorized_keys file applies)
+  sshpass -p '<password>' ssh <user>@<VM_IP> "whoami /groups" | grep -i admin
+  ```
+- **Fix (admin account — e.g. `jean` on the mOSdat Windows VMs)**: install the key into
+  `administrators_authorized_keys` with correct ACLs via a base64-encoded PowerShell
+  command (avoids all the SSH→PowerShell quoting problems that break inline `-Command`):
+  ```bash
+  PUBKEY=$(cat ~/.ssh/id_ed25519.pub)
+  cat > /tmp/install-key.ps1 <<EOF
+  \$key = '$PUBKEY'
+  \$path = "\$env:ProgramData\ssh\administrators_authorized_keys"
+  Add-Content -Force -Path \$path -Value \$key
+  icacls.exe \$path /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+  Get-Content \$path
+  EOF
+  ENCODED=$(iconv -f UTF-8 -t UTF-16LE /tmp/install-key.ps1 | base64 | tr -d '\n')
+  sshpass -p '<password>' ssh <user>@<VM_IP> "powershell -NoProfile -EncodedCommand $ENCODED"
+  ```
+  This *appends* to the file — it does not clobber any key already installed by a previous
+  session. Verify: `ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 <user>@<VM_IP> echo ok`
+  should now succeed with no password prompt.
+- **Fix (non-admin account)**: the normal per-user path works —
+  `Add-Content -Force -Path "$env:USERPROFILE\.ssh\authorized_keys" -Value $key` (no
+  `administrators_authorized_keys`, no `icacls` ACL step needed).
+- **Where the VM password comes from**: `MOSDAT_VM_PASSWORD`/`DEFAULT_VM_PASSWORD` (see
+  `.env`) are scenario template variables (`{{ vm_password }}`) for typing a password into
+  an on-screen login step — they are NOT read by `SSHClient` (`automation/transport/ssh.py`)
+  for SSH authentication itself. There is no automated password-based SSH fallback; the
+  VM's actual login password has to come from whoever provisioned it.
+- **Affects**: Any Windows VM (`os_type = "windows"` in the TOML config) the first time you
+  connect from a new host/key, or after a VM is rebuilt from a fresh image/snapshot.
+  `automation/transport/ssh.py`'s `SSHClient` has no `IdentitiesOnly`/`IdentityFile`
+  handling of its own — it inherits whatever the system `ssh` resolves, so a host with many
+  unrelated local keys and no `~/.ssh/config` entry for the VM's IP is more likely to hit
+  the "too many authentication failures" variant even once the right key IS installed
+  server-side, if `IdentitiesOnly=yes` isn't set for that host.
+- **Ref**: Discovered getting `windows10` (192.168.13.87, PR #3464 live validation) working
+  under a fresh SSH client environment, 2026-08-19.
+
 ## Issue 3308: screen-share picker IS reproducible on first launch (clean install)
 
 - **Status**: Confirmed on fedora42 VM via mosdat confirm 3308; tracked upstream in PR #3313.

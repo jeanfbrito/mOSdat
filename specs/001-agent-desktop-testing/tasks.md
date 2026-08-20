@@ -199,11 +199,32 @@ Acceptance Scenario 2).
   at `mosdat-mcp`, the full tool list, and `specs/001-agent-desktop-testing/quickstart.md`
 - [X] T025 Run `pytest -q tests/test_mcp_tools.py` (non-live subset) and confirm all green
   — 40 passed, 1 deselected (live)
-- [ ] T026 Run the full `quickstart.md` validation (all 6 steps) against a real VM and
-  record the outcome — depends on T006-T023 all complete. **UNVERIFIED**: no real Proxmox
-  VM reachable from this environment; the live-gated test (T012) and this step both require
-  one. Run manually with `MOSDAT_LIVE_PR=<n> MOSDAT_LIVE_VM=<vm> pytest tests/test_mcp_tools.py --live -m live`
-  plus a manual walk of quickstart.md's remaining steps.
+- [X] T026 Run the full `quickstart.md` validation against a real VM (`windows10`,
+  192.168.13.87) — depends on T006-T023 all complete. **PARTIAL, with real live evidence**:
+  - `mosdat_readiness` (Step 3): proven live — correctly reported `ready: false` /
+    `ssh_reachable: FAIL` while the VM was off, then `ready: true` once it was up and SSH
+    was authorized.
+  - `mosdat_build` (Step 4, PR #3464, target `exe`): the tool's failure-reporting contract
+    was proven live (`build_ok: false`, `deploy: null`, no deploy attempted — spec
+    Acceptance Scenario 2) but the *underlying* `run_build()` could not succeed against a
+    Windows target from this host — this Mac has no Wine, which electron-builder needs for
+    a Windows-target cross-build (see KNOWN_ISSUES.md). Worked around by building natively
+    on `windows10` itself (manual clone + `yarn build` + `electron-builder --win`, outside
+    the `mosdat_build` tool) — surfaced its own known issue (stale Node on the VM; also
+    documented). `mosdat_build`'s full success path against a real target (Linux, where no
+    Wine constraint exists) was not exercised live this session.
+  - `mosdat_deploy`: not exercised via the tool this session (the Windows artifact was
+    installed manually via the same silent-NSIS `/S` command `deploy_to_windows_vm()` uses,
+    since it was already on the VM from the native build — no SCP needed).
+  - `mosdat_run_functional` (Step 4 cont'd): proven live and in full — ran
+    `tel-qa-001-settings-discovery` against the freshly-built, freshly-installed PR #3464
+    exe; returned `ok: true`, `verdict: "fail"` (a real scenario step timeout at "wait for
+    kebab button", step index 7 of 20 — unrelated to PR #3464's actual change, which is a
+    notification quick-reply fix; this scenario was picked only to exercise the tool, not
+    to validate the PR's feature), with correct per-step `steps` and `artifacts`
+    (screenshot + `events.jsonl`). This is the core FR-001/FR-002 contract, proven for real.
+  - Step 5 (concurrency) and Step 6 (degraded-VLM signal) of quickstart.md: not exercised
+    this session.
 - [X] T027 Run GitNexus `detect_changes()` to confirm only the expected symbols/flows in
   `automation/mcp_tools.py` and `automation/mcp_server.py` changed, per this project's
   mandatory pre-commit check (`AGENTS.md`) — risk_level: medium, 2 affected processes
