@@ -37,7 +37,9 @@ from automation.commands.build import (
     TARGETS,
     _ps_b64,
     _ps_quote,
+    build_on_windows_vm,
     deploy_to_windows_vm,
+    node_satisfies_engines,
     pick_artifact_url,
     resolve_target,
 )
@@ -239,7 +241,7 @@ class _RecordingSSH:
 def _patch_sshclient(monkeypatch, recorder: _RecordingSSH) -> None:
     """Make ``from automation.transport.ssh import SSHClient`` return our recorder.
 
-    The function imports SSHClient lazily inside deploy_to_windows_vm. We
+    deploy_to_windows_vm / build_on_windows_vm import SSHClient lazily. We
     monkeypatch the module attribute that the lazy import resolves to.
     """
     import automation.transport.ssh as ssh_mod
@@ -251,6 +253,15 @@ def _patch_sshclient(monkeypatch, recorder: _RecordingSSH) -> None:
             return recorder
 
     monkeypatch.setattr(ssh_mod, "SSHClient", _Factory())
+
+
+def _decode_ps(cmd: str) -> str:
+    assert cmd.startswith("powershell -NoProfile -EncodedCommand "), cmd
+    return base64.b64decode(cmd.split()[-1]).decode("utf-16-le")
+
+
+def _decoded_scripts(recorder: _RecordingSSH) -> list[str]:
+    return [_decode_ps(c) for c in recorder.run_calls]
 
 
 def test_deploy_to_windows_vm_dry_run_no_ssh(monkeypatch, capsys) -> None:
@@ -406,8 +417,9 @@ def test_deploy_to_windows_vm_path_not_found(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 def test_run_build_dispatches_windows_vm(monkeypatch, capsys, tmp_path) -> None:
-    """When config marks a VM os_type=windows, run_build routes the deploy to
-    deploy_to_windows_vm instead of deploy_to_vm.
+    """When config marks a VM os_type=windows and --target exe, run_build
+    builds on the VM (build_on_windows_vm) instead of cloning locally and
+    SCP-deploying.
     """
     # Stub config loading.
     from dataclasses import dataclass
@@ -429,7 +441,6 @@ def test_run_build_dispatches_windows_vm(monkeypatch, capsys, tmp_path) -> None:
     import automation.config as cfg_mod
     monkeypatch.setattr(cfg_mod, "load_config", _load_cfg, raising=False)
 
-    # Record which deploy function is called.
     called: dict = {}
 
     def _fake_linux_deploy(*a, **kw):
@@ -438,12 +449,28 @@ def test_run_build_dispatches_windows_vm(monkeypatch, capsys, tmp_path) -> None:
         return DeployResult(vm=a[0], scp_ok=True, install_ok=True)
 
     def _fake_windows_deploy(*a, **kw):
-        called["windows"] = (a, kw)
+        raise AssertionError("deploy_to_windows_vm must not run for a Windows-only exe deploy")
+
+    def _fake_build_on_vm(*a, **kw):
+        called["on_vm"] = (a, kw)
         from automation.commands.build import DeployResult
         return DeployResult(vm=a[0], scp_ok=True, install_ok=True, installed_version="4.14.1")
 
+    def _refuse_clone(*a, **kw):
+        raise AssertionError("clone_or_update must not run for a Windows-only exe deploy")
+
+    def _refuse_build(*a, **kw):
+        raise AssertionError("local build() must not run for a Windows-only exe deploy")
+
+    def _refuse_artifact(*a, **kw):
+        raise AssertionError("resolve_artifact must not run for a Windows-only exe deploy")
+
     monkeypatch.setattr(build_mod, "deploy_to_vm", _fake_linux_deploy)
     monkeypatch.setattr(build_mod, "deploy_to_windows_vm", _fake_windows_deploy)
+    monkeypatch.setattr(build_mod, "build_on_windows_vm", _fake_build_on_vm)
+    monkeypatch.setattr(build_mod, "clone_or_update", _refuse_clone)
+    monkeypatch.setattr(build_mod, "build", _refuse_build)
+    monkeypatch.setattr(build_mod, "resolve_artifact", _refuse_artifact)
 
     args = argparse.Namespace(
         pr="3325",
@@ -459,10 +486,9 @@ def test_run_build_dispatches_windows_vm(monkeypatch, capsys, tmp_path) -> None:
 
     rc = build_mod.run_build(args)
     assert rc == 0
-    assert "windows" in called
+    assert "on_vm" in called
     assert "linux" not in called
-    # First positional arg is vm_name.
-    assert called["windows"][0][0] == "windows10"
+    assert called["on_vm"][0][0] == "windows10"
 
 
 def test_run_build_rejects_target_exe_with_linux_vm(monkeypatch, capsys, tmp_path) -> None:
@@ -616,3 +642,248 @@ def test_run_build_local_fallback_uses_yarn_win(monkeypatch, capsys, tmp_path) -
     assert "--publish" in rel
     assert "never" in rel
     assert "--win" in rel
+
+
+# ---------------------------------------------------------------------------
+# node_satisfies_engines — simple >=X.Y.Z parser (no extra dependency)
+# ---------------------------------------------------------------------------
+
+def test_node_satisfies_engines_ge_range() -> None:
+    assert node_satisfies_engines("v24.19.0", ">=24.11.1") is True
+    assert node_satisfies_engines("v24.11.1", ">=24.11.1") is True
+    assert node_satisfies_engines("v24.11.0", ">=24.11.1") is False
+    assert node_satisfies_engines("v20.18.1", ">=24.11.1") is False
+    assert node_satisfies_engines("24.11.1", ">=24.11.1") is True  # no leading v
+    assert node_satisfies_engines("v24.19.0", ">=24") is True
+    assert node_satisfies_engines("", ">=24.11.1") is False  # unparseable installed
+    assert node_satisfies_engines("v24.19.0", "") is True  # no engines → don't block
+    assert node_satisfies_engines("v20.0.0", ">=20 <25") is True  # unknown syntax → don't block
+
+
+# ---------------------------------------------------------------------------
+# build_on_windows_vm — recorded SSHClient
+# ---------------------------------------------------------------------------
+
+_INSPECT_OK = (
+    "PACKAGE_MANAGER=yarn@4.6.0\n"
+    "ENGINES_NODE=>=24.11.1\n"
+    "NODE_VERSION=v24.19.0\n"
+)
+_INSPECT_STALE_NODE = (
+    "PACKAGE_MANAGER=yarn@4.6.0\n"
+    "ENGINES_NODE=>=24.11.1\n"
+    "NODE_VERSION=v20.18.1\n"
+)
+_LOCATE_OK = r"ARTIFACT=C:\mosdat-builds\pr3325\dist\rocketchat-4.14.1-win-x64.exe" + "\n"
+_VERIFY_PATH_OK = (
+    r"INSTALLED_AT=C:\Users\jean\AppData\Local\Programs\rocketchat-desktop\Rocket.Chat.exe"
+    "\nVERSION=4.14.1\n"
+)
+
+
+def _queue_windows_native_build_success(recorder: _RecordingSSH, *, with_symbol: bool) -> None:
+    """Queue SSH responses for the full clone → install → verify happy path."""
+    recorder.queue(0, stdout="CLONE_OK\n")
+    recorder.queue(0, stdout=_INSPECT_OK)
+    recorder.queue(0, stdout="COREPACK_OK\n")
+    recorder.queue(0, stdout="YARN_INSTALL_OK\n")
+    recorder.queue(0, stdout="YARN_BUILD_OK\n")
+    recorder.queue(0, stdout="ELECTRON_BUILDER_OK\n")
+    recorder.queue(0, stdout=_LOCATE_OK)
+    recorder.queue(0, stdout="INSTALL_OK\n")
+    recorder.queue(0, stdout=_VERIFY_PATH_OK)
+    if with_symbol:
+        recorder.queue(0, stdout="COUNT=2\n")
+
+
+def test_build_on_windows_vm_dry_run_no_ssh(monkeypatch) -> None:
+    def _refuse(*a, **kw):
+        raise AssertionError("SSHClient must not be created in dry-run")
+
+    import automation.transport.ssh as ssh_mod
+    monkeypatch.setattr(ssh_mod, "SSHClient", _refuse)
+
+    def _refuse_gh(*a, **kw):
+        raise AssertionError("gh must not run in dry-run")
+
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", _refuse_gh)
+
+    res = build_on_windows_vm(
+        "windows10", "192.168.13.87", "jean",
+        3325, "RocketChat/Rocket.Chat.Electron",
+        resolve_target("exe"), ["myPrSymbol"], dry_run=True,
+    )
+    assert res.scp_ok is True
+    assert res.install_ok is True
+    assert res.installed_version == "(dry-run)"
+    assert res.ok is True
+
+
+def test_build_on_windows_vm_happy_path(monkeypatch) -> None:
+    recorder = _RecordingSSH("192.168.13.87", "jean")
+    _queue_windows_native_build_success(recorder, with_symbol=True)
+    _patch_sshclient(monkeypatch, recorder)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", lambda *a, **kw: "fix/windows-notification-quick-reply")
+
+    res = build_on_windows_vm(
+        "windows10", "192.168.13.87", "jean",
+        3325, "RocketChat/Rocket.Chat.Electron",
+        resolve_target("exe"), ["isTelephonyEnabled"], dry_run=False,
+    )
+
+    scripts = _decoded_scripts(recorder)
+    assert any("Set-ExecutionPolicy" in s and "git clone" in s for s in scripts)
+    clone = next(s for s in scripts if "git clone" in s)
+    assert "--branch 'fix/windows-notification-quick-reply'" in clone
+    assert "--single-branch" in clone
+    assert "--depth 1" in clone
+    assert r"C:\mosdat-builds\pr3325" in clone
+    assert "https://github.com/RocketChat/Rocket.Chat.Electron.git" in clone
+
+    assert any("node --version" in s and "package.json" in s for s in scripts)
+    assert any("corepack prepare 'yarn@4.6.0' --activate" in s for s in scripts)
+
+    install_scripts = [s for s in scripts if "yarn install --frozen-lockfile" in s]
+    build_scripts = [s for s in scripts if "yarn build" in s and "electron-builder" not in s]
+    pack_scripts = [s for s in scripts if "electron-builder" in s]
+    assert len(install_scripts) == 1
+    assert len(build_scripts) == 1
+    assert len(pack_scripts) == 1
+    assert "$LASTEXITCODE" in install_scripts[0]
+    assert "$LASTEXITCODE" in build_scripts[0]
+    assert "$LASTEXITCODE" in pack_scripts[0]
+    assert "--publish never --win --x64" in pack_scripts[0]
+
+    assert any("*-win-x64.exe" in s for s in scripts)
+    assert any("Start-Process" in s and "'/S'" in s for s in scripts)
+    assert any("Select-String" in s and "'isTelephonyEnabled'" in s for s in scripts)
+
+    assert recorder.scp_calls == []
+    assert res.ok is True
+    assert res.scp_ok is True
+    assert res.install_ok is True
+    assert res.installed_version == "4.14.1"
+    assert res.missing_symbols == []
+    assert res.error == ""
+
+
+def test_build_on_windows_vm_node_too_old_skips_yarn(monkeypatch) -> None:
+    recorder = _RecordingSSH("192.168.13.87", "jean")
+    recorder.queue(0, stdout="CLONE_OK\n")
+    recorder.queue(0, stdout=_INSPECT_STALE_NODE)
+    _patch_sshclient(monkeypatch, recorder)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", lambda *a, **kw: "fix/foo")
+
+    res = build_on_windows_vm(
+        "windows10", "192.168.13.87", "jean",
+        3325, "RocketChat/Rocket.Chat.Electron",
+        resolve_target("exe"), [], dry_run=False,
+    )
+
+    scripts = _decoded_scripts(recorder)
+    assert len(scripts) == 2  # clone + inspect; nothing after
+    joined = "\n".join(scripts)
+    assert "yarn install" not in joined
+    assert "electron-builder" not in joined
+    assert "corepack prepare" not in joined
+
+    assert res.ok is False
+    assert res.install_ok is False
+    assert "Node v20.18.1 is older than the required >=24.11.1" in res.error
+    assert "docs/KNOWN_ISSUES.md" in res.error
+    assert "Windows VMs: stale Node.js breaks Electron builds run natively on the VM" in res.error
+
+
+def test_build_on_windows_vm_yarn_build_failure_skips_electron_builder(monkeypatch) -> None:
+    recorder = _RecordingSSH("192.168.13.87", "jean")
+    recorder.queue(0, stdout="CLONE_OK\n")
+    recorder.queue(0, stdout=_INSPECT_OK)
+    recorder.queue(0, stdout="COREPACK_OK\n")
+    recorder.queue(0, stdout="YARN_INSTALL_OK\n")
+    recorder.queue(1, stdout="", stderr="yarn build failed: 1")
+    _patch_sshclient(monkeypatch, recorder)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", lambda *a, **kw: "fix/foo")
+
+    res = build_on_windows_vm(
+        "windows10", "192.168.13.87", "jean",
+        3325, "RocketChat/Rocket.Chat.Electron",
+        resolve_target("exe"), [], dry_run=False,
+    )
+
+    scripts = _decoded_scripts(recorder)
+    assert any("yarn build" in s and "electron-builder" not in s for s in scripts)
+    assert not any("electron-builder" in s for s in scripts)
+    assert "yarn build failed" in res.error
+    assert res.ok is False
+    assert res.scp_ok is False
+
+
+def test_run_build_mixed_windows_linux_keeps_local_build(monkeypatch, tmp_path) -> None:
+    """Mixed --deploy lists stay on the host-side build+SCP path (out of scope)."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _StubVM:
+        name: str
+        ip: str
+        user: str
+        os_type: str
+
+    @dataclass
+    class _StubCfg:
+        vms: list
+
+    def _load_cfg(_path):
+        return _StubCfg(vms=[
+            _StubVM("windows10", "192.168.13.87", "jean", "windows"),
+            _StubVM("ubuntu2204", "192.168.13.10", "jean", "linux"),
+        ])
+
+    import automation.config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "load_config", _load_cfg, raising=False)
+
+    called: dict = {}
+
+    def _fake_clone(*a, **kw):
+        called["clone"] = True
+        return 0
+
+    def _fake_build(*a, **kw):
+        called["build"] = True
+        return 0, Path("/tmp/mosdat-build-3325.log")
+
+    def _fake_on_vm(*a, **kw):
+        raise AssertionError("build_on_windows_vm must not run for mixed deploy lists")
+
+    def _fake_win_deploy(*a, **kw):
+        called["win_deploy"] = True
+        from automation.commands.build import DeployResult
+        return DeployResult(vm=a[0], scp_ok=True, install_ok=True, installed_version="4.14.1")
+
+    fake_exe = tmp_path / "fake.exe"
+    fake_exe.write_bytes(b"MZ")
+
+    monkeypatch.setattr(build_mod, "clone_or_update", _fake_clone)
+    monkeypatch.setattr(build_mod, "build", _fake_build)
+    monkeypatch.setattr(build_mod, "build_on_windows_vm", _fake_on_vm)
+    monkeypatch.setattr(build_mod, "deploy_to_windows_vm", _fake_win_deploy)
+    monkeypatch.setattr(build_mod, "match_artifact", lambda *a, **kw: fake_exe)
+
+    args = argparse.Namespace(
+        pr="3325",
+        repo="RocketChat/Rocket.Chat.Electron",
+        target="exe",
+        clone_dir=str(tmp_path / "clone"),
+        deploy="windows10,ubuntu2204",
+        verify_symbol=[],
+        config=str(tmp_path / "x.toml"),
+        dry_run=False,
+        artifact_first=False,
+    )
+
+    rc = build_mod.run_build(args)
+    # Linux VM is rejected by the --target exe guard → deploy-phase failure.
+    assert rc == 3
+    assert called.get("clone") is True
+    assert called.get("build") is True
+    assert called.get("win_deploy") is True

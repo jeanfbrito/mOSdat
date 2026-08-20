@@ -9,10 +9,12 @@ Design notes:
   under ``/tmp/mosdat-build-<pr>.log`` and print only the tail to avoid flooding
   the agent context.
 - ``--target deb`` is implemented end-to-end on Linux. ``--target exe`` is
-  implemented end-to-end on Windows (Windows VMs reached via OpenSSH; install
-  driven by PowerShell + electron-builder NSIS ``/S`` silent flag).
-  rpm/AppImage paths remain stubbed with TODO comments so the dispatcher
-  table stays cheap to extend.
+  implemented end-to-end on Windows. When every ``--deploy`` VM is Windows,
+  clone+yarn+electron-builder run natively on the VM over SSH (host Wine is
+  not required / not viable on macOS Catalina+). Mixed Linux+Windows deploy
+  lists still build on the host. Install is driven by PowerShell +
+  electron-builder NSIS ``/S`` silent flag. rpm/AppImage paths remain
+  stubbed with TODO comments so the dispatcher table stays cheap to extend.
 - ``--artifact-first`` (default ON): fetch the prebuilt .deb from the S3 URL
   posted by the github-actions bot in PR comments before falling back to local
   yarn build. Requires ``gh`` and ``aria2c`` (or ``curl``) on PATH.
@@ -821,6 +823,155 @@ def _ps_b64(script: str) -> str:
     return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
 
 
+def _ps_run(ssh, script: str, *, timeout: int):
+    """Run ``script`` on ``ssh`` via ``powershell -EncodedCommand``."""
+    return ssh.run(
+        f"powershell -NoProfile -EncodedCommand {_ps_b64(script)}",
+        timeout=timeout,
+    )
+
+
+def _ps_require_last_exit(label: str) -> str:
+    """Fail the PowerShell script when the last native command's exit code is non-zero.
+
+    ``$ErrorActionPreference = 'Stop'`` does NOT stop on a non-PowerShell
+    process's non-zero exit; always check ``$LASTEXITCODE`` after yarn/git/node.
+    """
+    return (
+        "if ($LASTEXITCODE -ne 0) { "
+        f"Write-Error \"{label} failed: $LASTEXITCODE\"; "
+        "exit $LASTEXITCODE "
+        "}"
+    )
+
+
+def _ps_tag(stdout: str, name: str) -> str:
+    """Extract the value of a ``NAME=value`` line from PowerShell stdout."""
+    prefix = name + "="
+    for line in (stdout or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped.split("=", 1)[1].strip()
+    return ""
+
+
+def _windows_build_dir(pr: int) -> str:
+    return rf"C:\mosdat-builds\pr{pr}"
+
+
+def _node_version_tuple(s: str) -> Optional[tuple[int, int, int]]:
+    """Parse ``v24.11.1`` / ``24.11`` / ``24`` into a comparable tuple."""
+    text = (s or "").strip().lstrip("vV")
+    match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0), int(match.group(3) or 0)
+
+
+def node_satisfies_engines(installed: str, engines_node: str) -> bool:
+    """Return True if ``installed`` satisfies a simple ``>=X.Y.Z`` engines.node range.
+
+    Empty engines or unrecognized range syntax are treated as satisfied so a
+    parser gap never blocks a build. A parseable ``>=`` range with an
+    unparseable installed version is *not* satisfied (fail closed on the
+    thing we actually need to compare).
+    """
+    engines_node = (engines_node or "").strip()
+    if not engines_node:
+        return True
+    match = re.match(r"^>=\s*(v?\d+(?:\.\d+){0,2})$", engines_node)
+    if not match:
+        return True
+    required = _node_version_tuple(match.group(1))
+    have = _node_version_tuple(installed)
+    if required is None or have is None:
+        return False
+    return have >= required
+
+
+def _windows_silent_install_script(installer_path: str) -> str:
+    """Kill Rocket.Chat, best-effort uninstall, then NSIS silent install ``/S``."""
+    return (
+        "$ErrorActionPreference = 'Stop';"
+        # Kill — Stop-Process is best-effort; ignore failures (no process running).
+        "Get-Process -Name 'Rocket.Chat','rocketchat-desktop' -ErrorAction SilentlyContinue "
+        "| Stop-Process -Force -ErrorAction SilentlyContinue;"
+        "Start-Sleep -Milliseconds 500;"
+        # Best-effort uninstall via Get-Package (PackageManagement).
+        # We don't fail if Get-Package isn't present (older PowerShell) — NSIS
+        # will overwrite the install in place.
+        "try {"
+        " $pkgs = Get-Package -Name 'Rocket.Chat*' -ErrorAction SilentlyContinue;"
+        " foreach ($p in $pkgs) { Uninstall-Package -Name $p.Name -Force -ErrorAction SilentlyContinue | Out-Null }"
+        "} catch {}"
+        # Silent install. /S is the electron-builder NSIS silent flag.
+        f"$proc = Start-Process -FilePath {_ps_quote(installer_path)} "
+        "-ArgumentList '/S' -Wait -PassThru;"
+        "if ($proc.ExitCode -ne 0) { Write-Error \"installer exit code $($proc.ExitCode)\"; exit 1 };"
+        "Write-Host 'INSTALL_OK'"
+    )
+
+
+def _verify_windows_install(ssh, verify_symbols: list[str]) -> tuple[str, str, list[str]]:
+    """Probe well-known install paths, then grep ``resources\\app.asar`` for symbols.
+
+    Returns ``(installed_at, installed_version, missing_symbols)``.
+    ``installed_at`` is empty when Rocket.Chat.exe could not be located.
+    """
+    candidates_ps = ",".join(_ps_quote(c) for c in _WINDOWS_RC_CANDIDATES)
+    verify_script = (
+        f"$cands = @({candidates_ps});"
+        "foreach ($c in $cands) {"
+        " $resolved = $ExecutionContext.InvokeCommand.ExpandString($c);"
+        " if (Test-Path $resolved) {"
+        "   $v = (Get-Item $resolved).VersionInfo.FileVersion;"
+        "   Write-Host \"INSTALLED_AT=$resolved\";"
+        "   Write-Host \"VERSION=$v\";"
+        "   exit 0"
+        " }"
+        "}"
+        "Write-Error 'NOT_FOUND'; exit 1"
+    )
+    ver_res = _ps_run(ssh, verify_script, timeout=60)
+    if not ver_res.success:
+        return "", "", []
+
+    installed_at = ""
+    installed_version = ""
+    for line in (ver_res.stdout or "").splitlines():
+        if line.startswith("INSTALLED_AT="):
+            installed_at = line.split("=", 1)[1].strip()
+        elif line.startswith("VERSION="):
+            installed_version = line.split("=", 1)[1].strip() or "(unknown)"
+
+    missing: list[str] = []
+    if verify_symbols and installed_at:
+        app_dir_ps = f"Split-Path -Parent {_ps_quote(installed_at)}"
+        for sym in verify_symbols:
+            sym_script = (
+                f"$dir = {app_dir_ps};"
+                "$asar = Join-Path $dir 'resources\\app.asar';"
+                "if (-not (Test-Path $asar)) { Write-Error 'app.asar missing'; exit 2 };"
+                f"$hits = (Select-String -Path $asar -Pattern {_ps_quote(sym)} -SimpleMatch -List "
+                "-ErrorAction SilentlyContinue | Measure-Object).Count;"
+                "Write-Host \"COUNT=$hits\""
+            )
+            sres = _ps_run(ssh, sym_script, timeout=120)
+            count = 0
+            for line in (sres.stdout or "").splitlines():
+                if line.startswith("COUNT="):
+                    try:
+                        count = int(line.split("=", 1)[1].strip())
+                    except ValueError:
+                        count = 0
+            if count <= 0:
+                missing.append(sym)
+            else:
+                _log(f"  verify-symbol {sym}: {count} occurrence(s)")
+
+    return installed_at, installed_version, missing
+
+
 def deploy_to_windows_vm(
     vm_name: str,
     vm_ip: str,
@@ -871,92 +1022,218 @@ def deploy_to_windows_vm(
 
     # Kill any running Rocket.Chat processes (locked files block NSIS install).
     # Then uninstall existing copies (best-effort), then install.
-    install_script = (
-        "$ErrorActionPreference = 'Stop';"
-        # Kill — Stop-Process is best-effort; ignore failures (no process running).
-        "Get-Process -Name 'Rocket.Chat','rocketchat-desktop' -ErrorAction SilentlyContinue "
-        "| Stop-Process -Force -ErrorAction SilentlyContinue;"
-        "Start-Sleep -Milliseconds 500;"
-        # Best-effort uninstall via Get-Package (PackageManagement).
-        # We don't fail if Get-Package isn't present (older PowerShell) — NSIS
-        # will overwrite the install in place.
-        "try {"
-        " $pkgs = Get-Package -Name 'Rocket.Chat*' -ErrorAction SilentlyContinue;"
-        " foreach ($p in $pkgs) { Uninstall-Package -Name $p.Name -Force -ErrorAction SilentlyContinue | Out-Null }"
-        "} catch {}"
-        # Silent install. /S is the electron-builder NSIS silent flag.
-        f"$proc = Start-Process -FilePath {_ps_quote(remote_path)} "
-        "-ArgumentList '/S' -Wait -PassThru;"
-        "if ($proc.ExitCode -ne 0) { Write-Error \"installer exit code $($proc.ExitCode)\"; exit 1 };"
-        "Write-Host 'INSTALL_OK'"
-    )
-    install_cmd = f"powershell -NoProfile -EncodedCommand {_ps_b64(install_script)}"
     _log(f"{vm_name}: install (silent /S, kill+uninstall first)")
-    inst = ssh.run(install_cmd, timeout=600)
+    inst = _ps_run(ssh, _windows_silent_install_script(remote_path), timeout=600)
     res.install_ok = inst.success
     if not res.install_ok:
         res.error = f"install failed (rc={inst.returncode}): {(inst.stderr or inst.stdout).strip()[:300]}"
         return res
 
-    # Verify install — probe candidate paths and read FileVersion.
-    candidates_ps = ",".join(_ps_quote(c) for c in _WINDOWS_RC_CANDIDATES)
-    verify_script = (
-        f"$cands = @({candidates_ps});"
-        "foreach ($c in $cands) {"
-        " $resolved = $ExecutionContext.InvokeCommand.ExpandString($c);"
-        " if (Test-Path $resolved) {"
-        "   $v = (Get-Item $resolved).VersionInfo.FileVersion;"
-        "   Write-Host \"INSTALLED_AT=$resolved\";"
-        "   Write-Host \"VERSION=$v\";"
-        "   exit 0"
-        " }"
-        "}"
-        "Write-Error 'NOT_FOUND'; exit 1"
-    )
-    verify_cmd = f"powershell -NoProfile -EncodedCommand {_ps_b64(verify_script)}"
-    ver_res = ssh.run(verify_cmd, timeout=60)
-    if not ver_res.success:
+    installed_at, installed_version, missing = _verify_windows_install(ssh, verify_symbols)
+    if not installed_at:
         res.error = "could not locate installed Rocket.Chat.exe at any known path"
         return res
+    res.installed_version = installed_version
+    res.missing_symbols = missing
+    _log(f"{vm_name}: installed at = {installed_at}")
+    return res
 
-    installed_at = ""
-    for line in (ver_res.stdout or "").splitlines():
-        if line.startswith("INSTALLED_AT="):
-            installed_at = line.split("=", 1)[1].strip()
-        elif line.startswith("VERSION="):
-            res.installed_version = line.split("=", 1)[1].strip() or "(unknown)"
-    if installed_at:
-        _log(f"{vm_name}: installed at = {installed_at}")
 
-    # Verify symbols by grepping the extracted app.asar.  Windows ships ``tar.exe``
-    # since 1803; we use it to pull app.asar out of the installed app directory
-    # rather than introducing a Node dependency on the VM.  If the asar happens
-    # to live next to Rocket.Chat.exe, ``Select-String`` is plenty.
-    if verify_symbols and installed_at:
-        app_dir_ps = f"Split-Path -Parent {_ps_quote(installed_at)}"
-        for sym in verify_symbols:
-            sym_script = (
-                f"$dir = {app_dir_ps};"
-                "$asar = Join-Path $dir 'resources\\app.asar';"
-                "if (-not (Test-Path $asar)) { Write-Error 'app.asar missing'; exit 2 };"
-                f"$hits = (Select-String -Path $asar -Pattern {_ps_quote(sym)} -SimpleMatch -List "
-                "-ErrorAction SilentlyContinue | Measure-Object).Count;"
-                "Write-Host \"COUNT=$hits\""
+def _windows_yarn_script(workspace: str, command: str, ok_tag: str, fail_label: str) -> str:
+    """Run a yarn/native command in ``workspace``, checking ``$LASTEXITCODE``."""
+    return (
+        "Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force;"
+        f"Set-Location {_ps_quote(workspace)};"
+        f"{command};"
+        f"{_ps_require_last_exit(fail_label)};"
+        f"Write-Host {_ps_quote(ok_tag)}"
+    )
+
+
+def build_on_windows_vm(
+    vm_name: str,
+    vm_ip: str,
+    vm_user: str,
+    pr: int,
+    repo: str,
+    target: BuildTarget,
+    verify_symbols: list[str],
+    *,
+    dry_run: bool,
+) -> DeployResult:
+    """Clone, yarn-build, package, and silent-install a PR natively on a Windows VM.
+
+    Used when ``mosdat build --target exe`` deploys only to Windows VMs. Host-side
+    ``electron-builder --win`` needs Wine (unavailable on modern macOS); building
+    on the VM avoids that. The artifact never leaves the VM, so ``scp_ok`` is
+    marked True once packaging succeeds (nothing was SCP'd).
+    """
+    res = DeployResult(vm=vm_name)
+    workspace = _windows_build_dir(pr)
+
+    if dry_run:
+        _log(f"[dry-run] {vm_name}: resolve PR #{pr} head ref via gh")
+        _log(f"[dry-run] {vm_name}: clone {repo} → {workspace}")
+        _log(
+            f"[dry-run] {vm_name}: corepack + yarn install + yarn build + "
+            "electron-builder --publish never --win --x64"
+        )
+        _log(f"[dry-run] {vm_name}: silent install /S + verify symbols → {verify_symbols}")
+        res.scp_ok = True
+        res.install_ok = True
+        res.installed_version = "(dry-run)"
+        return res
+
+    try:
+        head_ref = gh_pr_head_ref(pr, repo)
+    except Exception as e:
+        res.error = f"could not resolve PR #{pr} head ref: {e}"
+        return res
+    _log(f"{vm_name}: PR #{pr} head branch: {head_ref}")
+
+    from automation.transport.ssh import SSHClient
+
+    ssh = SSHClient(vm_ip, vm_user)
+    _log(f"{vm_name}: native {target.name} build on {vm_ip} ({vm_user})")
+    clone_url = f"https://github.com/{repo}.git"
+
+    clone_script = (
+        "Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force;"
+        "$ErrorActionPreference = 'Stop';"
+        f"$dest = {_ps_quote(workspace)};"
+        "if (Test-Path $dest) { Remove-Item -Recurse -Force $dest };"
+        "New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null;"
+        "git clone --branch "
+        f"{_ps_quote(head_ref)} --single-branch --depth 1 "
+        f"{_ps_quote(clone_url)} $dest;"
+        f"{_ps_require_last_exit('git clone')};"
+        "Write-Host 'CLONE_OK'"
+    )
+    _log(f"{vm_name}: clone {repo}@{head_ref} → {workspace}")
+    clone_res = _ps_run(ssh, clone_script, timeout=300)
+    if not clone_res.success:
+        res.error = (
+            f"clone failed (rc={clone_res.returncode}): "
+            f"{(clone_res.stderr or clone_res.stdout).strip()[:300]}"
+        )
+        return res
+
+    inspect_script = (
+        "$ErrorActionPreference = 'Stop';"
+        f"Set-Location {_ps_quote(workspace)};"
+        "$pkg = Get-Content -Raw 'package.json' | ConvertFrom-Json;"
+        "$pm = '';"
+        "if ($pkg.PSObject.Properties.Name -contains 'packageManager') { "
+        "$pm = [string]$pkg.packageManager };"
+        "$eng = '';"
+        "if ($pkg.engines -and $pkg.engines.node) { $eng = [string]$pkg.engines.node };"
+        "$node = (node --version);"
+        "Write-Host \"PACKAGE_MANAGER=$pm\";"
+        "Write-Host \"ENGINES_NODE=$eng\";"
+        "Write-Host \"NODE_VERSION=$node\""
+    )
+    inspect = _ps_run(ssh, inspect_script, timeout=60)
+    if not inspect.success:
+        res.error = (
+            f"could not read package.json / node --version "
+            f"(rc={inspect.returncode}): {(inspect.stderr or inspect.stdout).strip()[:300]}"
+        )
+        return res
+
+    package_manager = _ps_tag(inspect.stdout, "PACKAGE_MANAGER")
+    engines_node = _ps_tag(inspect.stdout, "ENGINES_NODE")
+    node_ver = _ps_tag(inspect.stdout, "NODE_VERSION")
+    _log(f"{vm_name}: node {node_ver or '(unknown)'} engines.node={engines_node or '(none)'}")
+
+    if engines_node and not node_satisfies_engines(node_ver, engines_node):
+        shown = node_ver or "(unknown)"
+        res.error = (
+            f"{vm_name}: Node {shown} is older than the required {engines_node} — "
+            "upgrade Node on this VM first (see docs/KNOWN_ISSUES.md "
+            "'Windows VMs: stale Node.js breaks Electron builds run natively on the VM')."
+        )
+        _log(f"{vm_name}: ERROR: {res.error}")
+        return res
+
+    if package_manager.startswith("yarn@"):
+        yarn_pin = package_manager  # e.g. yarn@4.6.0
+        corepack_script = (
+            "Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force;"
+            "corepack enable;"
+            f"{_ps_require_last_exit('corepack enable')};"
+            f"corepack prepare {_ps_quote(yarn_pin)} --activate;"
+            f"{_ps_require_last_exit('corepack prepare')};"
+            "Write-Host 'COREPACK_OK'"
+        )
+        _log(f"{vm_name}: corepack prepare {yarn_pin} --activate")
+        corepack = _ps_run(ssh, corepack_script, timeout=120)
+        if not corepack.success:
+            res.error = (
+                f"corepack prepare failed (rc={corepack.returncode}): "
+                f"{(corepack.stderr or corepack.stdout).strip()[:300]}"
             )
-            sym_cmd = f"powershell -NoProfile -EncodedCommand {_ps_b64(sym_script)}"
-            sres = ssh.run(sym_cmd, timeout=120)
-            count = 0
-            for line in (sres.stdout or "").splitlines():
-                if line.startswith("COUNT="):
-                    try:
-                        count = int(line.split("=", 1)[1].strip())
-                    except ValueError:
-                        count = 0
-            if count <= 0:
-                res.missing_symbols.append(sym)
-            else:
-                _log(f"  verify-symbol {sym}: {count} occurrence(s)")
+            return res
 
+    yarn_steps = (
+        ("yarn install --frozen-lockfile", "YARN_INSTALL_OK", "yarn install", 1800),
+        ("yarn build", "YARN_BUILD_OK", "yarn build", 1800),
+        (
+            "yarn electron-builder --publish never --win --x64",
+            "ELECTRON_BUILDER_OK",
+            "electron-builder",
+            1800,
+        ),
+    )
+    for command, ok_tag, fail_label, timeout in yarn_steps:
+        _log(f"{vm_name}: {command}")
+        step = _ps_run(
+            ssh,
+            _windows_yarn_script(workspace, command, ok_tag, fail_label),
+            timeout=timeout,
+        )
+        if not step.success:
+            res.error = (
+                f"{fail_label} failed (rc={step.returncode}): "
+                f"{(step.stderr or step.stdout).strip()[:300]}"
+            )
+            return res
+
+    locate_script = (
+        f"$dist = Join-Path {_ps_quote(workspace)} 'dist';"
+        "$hit = Get-ChildItem -Path $dist -Filter '*-win-x64.exe' "
+        "-ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | "
+        "Select-Object -First 1;"
+        "if (-not $hit) { Write-Error 'no *-win-x64.exe in dist'; exit 1 };"
+        "Write-Host \"ARTIFACT=$($hit.FullName)\""
+    )
+    locate = _ps_run(ssh, locate_script, timeout=60)
+    artifact_path = _ps_tag(locate.stdout, "ARTIFACT") if locate.success else ""
+    if not locate.success or not artifact_path:
+        res.error = (
+            f"no *-win-x64.exe in {workspace}\\dist "
+            f"(rc={locate.returncode}): {(locate.stderr or locate.stdout).strip()[:300]}"
+        )
+        return res
+    _log(f"{vm_name}: artifact {artifact_path}")
+    res.scp_ok = True  # artifact is already on the VM; nothing to SCP
+
+    _log(f"{vm_name}: install (silent /S, kill+uninstall first)")
+    inst = _ps_run(ssh, _windows_silent_install_script(artifact_path), timeout=600)
+    res.install_ok = inst.success
+    if not res.install_ok:
+        res.error = (
+            f"install failed (rc={inst.returncode}): "
+            f"{(inst.stderr or inst.stdout).strip()[:300]}"
+        )
+        return res
+
+    installed_at, installed_version, missing = _verify_windows_install(ssh, verify_symbols)
+    if not installed_at:
+        res.error = "could not locate installed Rocket.Chat.exe at any known path"
+        return res
+    res.installed_version = installed_version
+    res.missing_symbols = missing
+    _log(f"{vm_name}: installed at = {installed_at}")
     return res
 
 
@@ -1052,49 +1329,7 @@ def run_build(args: argparse.Namespace) -> int:
     if dry_run:
         _log("DRY-RUN — no commands will actually mutate state.")
 
-    artifact: Optional[Path] = None
-
-    # Phase 1a: try prebuilt artifact from S3 (if --artifact-first)
-    target_ext_map = {
-        "deb": ".deb",
-        "rpm": ".rpm",
-        "appimage": ".AppImage",
-        "exe": ".exe",
-    }
-    target_ext = target_ext_map.get(target.name)
-    if artifact_first and target_ext is not None:
-        artifact = resolve_artifact(pr, repo, target_ext, dry_run=dry_run)
-        if artifact is not None:
-            _log(f"[artifact-first] using prebuilt artifact — skipping clone+build")
-
-    # Phase 1b: fall back to clone+build
-    if artifact is None:
-        if artifact_first and target_ext is not None:
-            _log("[artifact-first] falling back to local clone+build")
-        rc = clone_or_update(pr, repo, clone_dir, dry_run=dry_run)
-        if rc != 0:
-            _log(f"clone/fetch failed (rc={rc})")
-            return 4
-
-        # Phase 2: build
-        rc, log_path = build(clone_dir, target, pr, dry_run=dry_run)
-        if rc != 0:
-            _log(f"build failed (rc={rc}); see {log_path}")
-            return 2
-
-        # Phase 3: locate artifact
-        dist_dir = clone_dir / "dist"
-        if dry_run:
-            artifact = dist_dir / f"placeholder{target.dist_glob.lstrip('*')}"
-            _log(f"[dry-run] would locate artifact matching {dist_dir}/{target.dist_glob}")
-        else:
-            artifact = match_artifact(dist_dir, target.dist_glob)
-            if not artifact:
-                _log(f"no artifact matching {dist_dir}/{target.dist_glob}")
-                return 2
-            _log(f"artifact: {artifact} ({artifact.stat().st_size // 1024} KiB)")
-
-    # Phase 4: load VM IPs from config if provided; else assume <name>=<name>
+    # Load VM configs before deciding whether a local build is needed.
     # Tuple is (ip, user, os_type). os_type defaults to "linux".
     vm_lookup: dict[str, tuple[str, str, str]] = {}
     if getattr(args, "config", None):
@@ -1105,6 +1340,70 @@ def run_build(args: argparse.Namespace) -> int:
                 vm_lookup[vm.name] = (vm.ip, vm.user, vm.os_type)
         except Exception as e:
             _log(f"WARN: could not load config {args.config}: {e}")
+
+    windows_deploy: list[str] = []
+    other_deploy: list[str] = []
+    for vm_name in deploy_vms:
+        _ip, _user, os_type = vm_lookup.get(vm_name, (vm_name, "root", "linux"))
+        if os_type == "windows":
+            windows_deploy.append(vm_name)
+        else:
+            other_deploy.append(vm_name)
+
+    # Pure Windows --target exe: build on the VM (host Wine cannot package
+    # NSIS on macOS Catalina+). Mixed Windows+Linux --deploy lists keep the
+    # host-side build+SCP path (out of scope).
+    build_on_windows = (
+        target.name == "exe" and bool(windows_deploy) and not other_deploy
+    )
+
+    artifact: Optional[Path] = None
+
+    if build_on_windows:
+        _log(
+            "Windows-only --target exe: clone+build will run on the deploy VM "
+            "(skipping local artifact-first / clone+build)"
+        )
+    else:
+        # Phase 1a: try prebuilt artifact from S3 (if --artifact-first)
+        target_ext_map = {
+            "deb": ".deb",
+            "rpm": ".rpm",
+            "appimage": ".AppImage",
+            "exe": ".exe",
+        }
+        target_ext = target_ext_map.get(target.name)
+        if artifact_first and target_ext is not None:
+            artifact = resolve_artifact(pr, repo, target_ext, dry_run=dry_run)
+            if artifact is not None:
+                _log(f"[artifact-first] using prebuilt artifact — skipping clone+build")
+
+        # Phase 1b: fall back to clone+build
+        if artifact is None:
+            if artifact_first and target_ext is not None:
+                _log("[artifact-first] falling back to local clone+build")
+            rc = clone_or_update(pr, repo, clone_dir, dry_run=dry_run)
+            if rc != 0:
+                _log(f"clone/fetch failed (rc={rc})")
+                return 4
+
+            # Phase 2: build
+            rc, log_path = build(clone_dir, target, pr, dry_run=dry_run)
+            if rc != 0:
+                _log(f"build failed (rc={rc}); see {log_path}")
+                return 2
+
+            # Phase 3: locate artifact
+            dist_dir = clone_dir / "dist"
+            if dry_run:
+                artifact = dist_dir / f"placeholder{target.dist_glob.lstrip('*')}"
+                _log(f"[dry-run] would locate artifact matching {dist_dir}/{target.dist_glob}")
+            else:
+                artifact = match_artifact(dist_dir, target.dist_glob)
+                if not artifact:
+                    _log(f"no artifact matching {dist_dir}/{target.dist_glob}")
+                    return 2
+                _log(f"artifact: {artifact} ({artifact.stat().st_size // 1024} KiB)")
 
     # Phase 5: deploy + verify
     results: list[DeployResult] = []
@@ -1132,9 +1431,14 @@ def run_build(args: argparse.Namespace) -> int:
 
         _log(f"--- deploy → {vm_name} ({ip}, os={os_type}) ---")
         if os_type == "windows":
-            res = deploy_to_windows_vm(
-                vm_name, ip, user, artifact, target, verify_symbols, dry_run=dry_run,
-            )
+            if build_on_windows:
+                res = build_on_windows_vm(
+                    vm_name, ip, user, pr, repo, target, verify_symbols, dry_run=dry_run,
+                )
+            else:
+                res = deploy_to_windows_vm(
+                    vm_name, ip, user, artifact, target, verify_symbols, dry_run=dry_run,
+                )
         else:
             res = deploy_to_vm(
                 vm_name, ip, user, artifact, target, verify_symbols, dry_run=dry_run,
