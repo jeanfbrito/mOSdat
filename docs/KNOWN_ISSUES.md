@@ -160,7 +160,8 @@
 
 ## Windows: ssh-copy-id fails, manual key install required
 
-- **Status**: Workaround documented; use the commands below.
+- **Status**: Automated via `mosdat ssh-bootstrap` / `mosdat_ssh_bootstrap`
+  (VNC+VLM path). The commands below are the underlying procedure.
 - **Issue**: `ssh-copy-id` sends a POSIX `sh -c 'exec sh -c "cd; umask 077; ..."'` script to
   install the key — Windows OpenSSH Server has no POSIX shell (default shell is
   `powershell.exe` or `cmd.exe`), so the command fails immediately:

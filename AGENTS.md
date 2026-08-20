@@ -87,7 +87,7 @@ mOSdat exposes a stdio JSON-RPC MCP server via the `mosdat-mcp` entry point
 the scenario ran and asserted unsuccessfully — never an environment problem
 (`env_not_ready: true` is the discriminator; or call `mosdat_readiness` first).
 
-Tools (11):
+Tools (12):
 
 | Tool | Purpose |
 |------|---------|
@@ -100,6 +100,7 @@ Tools (11):
 | `mosdat_run_smoke` | Launch + basic UI check |
 | `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | Proxmox VM power |
 | `mosdat_ssh` | Run a command on a VM |
+| `mosdat_ssh_bootstrap` | Install this host's SSH public key onto an unlocked Windows VM via VNC |
 
 Walkthrough: [specs/001-agent-desktop-testing/quickstart.md](specs/001-agent-desktop-testing/quickstart.md).
 Full I/O contract: [specs/001-agent-desktop-testing/contracts/mcp-tools.md](specs/001-agent-desktop-testing/contracts/mcp-tools.md).
@@ -112,6 +113,7 @@ Full I/O contract: [specs/001-agent-desktop-testing/contracts/mcp-tools.md](spec
 |------|---------|
 | `automation/main.py` | Python runner — canonical orchestrator |
 | `automation/commands/build.py` | `mosdat build` — clone PR, build .deb, deploy, verify symbols |
+| `automation/commands/ssh_bootstrap.py` | `mosdat ssh-bootstrap` — install this host's SSH key on a Windows VM via VNC |
 | `automation/commands/preflight.py` | `mosdat preflight` — schema + VM deps + symbol grep + dry-run |
 | `automation/commands/replay.py` | `mosdat replay` — re-run VLM against cached screenshots |
 | `automation/commands/doctor.py` | `mosdat doctor` — per-VM connectivity/dependency checklist |
