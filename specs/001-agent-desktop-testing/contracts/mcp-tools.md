@@ -187,3 +187,27 @@ Left as-is; not part of the spec's discovery/readiness/build/run/result surface.
 - **FR-005 invalid combinations**: any tool receiving an unknown `vm`/`scenario`/`target`
   value returns `ok: false` with an `error` string that both names the invalid value and
   lists valid alternatives, before attempting any side-effecting operation.
+
+## Additions from 003 (agent friction fixes)
+
+See `specs/003-agent-friction-fixes/plan.md`. All keep the standard envelope.
+
+- `mosdat_ssh`: `vm_name` is the only required input. One of `command` or
+  `script`. `script` is uploaded and run as a file (`-File` on Windows, `bash`
+  on Linux). `detach: true` returns `pid` and `log_path`. `session: "desktop"`
+  (Windows) runs in the logged-in session through an InteractiveToken task.
+- `mosdat_vm_start`: `wait_ready` (bool), `timeout` (s, default 240). Result
+  adds `ready`, `waited_s`, `detail`.
+- `mosdat_build`: `source` (local dir, Windows `exe` only) makes `pr` optional.
+  `deploy.artifact` = installer path (VM path for a native Windows build).
+- `mosdat_deploy`: exactly one of `artifact_path`, `artifact_on_vm` (Windows),
+  `pr_build` (Windows), `release` (tag). Local artifacts pass
+  `validate_artifact` before upload.
+- `mosdat_readiness`: `checks.disk_c` (Windows, ≥ 8 GB free), `installed`
+  (`found`, `path`, `asar_path`, `version`, `asar_mtime_utc`), `hints` (list of
+  strings) when the VM is unreachable.
+- `mosdat_run_functional`: `scenario` may be a `.yaml` path; `scenario_yaml`
+  (inline text, exclusive with `scenario`). New verdict `unverified` with
+  `unverified_steps` and `screenshots_to_judge` when `vlm_unavailable` and the
+  scenario has VLM steps.
+- `mosdat_ssh_bootstrap`: Linux VMs through the QEMU guest agent.

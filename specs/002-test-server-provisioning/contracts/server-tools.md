@@ -130,3 +130,13 @@ local dev instance). Omit it to keep today's behavior (the config's static
 - **Discovery is Docker-native**: a matching instance is found via its Compose project
   name (`mosdat-rc-<sanitized-ref>`), not a separate state file — restarting the mosdat
   host/process loses no state, since the containers themselves are the source of truth.
+
+## Additions from 003 (agent friction fixes)
+
+- `mosdat_server_provision` starts Docker Desktop when the daemon is down
+  (up to 120 s; opt out with `start_docker: false` / `--no-start-docker`).
+- A non-PR `ref` missing on GHCR falls back to `docker.io/rocketchat/rocket.chat:<ref>`.
+- The `/livez` budget starts after `compose up`. On timeout with a running
+  container, `state` is `starting` with `url`; call again. A dead container
+  gives `failed` with a logs hint.
+- The compose template turns 2FA off (`OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_*`).

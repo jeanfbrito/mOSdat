@@ -158,6 +158,34 @@
   on `windows10` (192.168.13.87) for live validation of the agent-desktop-testing MCP
   tooling, 2026-08-20.
 
+## Windows VMs: git can be completely absent, not just stale
+
+- **Status**: Fixed. `mosdat_build`'s native-Windows clone step now detects a missing
+  `git` upfront and fails immediately with a clear message, instead of letting a
+  truncated CLIXML blob surface as "clone failed".
+- **Issue**: This is distinct from the stale-Node issue above, which assumes `git` and
+  `node` exist but are outdated. On some Windows VMs (confirmed live on `windows11`,
+  vmid 105) `git` is not installed at all. Before the fix, `build_on_windows_vm` ran
+  `git clone` directly under `$ErrorActionPreference = 'Stop'` with no precondition
+  check. A missing `git` makes PowerShell throw a `CommandNotFoundException` — a
+  terminating error that, over the non-interactive `powershell -EncodedCommand`
+  invocation this codebase uses, gets serialized as a CLIXML blob on stderr. The old
+  error-message construction just truncated that blob to 300 chars and prefixed it with
+  "clone failed", giving no indication that the real cause was "git is not installed".
+- **Fix**: `build_on_windows_vm` now runs a lightweight `Get-Command git
+  -ErrorAction SilentlyContinue` precondition check (via the same `_ps_run`/`_ps_quote`
+  convention used elsewhere in `automation/commands/build.py`) before attempting the
+  clone. If git is missing, it returns immediately with: "git is not installed on this
+  VM — cannot clone. Install git first (see docs/KNOWN_ISSUES.md ...)." — no clone
+  attempt, no CLIXML truncation.
+- **Affects**: Any Windows VM used for `mosdat build --target exe` / `mosdat_build`'s
+  native on-VM build path (`automation/commands/build.py::build_on_windows_vm`) that
+  doesn't have git preinstalled. Install git first (e.g. `winget install --id
+  Git.Git -e` or the standalone Git for Windows installer) before running a native
+  build on such a VM.
+- **Ref**: Confirmed live on `windows11` (vmid 105) — git not installed at all,
+  2026-08-19.
+
 ## Windows: ssh-copy-id fails, manual key install required
 
 - **Status**: Automated via `mosdat ssh-bootstrap` / `mosdat_ssh_bootstrap`
@@ -501,6 +529,25 @@
 - **Affects**: `tel-qa-014-negative-cases.yaml` step2 sub-scenario.
 - **Ref**: stack at `/opt/Rocket.Chat/resources/app.asar/app/main.js:6581:26 setupServers → select`. Discovered 2026-05-22 on ubuntu2204@192.168.13.81 (RC 4.14.1 PR build).
 
+## Windows VM scheduled tasks: a one-shot `schtasks` task MUST be deleted after it runs
+- **Status**: Documented pattern — follow it for any new Windows VM-side task scheduling.
+- **Issue**: A hand-rolled one-shot `schtasks` invocation (create → run → forget, without
+  an explicit delete step) left a scheduled task registered on the VM. After a VM reboot,
+  Windows Task Scheduler respawned it before Windows garbage-collected the task, causing
+  an elevated console to pop up unexpectedly post-reboot.
+- **Workaround / required pattern**: Any one-shot `schtasks /Create` MUST be deleted
+  (`schtasks /Delete /F /TN <name>` or equivalent) in the SAME script/routine that created
+  it, after the task has been run — never leave a scheduled task behind, even a supposedly
+  one-shot one. `shared/routines/windows/launch-rocketchat.yaml` and
+  `shared/routines/windows/dispatch-tel-link.yaml` both implement this correctly: create the
+  task, `schtasks /Run`, brief `Start-Sleep`, then `schtasks /Delete /F /TN <name>` — use
+  these as the canonical example for any new Windows VM-side task scheduling.
+- **Affects**: Any script or routine on a Windows VM that uses `schtasks /Create` for a
+  one-shot elevated/InteractiveToken action (e.g. launching a GUI app in the interactive
+  session from an SSH/Session-0 context).
+- **Ref**: Observed after a hand-rolled one-shot `schtasks` invocation respawned an elevated
+  console after a VM reboot, 2026-08-19.
+
 ## Fuselage ToggleSwitch: AT-SPI action_name decoupled from React `checked` state
 - **Status**: Workaround in place (probe-by-modal pattern)
 - **Issue**: The Telephony master toggle (Fuselage `<ToggleSwitch>`) is
@@ -526,3 +573,157 @@
   effects.
 - **Ref**: Discovered during `3325-diagnostics-panel` live-run iteration,
   2026-05-22.
+
+## Windows VMs accumulate default-UI "focus-thief" nags that silently break toast/notification testing
+- **Status**: Fixed via `mosdat vm-hygiene` / `mosdat_vm_hygiene`
+- **Issue**: Default-Windows UI on test VMs breaks VLM-driven toast/notification
+  checks in ways that have nothing to do with the app under test. Four confirmed
+  culprits, all live-verified on real VMs:
+  1. **VM clock/timezone drift** — a VM found sitting at GMT 1AM local time, inside
+     Windows' default Focus Assist "quiet hours" (typically midnight-6am), which
+     suppresses toast banners entirely with no error. A real pass can look like a
+     failure for a reason having nothing to do with the app.
+  2. **OneDrive first-run sign-in nag** — steals focus from the app window,
+     polluting toast-region screenshot checks.
+  3. **"Turn on Windows Backup" toast** (Windows-11-era) — same focus-stealing /
+     screenshot-pollution effect.
+  4. **Taskbar news/weather widget** — a mis-localized click on this widget opened
+     it fullscreen in Edge and killed an entire test run.
+- **Workaround**: `mosdat vm-hygiene <vm>` (CLI) / `mosdat_vm_hygiene` (MCP) checks
+  and idempotently fixes all four: resets the VM clock from this host's own UTC
+  clock (VMs may lack reliable NTP/internet, so this avoids `w32tm` entirely — see
+  `automation/commands/vm_hygiene.py` module docstring for the exact mechanism and
+  registry/scheduled-task values used for the other three items). Already-clean
+  items report `already-ok` and are left untouched. Safe to call speculatively
+  before any toast-sensitive scenario.
+- **Affects**: Any Windows VM used for VLM-driven toast/notification scenarios.
+  `automation/commands/vm_hygiene.py`, `automation/mcp_tools.py` (`_vm_hygiene`),
+  `automation/mcp_server.py` dispatch.
+- **Ref**: Findings from live Windows VM validation, 2026-08-19; fixed 2026-08-21.
+
+## `mosdat vm-hygiene`'s news-widget fix can itself fail with a truncated CLIXML error
+- **Status**: Open — root cause not yet pinned, needs a live repro session
+- **Issue**: Reported live: a VM already had `ShellFeedsTaskbarViewMode=0` (not the
+  required `2`), so `vm_hygiene.py`'s already-ok check correctly determined a fix
+  was needed and proceeded into `_fix_news_widget`'s write step — which then
+  failed with a truncated CLIXML error. The write step already uses this
+  project's documented-safe base64 `-EncodedCommand` pattern, so it's not the
+  classic PowerShell-quoting gotcha. Best guess without live access: the
+  `Stop-Process -Name explorer -Force; ...; Start-Process explorer` restart this
+  fix performs live may itself be emitting a terminating error/warning that gets
+  CLIXML-serialized and truncated by this codebase's 300-char error clamp — not
+  confirmed.
+- **Workaround**: None yet — the other three `vm-hygiene` items (clock, OneDrive,
+  Windows Backup toast) are unaffected; only the taskbar news-widget item is
+  implicated. Re-running `mosdat vm-hygiene <vm>` may or may not succeed on retry.
+- **Affects**: `automation/commands/vm_hygiene.py`'s `_fix_news_widget`.
+- **Ref**: Reported live during CORE-2525 (presence-on-tray) validation, 2026-08-21.
+
+## `mosdat_ssh`: long/blocking commands are a real reliability risk, cause not fully confirmed
+- **Status**: Documented limitation — investigated, not conclusively root-caused
+- **Issue**: A consumer session's MCP client lost all `mosdat_*` tools immediately
+  after a `mosdat_ssh` call that hit its timeout (a 30s in-command `Start-Sleep`
+  exceeded the call's timeout, returning exit_code 124). Investigated the
+  server-side mechanics: `automation/transport/ssh.py`'s `SSHClient.run` uses
+  `subprocess.run(..., timeout=...)`, which on expiry kills and reaps the child
+  cleanly (standard library behavior) and returns a normal `SSHResult` — no
+  exception propagates, no obvious crash path found. However, `mosdat-mcp`
+  (`automation/mcp_server.py`) is a single-threaded, synchronous
+  `for line in sys.stdin:` loop — it can only handle ONE request at a time, and a
+  long-running `mosdat_ssh` call blocks the entire server (all other tools, for
+  any client) for the call's full duration. This architectural fact is confirmed;
+  whether it's sufficient to cause total client-side transport loss (vs. an
+  unrelated client-side hiccup) is NOT confirmed — no live reproduction was
+  attempted.
+- **Workaround**: Keep `mosdat_ssh` commands short (recommended max ~60s); for
+  anything that needs to run longer, background the remote command (e.g.
+  Windows: `Start-Process`, PowerShell scheduled task per the create-run-delete
+  pattern documented above) and poll rather than sleeping in-command. Tool
+  description updated to state this directly.
+- **Affects**: `automation/mcp_tools.py` (`_ssh`/`mosdat_ssh`), `automation/mcp_server.py`.
+- **Ref**: Reported live during CORE-2525 (presence-on-tray) validation, 2026-08-21.
+
+## `automation/setup/inject_config.py`'s declarative config staging is POSIX-only, likely broken on Windows
+- **Status**: Open — gated behind opt-in `--inject-config`/`--inject-servers` flags,
+  not hit by default; not yet fixed
+- **Issue**: `inject_config.py`'s `write_servers_json`/`write_config_json`/
+  `wipe_userdata` all shell out with POSIX-only syntax (`printf '%s\n' '...' >
+  path`, `rm -rf`, `mkdir -p`), and the caller (`automation/main.py`, gated
+  behind `--inject-config`/`--inject-servers`) has no `is_windows` branch at
+  all. On a Windows VM this almost certainly fails outright rather than
+  silently doing nothing — not confirmed live, since no scenario currently
+  exercises this flag on Windows. Note: the feature itself correctly writes
+  BOTH `servers.json` AND `config.json` (the app's actual authoritative store —
+  `servers.json` alone is legacy and ignored by current Rocket.Chat.Electron
+  builds) — the bug is Windows shell compatibility, not which files it writes.
+- **Workaround**: Don't use `--inject-config`/`--inject-servers` against a
+  Windows VM until this is fixed; stage config manually via SSH using a
+  correctly-encoded PowerShell write (`[IO.File]::WriteAllText($f, $json, (New
+  -Object Text.UTF8Encoding $false))` — plain `Set-Content -Encoding UTF8`
+  adds a BOM that breaks electron-store's `Conf` parser at startup).
+- **Affects**: `automation/setup/inject_config.py`, `automation/main.py`'s
+  `--inject-config`/`--inject-servers` wiring. Any future Windows scenario
+  wanting declarative pre-staged workspace config needs an `is_windows` branch
+  added here first.
+- **Ref**: Found while investigating a CORE-2525 (presence-on-tray) side report,
+  2026-08-21.
+
+## `ssh`/`scp` children read the MCP server's stdin (fixed)
+- **Status**: Fixed (003-A)
+- **Issue**: `SSHClient.run` and `scp_*` started `ssh` without `stdin`, so the
+  child inherited the MCP server's stdin — the JSON-RPC pipe. A slow or timed-out
+  SSH call could eat protocol bytes, and the client then saw the server as
+  disconnected.
+- **Fix**: every `ssh`/`scp` child starts with `stdin=subprocess.DEVNULL`.
+  `tests/test_ssh_control_master.py` asserts it.
+
+## MCP server stdout carried log lines (fixed)
+- **Status**: Fixed (003-G)
+- **Issue**: `build._log` and other helpers `print()` to stdout. Under the MCP
+  server that stdout is the protocol channel, so a deploy put plain text between
+  JSON-RPC messages.
+- **Fix**: `_claim_protocol_stdout()` keeps a private dup of fd 1 for protocol
+  messages and points fd 1 and `sys.stdout` at stderr. Notifications (no `id`)
+  get no response. `tests/test_mcp_stdout_hygiene.py`.
+
+## Linux deploy reported success for a truncated `.deb` (fixed)
+- **Status**: Fixed (003-C)
+- **Issue**: a 96-byte `.deb` (an error page saved as the package) deployed with
+  `install_ok: true`, because `dpkg -i` failed quietly and the old install stayed.
+- **Fix**: `validate_artifact` checks size (≥ 1 MiB) and magic bytes before
+  upload and after a download. After install, the deb/rpm version on the VM must
+  match the package version.
+
+## UIA session-1 cleanup leaked scheduled tasks (fixed)
+- **Status**: Fixed (003)
+- **Issue**: `_run_batch_session1` cleaned up with `... 2>$null` inside a
+  command string that the outer PowerShell expanded, so the cleanup failed and
+  each UIA call left a `mosdat-uia-*` task. windows10 had 336 of them.
+- **Fix**: `2>&1 | Out-Null`; `tests/test_uia_session1_cleanup.py` rejects `$`
+  in the cleanup command. The leaked tasks on windows10 were deleted.
+
+## Windows NSIS install went to a stale `InstallLocation` (fixed)
+- **Status**: Fixed (003-C)
+- **Issue**: electron-builder NSIS installers reuse
+  `HKCU\Software\<appGuid>\InstallLocation`. An earlier test cycle left it at
+  `C:\tmp\c87-4183`, so `/S` installed there and the verify step (which only
+  looked in default folders) said "could not locate Rocket.Chat.exe".
+- **Fix**: the silent install passes `/D=%LOCALAPPDATA%\Programs\Rocket.Chat`,
+  and verify reads the Uninstall registry key first, then the default folders.
+
+## Deployed version read the wrong `"version"` from `app.asar` (fixed)
+- **Status**: Fixed (003-E)
+- **Issue**: `_read_deployed_version` and `deploy_to_vm` grepped the first
+  `"version"` string in `app.asar`, which is often a dependency's version.
+- **Fix**: `vm_lifecycle._asar_package_version` reads the asar header and the
+  root `package.json`.
+
+## Windows toast click: VNC vs native input — mixed evidence
+- **Status**: Open (opt-in workaround)
+- **Issue**: on 2026-10-14 a VNC `click_at` on a Rocket.Chat toast on windows10
+  logged `Notification dismissed`, not an activation. On 2026-10-23 (4.18.3,
+  toast raised through CDP, no action buttons) both a VNC click and a native
+  click at the same point logged `Activation: type=click`. The difference may be
+  the app-created action-button toast or the runner flow. Not settled.
+- **Workaround**: `click_at: {x, y, native: true}` sends real Win32 input from
+  the desktop session. Default stays VNC.
