@@ -92,9 +92,12 @@ def test_build_subcommand_is_registered() -> None:
 
 
 def test_build_requires_pr() -> None:
+    # --pr is optional at parse time (--source builds have no PR); run_build
+    # rejects a missing --pr for every other mode with exit code 5.
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["build", "--target", "deb"])
+    args = parser.parse_args(["build", "--target", "deb"])
+    assert args.pr is None
+    assert build_mod.run_build(args) == 5
 
 
 def test_build_rejects_unknown_target() -> None:
@@ -221,6 +224,30 @@ def test_clone_or_update_existing_clone_fetches_to_fetch_head(monkeypatch, tmp_p
         "git", "-C", str(clone_dir), "checkout", "-B", "pr-3325-latest", "FETCH_HEAD"
     ]
 
+def test_build_sets_node_env_production_for_yarn_build(monkeypatch, tmp_path) -> None:
+    # Rocket.Chat.Electron's own CI always runs `yarn build` with
+    # NODE_ENV=production; without it the bundle is a dev-mode artifact.
+    clone_dir = tmp_path / "clone"
+    clone_dir.mkdir()
+    (clone_dir / "yarn.lock").write_text("")
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append((cmd, kwargs.get("env")))
+        return 0
+
+    monkeypatch.setattr(build_mod, "_run", fake_run)
+
+    build_mod.build(clone_dir, TARGETS["deb"], 3325, dry_run=False)
+
+    build_call = next(c for c in calls if c[0] == ["yarn", "build"])
+    assert build_call[1] is not None
+    assert build_call[1]["NODE_ENV"] == "production"
+
+    install_call = next(c for c in calls if c[0] == ["yarn", "install", "--frozen-lockfile"])
+    assert install_call[1] is None
+
+
 # ---------------------------------------------------------------------------
 # Dry-run end-to-end (no network, no subprocess)
 # ---------------------------------------------------------------------------
@@ -333,7 +360,8 @@ def test_artifact_first_caches_by_sha(tmp_path: Path, monkeypatch) -> None:
     cache_dir = tmp_path / ".cache" / "mosdat" / f"pr{pr}"
     cache_dir.mkdir(parents=True)
     cached_deb = cache_dir / "rocketchat-4.14.1-linux-amd64.deb"
-    cached_deb.write_bytes(b"\x00fake")
+    # validate_artifact runs on a cache hit: ar magic + >= 1 MiB.
+    cached_deb.write_bytes(b"!<arch>\n" + b"\x00" * (1024 * 1024))
     # Write the SHA sidecar that matches the PR head.
     (cached_deb.with_suffix(".deb.sha")).write_text(head_sha)
 

@@ -264,6 +264,13 @@ def _decoded_scripts(recorder: _RecordingSSH) -> list[str]:
     return [_decode_ps(c) for c in recorder.run_calls]
 
 
+def _fake_installer(tmp_path: Path) -> Path:
+    """A local file that passes validate_artifact for the exe target."""
+    exe = tmp_path / "rocketchat-4.14.1-win-x64.exe"
+    exe.write_bytes(b"MZ" + b"\x00" * (1024 * 1024))
+    return exe
+
+
 def test_deploy_to_windows_vm_dry_run_no_ssh(monkeypatch, capsys) -> None:
     """Dry-run path: no SSHClient instantiated, no commands issued."""
     def _refuse(*a, **kw):
@@ -282,7 +289,7 @@ def test_deploy_to_windows_vm_dry_run_no_ssh(monkeypatch, capsys) -> None:
     assert res.installed_version == "(dry-run)"
 
 
-def test_deploy_to_windows_vm_install_sequence(monkeypatch) -> None:
+def test_deploy_to_windows_vm_install_sequence(monkeypatch, tmp_path) -> None:
     """Happy-path: scp + install + verify-path + verify-symbol all succeed."""
     recorder = _RecordingSSH("192.168.13.87", "jean")
     # Sequence:
@@ -302,16 +309,18 @@ def test_deploy_to_windows_vm_install_sequence(monkeypatch) -> None:
     _patch_sshclient(monkeypatch, recorder)
 
     target = resolve_target("exe")
+    installer = _fake_installer(tmp_path)
     res = deploy_to_windows_vm(
         "windows10", "192.168.13.87", "jean",
-        Path("/tmp/rocketchat-4.14.1-win-x64.exe"),
+        installer,
         target, ["isTelephonyEnabled"], dry_run=False,
     )
 
     # SCP went to C:/tmp/rc-installer.exe.
     assert len(recorder.scp_calls) == 1
     assert recorder.scp_calls[0][1] == "C:/tmp/rc-installer.exe"
-    assert recorder.scp_calls[0][0] == Path("/tmp/rocketchat-4.14.1-win-x64.exe")
+    assert recorder.scp_calls[0][0] == installer
+    assert res.artifact == str(installer)
 
     # 3 PowerShell calls: install, verify-path, verify-symbol.
     assert len(recorder.run_calls) == 3
@@ -325,7 +334,7 @@ def test_deploy_to_windows_vm_install_sequence(monkeypatch) -> None:
     assert "Stop-Process" in install_script
     assert "Uninstall-Package" in install_script
     assert "'C:\\tmp\\rc-installer.exe'" in install_script
-    assert "'/S'" in install_script  # NSIS silent flag
+    assert "/S /D=" in install_script  # NSIS silent flag
 
     # Verify-path script probes candidate paths.
     verify_b64 = recorder.run_calls[1].split()[-1]
@@ -348,7 +357,7 @@ def test_deploy_to_windows_vm_install_sequence(monkeypatch) -> None:
     assert res.error == ""
 
 
-def test_deploy_to_windows_vm_missing_symbol(monkeypatch) -> None:
+def test_deploy_to_windows_vm_missing_symbol(monkeypatch, tmp_path) -> None:
     """COUNT=0 from verify-symbol → record symbol as missing → res.ok False."""
     recorder = _RecordingSSH("192.168.13.87", "jean")
     recorder.queue(0, stdout="INSTALL_OK\n")
@@ -365,7 +374,7 @@ def test_deploy_to_windows_vm_missing_symbol(monkeypatch) -> None:
 
     res = deploy_to_windows_vm(
         "windows10", "192.168.13.87", "jean",
-        Path("/tmp/rocketchat-4.14.1-win-x64.exe"),
+        _fake_installer(tmp_path),
         resolve_target("exe"), ["nonExistentSymbol"], dry_run=False,
     )
 
@@ -373,7 +382,7 @@ def test_deploy_to_windows_vm_missing_symbol(monkeypatch) -> None:
     assert res.ok is False
 
 
-def test_deploy_to_windows_vm_install_failure(monkeypatch) -> None:
+def test_deploy_to_windows_vm_install_failure(monkeypatch, tmp_path) -> None:
     """Installer returns non-zero → res.install_ok False, error set, no verify."""
     recorder = _RecordingSSH("192.168.13.87", "jean")
     recorder.queue(1, stdout="", stderr="installer exit code 1")
@@ -382,7 +391,7 @@ def test_deploy_to_windows_vm_install_failure(monkeypatch) -> None:
 
     res = deploy_to_windows_vm(
         "windows10", "192.168.13.87", "jean",
-        Path("/tmp/fake.exe"),
+        _fake_installer(tmp_path),
         resolve_target("exe"), [], dry_run=False,
     )
 
@@ -393,7 +402,7 @@ def test_deploy_to_windows_vm_install_failure(monkeypatch) -> None:
     assert "installer exit code 1" in res.error
 
 
-def test_deploy_to_windows_vm_path_not_found(monkeypatch) -> None:
+def test_deploy_to_windows_vm_path_not_found(monkeypatch, tmp_path) -> None:
     """Install succeeds but no candidate path resolves → res.error set."""
     recorder = _RecordingSSH("192.168.13.87", "jean")
     recorder.queue(0, stdout="INSTALL_OK\n")
@@ -404,7 +413,7 @@ def test_deploy_to_windows_vm_path_not_found(monkeypatch) -> None:
 
     res = deploy_to_windows_vm(
         "windows10", "192.168.13.87", "jean",
-        Path("/tmp/fake.exe"),
+        _fake_installer(tmp_path),
         resolve_target("exe"), [], dry_run=False,
     )
 
@@ -675,6 +684,7 @@ _INSPECT_STALE_NODE = (
     "NODE_VERSION=v20.18.1\n"
 )
 _LOCATE_OK = r"ARTIFACT=C:\mosdat-builds\pr3325\dist\rocketchat-4.14.1-win-x64.exe" + "\n"
+_FREE_OK = f"FREE_BYTES={100 * 1024 ** 3}\n"  # 100 GB: no cleanup
 _VERIFY_PATH_OK = (
     r"INSTALLED_AT=C:\Users\jean\AppData\Local\Programs\rocketchat-desktop\Rocket.Chat.exe"
     "\nVERSION=4.14.1\n"
@@ -682,7 +692,9 @@ _VERIFY_PATH_OK = (
 
 
 def _queue_windows_native_build_success(recorder: _RecordingSSH, *, with_symbol: bool) -> None:
-    """Queue SSH responses for the full clone → install → verify happy path."""
+    """Queue SSH responses for the full git-check → clone → install → verify happy path."""
+    recorder.queue(0, stdout="GIT_OK\n")
+    recorder.queue(0, stdout=_FREE_OK)
     recorder.queue(0, stdout="CLONE_OK\n")
     recorder.queue(0, stdout=_INSPECT_OK)
     recorder.queue(0, stdout="COREPACK_OK\n")
@@ -753,9 +765,12 @@ def test_build_on_windows_vm_happy_path(monkeypatch) -> None:
     assert "$LASTEXITCODE" in build_scripts[0]
     assert "$LASTEXITCODE" in pack_scripts[0]
     assert "--publish never --win --x64" in pack_scripts[0]
+    assert "$env:NODE_ENV='production'" in build_scripts[0]
+    assert "NODE_ENV" not in install_scripts[0]
+    assert "NODE_ENV" not in pack_scripts[0]
 
     assert any("*-win-x64.exe" in s for s in scripts)
-    assert any("Start-Process" in s and "'/S'" in s for s in scripts)
+    assert any("Start-Process" in s and "/S /D=" in s for s in scripts)
     assert any("Select-String" in s and "'isTelephonyEnabled'" in s for s in scripts)
 
     assert recorder.scp_calls == []
@@ -769,6 +784,8 @@ def test_build_on_windows_vm_happy_path(monkeypatch) -> None:
 
 def test_build_on_windows_vm_node_too_old_skips_yarn(monkeypatch) -> None:
     recorder = _RecordingSSH("192.168.13.87", "jean")
+    recorder.queue(0, stdout="GIT_OK\n")
+    recorder.queue(0, stdout=_FREE_OK)
     recorder.queue(0, stdout="CLONE_OK\n")
     recorder.queue(0, stdout=_INSPECT_STALE_NODE)
     _patch_sshclient(monkeypatch, recorder)
@@ -781,7 +798,7 @@ def test_build_on_windows_vm_node_too_old_skips_yarn(monkeypatch) -> None:
     )
 
     scripts = _decoded_scripts(recorder)
-    assert len(scripts) == 2  # clone + inspect; nothing after
+    assert len(scripts) == 4  # git check + disk probe + clone + inspect; nothing after
     joined = "\n".join(scripts)
     assert "yarn install" not in joined
     assert "electron-builder" not in joined
@@ -794,8 +811,38 @@ def test_build_on_windows_vm_node_too_old_skips_yarn(monkeypatch) -> None:
     assert "Windows VMs: stale Node.js breaks Electron builds run natively on the VM" in res.error
 
 
+def test_build_on_windows_vm_git_missing_fails_before_clone(monkeypatch) -> None:
+    """git absent on the VM → clear, specific error; clone/yarn steps never run."""
+    recorder = _RecordingSSH("192.168.13.87", "jean")
+    recorder.queue(0, stdout="GIT_MISSING\n")
+    _patch_sshclient(monkeypatch, recorder)
+    monkeypatch.setattr(build_mod, "gh_pr_head_ref", lambda *a, **kw: "fix/foo")
+
+    res = build_on_windows_vm(
+        "windows10", "192.168.13.87", "jean",
+        3325, "RocketChat/Rocket.Chat.Electron",
+        resolve_target("exe"), [], dry_run=False,
+    )
+
+    scripts = _decoded_scripts(recorder)
+    assert len(scripts) == 1  # only the git check ran
+    assert "git clone" not in scripts[0]
+    joined = "\n".join(scripts)
+    assert "yarn install" not in joined
+    assert "electron-builder" not in joined
+    assert "corepack prepare" not in joined
+
+    assert res.ok is False
+    assert res.install_ok is False
+    assert res.scp_ok is False
+    assert "git is not installed on this VM" in res.error
+    assert "docs/KNOWN_ISSUES.md" in res.error
+
+
 def test_build_on_windows_vm_yarn_build_failure_skips_electron_builder(monkeypatch) -> None:
     recorder = _RecordingSSH("192.168.13.87", "jean")
+    recorder.queue(0, stdout="GIT_OK\n")
+    recorder.queue(0, stdout=_FREE_OK)
     recorder.queue(0, stdout="CLONE_OK\n")
     recorder.queue(0, stdout=_INSPECT_OK)
     recorder.queue(0, stdout="COREPACK_OK\n")
