@@ -1,4 +1,4 @@
-"""``mosdat ssh-bootstrap`` — install this host's SSH public key onto a Windows VM.
+"""``mosdat ssh-bootstrap`` — install this host's SSH public key onto a VM.
 
 Windows OpenSSH Server has no POSIX shell, so ``ssh-copy-id`` fails, and
 admin accounts ignore ``~/.ssh/authorized_keys`` in favour of
@@ -14,8 +14,14 @@ Safety gates (do not weaken):
   without clicking or typing — a false "unlocked" would type into a
   password field.
 
-Windows VMs only. Linux SSH setup is a different problem; this command
-rejects non-Windows VMs before any I/O.
+Linux VMs use a different path, :func:`bootstrap_linux_ssh`: the QEMU guest
+agent (through the Proxmox API) appends the key to the user's
+``~/.ssh/authorized_keys``. No console, no VLM. If the agent does not answer,
+it stops with an error that names the alternative (console login).
+
+The ``mosdat ssh-bootstrap`` CLI still accepts Windows VMs only and rejects
+non-Windows VMs before any I/O; the Linux path is a function for callers
+such as the MCP tool.
 
 Exit codes:
     0  — SSH authenticating (already-working or bootstrap succeeded)
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import sys
 import time
 from dataclasses import dataclass, field
@@ -49,6 +56,16 @@ ERR_LOCK = (
 ERR_NO_SHELL = "could not confirm an elevated shell opened after the UAC step"
 ERR_SSH_STILL_FAILS = (
     "console steps completed but SSH still isn't authenticating — "
+    "see steps for what ran"
+)
+ERR_NO_GUEST_AGENT = (
+    "the QEMU guest agent does not answer for this VM, so the key cannot be "
+    "installed without a login — log in on the VM console (Proxmox web UI) "
+    "and add the key to ~/.ssh/authorized_keys, or install and start "
+    "qemu-guest-agent in the VM"
+)
+ERR_AGENT_SSH_STILL_FAILS = (
+    "guest-agent steps completed but SSH still isn't authenticating — "
     "see steps for what ran"
 )
 
@@ -109,7 +126,7 @@ def exit_code_for(result: BootstrapResult) -> int:
     """Map a failed ``BootstrapResult`` to a CLI exit code (0 handled by caller)."""
     if result.ok:
         return 0
-    if result.error.startswith("console steps completed"):
+    if result.error.startswith(("console steps completed", "guest-agent steps completed")):
         return 1
     return 2
 
@@ -348,6 +365,119 @@ def bootstrap_windows_ssh(
     steps.append(f"SSH probe still failing ({detail})")
     return BootstrapResult(
         vm=vm_name, ok=False, steps=steps, error=ERR_SSH_STILL_FAILS,
+    )
+
+
+def _linux_key_install_script(user: str, pubkey: str) -> str:
+    """POSIX sh that appends ``pubkey`` to ``user``'s authorized_keys once.
+
+    Runs as root through the guest agent, so it fixes ownership and modes.
+    Prints ``KEY_ADDED`` or ``KEY_PRESENT`` on success.
+    """
+    u = shlex.quote(user)
+    k = shlex.quote(pubkey)
+    return (
+        "set -e\n"
+        f"u={u}\n"
+        f"key={k}\n"
+        'h=$(getent passwd "$u" | cut -d: -f6)\n'
+        '[ -n "$h" ] || { echo "NO_SUCH_USER=$u" >&2; exit 3; }\n'
+        'g=$(id -gn "$u")\n'
+        'd="$h/.ssh"\n'
+        'f="$d/authorized_keys"\n'
+        'mkdir -p "$d"\n'
+        'touch "$f"\n'
+        'if grep -qxF "$key" "$f"; then\n'
+        "  echo KEY_PRESENT\n"
+        "else\n"
+        # Keep the new key on its own line when the file lacks a final newline.
+        '  if [ -s "$f" ] && [ -n "$(tail -c1 "$f")" ]; then echo >> "$f"; fi\n'
+        "  printf '%s\\n' \"$key\" >> \"$f\"\n"
+        "  echo KEY_ADDED\n"
+        "fi\n"
+        'chown "$u:$g" "$d" "$f"\n'
+        'chmod 700 "$d"\n'
+        'chmod 600 "$f"\n'
+        'if command -v restorecon >/dev/null 2>&1; then restorecon -R "$d" || true; fi\n'
+    )
+
+
+def bootstrap_linux_ssh(
+    vm_name: str, vm_ip: str, vm_user: str, vmid: int,
+    proxmox, pubkey: str, *, dry_run: bool,
+) -> BootstrapResult:
+    """Install ``pubkey`` onto a Linux VM through the QEMU guest agent.
+
+    Same result shape as :func:`bootstrap_windows_ssh`. No-op when SSH
+    already works. When the guest agent does not answer, returns
+    :data:`ERR_NO_GUEST_AGENT` without touching the VM.
+    """
+    if dry_run:
+        steps = [
+            "[dry-run] probe SSH (skip the guest agent if already authenticating)",
+            "[dry-run] ping the QEMU guest agent through Proxmox",
+            f"[dry-run] append the key to ~{vm_user}/.ssh/authorized_keys "
+            "(dir 0700, file 0600, owned by the user, no duplicate line)",
+            "[dry-run] re-probe SSH",
+        ]
+        for line in steps:
+            _log(line)
+        return BootstrapResult(vm=vm_name, ok=True, steps=steps)
+
+    probe = _probe_ssh(vm_ip, vm_user)
+    if probe.status == "PASS":
+        return BootstrapResult(vm=vm_name, already_working=True, ok=True)
+
+    steps: list[str] = [
+        f"SSH probe failed ({probe.detail or probe.status}); using the QEMU guest agent"
+    ]
+    try:
+        agent_up = proxmox.agent_ping(vmid)
+    except Exception as e:
+        return BootstrapResult(
+            vm=vm_name, ok=False, steps=steps,
+            error=f"Proxmox API not reachable for the guest-agent ping: {e}",
+        )
+    if not agent_up:
+        return BootstrapResult(
+            vm=vm_name, ok=False, steps=steps, error=ERR_NO_GUEST_AGENT,
+        )
+    steps.append("guest agent answered ping")
+
+    try:
+        res = proxmox.agent_exec(
+            vmid, ["/bin/sh", "-c", _linux_key_install_script(vm_user, pubkey)],
+            timeout=60,
+        )
+    except Exception as e:
+        return BootstrapResult(
+            vm=vm_name, ok=False, steps=steps,
+            error=f"guest-agent exec failed: {e}",
+        )
+    out = (res.get("out") or "").strip()
+    err = (res.get("err") or "").strip()
+    if not res.get("exited") or res.get("exitcode") != 0:
+        detail = err or out or (
+            "timed out" if not res.get("exited") else f"exit {res.get('exitcode')}"
+        )
+        return BootstrapResult(
+            vm=vm_name, ok=False, steps=steps,
+            error=f"key install through the guest agent failed: {detail}",
+        )
+    if "KEY_PRESENT" in out:
+        steps.append(f"key already in ~{vm_user}/.ssh/authorized_keys; fixed owner and modes")
+    else:
+        steps.append(f"appended key to ~{vm_user}/.ssh/authorized_keys")
+
+    post = _probe_ssh_with_retry(vm_ip, vm_user, _SSH_RETRY_DELAYS)
+    if post.status == "PASS":
+        steps.append("SSH probe succeeded after guest-agent steps")
+        return BootstrapResult(vm=vm_name, ok=True, steps=steps)
+
+    detail = post.detail or post.status
+    steps.append(f"SSH probe still failing ({detail})")
+    return BootstrapResult(
+        vm=vm_name, ok=False, steps=steps, error=ERR_AGENT_SSH_STILL_FAILS,
     )
 
 
