@@ -168,6 +168,11 @@ def _resolve_scenario(name: str, platform: Optional[str] = None):
     """
     if not name:
         return None, _envelope(False, error="missing required argument 'scenario'")
+    # A path to a YAML file outside shared/ (e.g. a scratch scenario) runs
+    # as-is, so agents do not have to write tmp-*.yaml into the repo.
+    direct = Path(str(name)).expanduser()
+    if str(name).endswith((".yaml", ".yml")) and direct.is_file():
+        return _scenario_meta(direct.resolve(), platform), None
     stem = name[:-5] if str(name).endswith(".yaml") else name
     files = _iter_scenario_yaml()
     matches = [p for p in files if p.stem == stem]
@@ -198,6 +203,10 @@ def _resolve_scenario(name: str, platform: Optional[str] = None):
         if "functional" in candidate.parts:
             path = candidate
             break
+    return _scenario_meta(path, platform), None
+
+
+def _scenario_meta(path: Path, platform: Optional[str]) -> dict:
     step_count = 0
     try:
         from automation.runners.scenario_loader import load_test_yaml
@@ -219,7 +228,45 @@ def _resolve_scenario(name: str, platform: Optional[str] = None):
         "platform": platform or _scenario_platform_from_path(path),
         "step_count": step_count,
     }
-    return meta, None
+    return meta
+
+
+def _write_inline_scenario(text: str) -> Path:
+    """Persist an inline ``scenario_yaml`` under results/ so the run is replayable."""
+    out_dir = FRAMEWORK / "results" / "inline-scenarios"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"inline-{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.yaml"
+    path.write_text(text)
+    return path
+
+
+def _vlm_step_numbers(path: Path, platform: Optional[str]) -> list:
+    """1-indexed steps whose outcome needs a VLM answer (verify/localize/accept_any).
+
+    AT-SPI and ``click_at`` steps are deterministic and are not counted.
+    """
+    try:
+        from automation.runners.scenario_loader import load_test_yaml
+
+        _, steps, _, _ = load_test_yaml(path, platform=platform or _scenario_platform_from_path(path))
+    except Exception:
+        return []
+    numbers = []
+    for i, step in enumerate(steps, start=1):
+        needs_vlm = bool(
+            getattr(step, "verify", None)
+            or getattr(step, "verify_not", None)
+            or getattr(step, "accept_any", None)
+            or getattr(step, "verify_recorded", None)
+            or (
+                getattr(step, "localize", None)
+                and not getattr(step, "atspi", None)
+                and not getattr(step, "click_at", None)
+            )
+        )
+        if needs_vlm:
+            numbers.append(i)
+    return numbers
 
 
 def _vm_busy(vmid: int) -> bool:
@@ -318,10 +365,9 @@ def _run_env_precheck(vm) -> Optional[dict]:
 
 
 def _read_deployed_version(ssh) -> Optional[str]:
-    """Installed app version via the same asar grep ``deploy_to_vm`` uses."""
-    import shlex
-
+    """Installed app version from the asar's root package.json (Linux)."""
     from automation.commands.build import _find_installed_asar
+    from automation.commands.vm_lifecycle import _asar_package_version
 
     try:
         asar = _find_installed_asar(ssh)
@@ -329,24 +375,41 @@ def _read_deployed_version(ssh) -> Optional[str]:
         return None
     if not asar:
         return None
-    ver_res = ssh.run(
-        f"grep -a -m1 -oE '\"version\":\"[^\"]+\"' {shlex.quote(asar)} | head -1",
-        timeout=60,
-    )
-    raw = (getattr(ver_res, "stdout", None) or "").strip()
-    if not raw:
-        return None
-    if ":" in raw:
-        rhs = raw.split(":", 1)[1].strip().strip('"')
-        return rhs or None
-    return raw
+    return _asar_package_version(ssh, asar)
 
 
-def _expected_build_check(ssh, deployed_version, expect_pr, expect_symbol) -> dict:
+def _expected_build_check(
+    ssh, deployed_version, expect_pr, expect_symbol, *, is_windows: bool = False,
+    windows_asar: Optional[str] = None,
+) -> dict:
     """``deployed_build_matches_expected`` check for ``mosdat_readiness``."""
-    from automation.commands.build import _find_installed_asar, _verify_symbols_on_vm
+    from automation.commands.build import (
+        _find_installed_asar,
+        _verify_symbols_on_vm,
+        _verify_windows_install,
+    )
 
-    reasons: list[str] = []
+    if is_windows:
+        # Windows has no grep and no /opt: reuse the deploy-time verifier.
+        reasons: list[str] = []
+        if expect_pr is not None and expect_pr != "":
+            reasons.append(
+                "expect_pr is not checked on Windows (the NSIS FileVersion has no "
+                "PR tag) — pass expect_symbol with a symbol unique to the PR"
+            )
+        if expect_symbol:
+            symbols = _parse_verify_symbols(expect_symbol)
+            if not windows_asar:
+                reasons.append("no installed app.asar — cannot verify symbols")
+            elif symbols:
+                _, _, missing = _verify_windows_install(ssh, symbols)
+                if missing:
+                    reasons.append(f"missing symbols: {', '.join(missing)}")
+        if reasons:
+            return _check_item("deployed_build_matches_expected", "FAIL", "; ".join(reasons))
+        return _check_item("deployed_build_matches_expected", "PASS", deployed_version or "")
+
+    reasons = []
     asar = None
     try:
         asar = _find_installed_asar(ssh)
@@ -415,6 +478,7 @@ def _deploy_dict(res) -> dict:
         "installed_version": getattr(res, "installed_version", "") or "",
         "missing_symbols": list(getattr(res, "missing_symbols", []) or []),
         "error": getattr(res, "error", "") or "",
+        "artifact": getattr(res, "artifact", "") or "",
     }
 
 
@@ -443,7 +507,15 @@ TOOL_DEFINITIONS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "vm_name": {"type": "string", "description": "VM name (e.g. ubuntu2404, fedora42)"}
+                "vm_name": {"type": "string", "description": "VM name (e.g. ubuntu2404, fedora42)"},
+                "wait_ready": {
+                    "type": "boolean",
+                    "description": (
+                        "Wait until SSH answers before returning (adds "
+                        "ready: {ready, waited_s, detail}). Use this instead of sleeping."
+                    ),
+                },
+                "timeout": {"type": "number", "description": "Max seconds for wait_ready (default 240)"},
             },
             "required": ["vm_name"],
         },
@@ -477,7 +549,15 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "pr": {
                     "type": "number",
-                    "description": "Pull request number to clone and build",
+                    "description": "Pull request number to clone and build (omit with 'source')",
+                },
+                "source": {
+                    "type": "string",
+                    "description": (
+                        "Local source tree on this host (uncommitted files included) "
+                        "to build natively on the Windows deploy_to VM instead of "
+                        "cloning a PR. target must be exe."
+                    ),
                 },
                 "target": {
                     "type": "string",
@@ -495,12 +575,19 @@ TOOL_DEFINITIONS = [
                     "description": "owner/repo (default: RocketChat/Rocket.Chat.Electron)",
                 },
             },
-            "required": ["pr"],
+            "required": [],
         },
     },
     {
         "name": "mosdat_deploy",
-        "description": "SCP a built package to a VM and install it",
+        "description": (
+            "Install a build on a VM without rebuilding. Give exactly one source: "
+            "artifact_path (local package, SCP'd), artifact_on_vm (installer "
+            "already on a Windows VM), pr_build (newest installer from an "
+            "earlier native Windows build of that PR), or release (a published "
+            "Rocket.Chat.Electron tag, e.g. 4.18.3). Package files are checked "
+            "(size + magic bytes) and Linux package versions are checked after install."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -508,7 +595,11 @@ TOOL_DEFINITIONS = [
                 "vm_name": {"type": "string", "description": "Target VM name (alias of vm)"},
                 "artifact_path": {"type": "string", "description": "Path to local .deb/.rpm/.exe file"},
                 "package_path": {"type": "string", "description": "Path to local package (alias of artifact_path)"},
-                "target": {"type": "string", "description": "deb | rpm | appimage | exe (inferred from suffix if omitted)"},
+                "target": {"type": "string", "description": "deb | rpm | appimage | exe (inferred from suffix if omitted; for release on Linux: deb default)"},
+                "artifact_on_vm": {"type": "string", "description": "Windows: path of an installer .exe already on the VM"},
+                "pr_build": {"type": "number", "description": "Windows: reinstall the installer from C:\\mosdat-builds\\pr<N>\\dist"},
+                "release": {"type": "string", "description": "Published release tag to download and install (e.g. 4.18.3)"},
+                "verify_symbol": {"description": "Symbol(s) expected in the installed app.asar (string or list)"},
             },
             "required": [],
         },
@@ -527,7 +618,11 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "mosdat_run_functional",
-        "description": "Run a VLM functional test scenario on a VM (GUI interaction via screenshots + VLM)",
+        "description": (
+            "Run a VLM functional test scenario on a VM (GUI interaction via screenshots + VLM). "
+            "verdict: pass | fail | error | unverified. 'unverified' means the VLM was down "
+            "and the scenario has VLM-judged steps: read screenshots_to_judge yourself."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -535,7 +630,17 @@ TOOL_DEFINITIONS = [
                 "vm_name": {"type": "string", "description": "VM name to run on (alias of vm)"},
                 "scenario": {
                     "type": "string",
-                    "description": "Scenario name (e.g. 'rocketchat-smoke', 'issues/3325')",
+                    "description": (
+                        "Scenario name (e.g. 'rocketchat-smoke'), or a path to a "
+                        ".yaml file outside shared/ (scratch scenarios)"
+                    ),
+                },
+                "scenario_yaml": {
+                    "type": "string",
+                    "description": (
+                        "Inline scenario YAML (instead of 'scenario'). It is saved "
+                        "under results/inline-scenarios/ and run from there."
+                    ),
                 },
                 "model": {"type": "string", "description": "VLM model override (default: from config)"},
                 "verify_model": {"type": "string", "description": "Verify model override for yes/no checks"},
@@ -548,7 +653,7 @@ TOOL_DEFINITIONS = [
                     "description": "Override the scenario's configured workspace_url for this call only; omit to use today's default.",
                 },
             },
-            "required": ["vm_name", "scenario"],
+            "required": ["vm_name"],
         },
     },
     {
@@ -590,16 +695,16 @@ TOOL_DEFINITIONS = [
     {
         "name": "mosdat_ssh_bootstrap",
         "description": (
-            "Install this host's SSH public key onto a Windows VM whose "
-            "console is unlocked but SSH is not yet authorized. Drives the "
-            "Proxmox VNC console with VLM localize/verify (no hardcoded "
-            "coordinates). No-ops if SSH already works; aborts on a "
-            "lock/sign-in screen. Windows VMs only."
+            "Install this host's SSH public key onto a VM whose SSH refuses "
+            "the key. Windows: drives the unlocked Proxmox VNC console with "
+            "VLM localize/verify; aborts on a lock/sign-in screen. Linux: "
+            "appends the key to authorized_keys through the QEMU guest agent "
+            "(needs qemu-guest-agent on the VM). No-ops if SSH already works."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "vm": {"type": "string", "description": "VM name (must be os_type=windows)"},
+                "vm": {"type": "string", "description": "VM name (Windows or Linux)"},
                 "vm_name": {"type": "string", "description": "VM name (alias of vm)"},
                 "pubkey_path": {
                     "type": "string",
@@ -613,12 +718,36 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "mosdat_vm_hygiene",
+        "description": (
+            "Check and idempotently fix four confirmed Windows-VM hygiene "
+            "issues that silently break VLM toast/notification testing: VM "
+            "clock drift (reset from this host's UTC clock, no NTP "
+            "required), the OneDrive first-run sign-in nag, the 'Turn on "
+            "Windows Backup' toast, and the taskbar news/weather widget. "
+            "Already-clean items report already-ok and are left untouched. "
+            "Windows VMs only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "vm": {"type": "string", "description": "VM name (must be os_type=windows)"},
+                "vm_name": {"type": "string", "description": "VM name (alias of vm)"},
+            },
+            "required": ["vm"],
+        },
+    },
+    {
         "name": "mosdat_server_provision",
         "description": (
             "Provision a Rocket.Chat server matching a published image "
             "reference (PR/release/RC/develop) via Docker Compose. Idempotent: "
             "re-invoking for a matching already-running instance returns its "
-            "current state (starting/ready) without starting a duplicate."
+            "current state (starting/ready) without starting a duplicate. "
+            "Waits up to 180 s; a slow cold boot returns state=starting with "
+            "its url — call again to poll. Starts Docker Desktop if it is "
+            "down (macOS). Tries GHCR, then Docker Hub, so older releases "
+            "work. The seeded admin (mosdat-admin / mosdat-admin-pass) has 2FA off."
         ),
         "inputSchema": {
             "type": "object",
@@ -668,15 +797,57 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "mosdat_ssh",
-        "description": "Run an arbitrary shell command on a VM",
+        "description": (
+            "Run an arbitrary shell command on a VM. The mosdat-mcp server "
+            "handles one request at a time (synchronous stdio loop) — this "
+            "call blocks the server for the command's full duration, up to "
+            "`timeout`. Keep commands short; for anything that needs to run "
+            "longer, background it on the VM (e.g. Windows: `Start-Process`, "
+            "then poll separately) rather than sleeping in-command."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "vm_name": {"type": "string", "description": "VM name"},
-                "command": {"type": "string", "description": "Shell command to run"},
-                "timeout": {"type": "number", "description": "Timeout in seconds (default: 30)"},
+                "command": {"type": "string", "description": "Shell command to run (one line). Use 'script' for anything with PowerShell $variables, quotes or several lines."},
+                "script": {
+                    "type": "string",
+                    "description": (
+                        "Script body (PowerShell on Windows, bash on Linux). It is "
+                        "copied to the VM as a file and run with -File / bash, so "
+                        "$variables, quotes and newlines arrive unchanged. Use "
+                        "instead of 'command'."
+                    ),
+                },
+                "detach": {
+                    "type": "boolean",
+                    "description": (
+                        "With 'script': start it so it keeps running after this "
+                        "call returns (survives the SSH session). Returns pid and "
+                        "log_path; read the log with a later call."
+                    ),
+                },
+                "session": {
+                    "type": "string",
+                    "description": (
+                        "With 'script', Windows only: 'ssh' (default, session 0, "
+                        "no desktop) or 'desktop' (the logged-in user's visible "
+                        "session — use it to start GUI apps or send real input)."
+                    ),
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": (
+                        "Timeout in seconds (default: 30). On expiry the "
+                        "underlying process is killed and mosdat_ssh returns "
+                        "exit_code 124 — the call itself fails cleanly, it "
+                        "does not crash the mosdat-mcp server. Recommended "
+                        "max ~60s; for longer work, background the remote "
+                        "command and poll instead of blocking one call on it."
+                    ),
+                },
             },
-            "required": ["vm_name", "command"],
+            "required": ["vm_name"],
         },
     },
 ]
@@ -732,11 +903,18 @@ def _list_vms(args: Optional[dict] = None) -> dict:
     return _envelope(True, degraded=degraded, vms=vms)
 
 
-def _vm_start(req: Request, vm_name: str, jsonrpc_result) -> str:
+def _vm_start(req: Request, vm_name: str, jsonrpc_result, *, wait_ready: bool = False,
+              timeout: int = 240) -> str:
     vm, _ = _vm_config(vm_name)
     api = _get_proxmox_api()
     api.start_vm(vm.vmid)
-    return jsonrpc_result(req, {"status": "started", "vm": vm_name})
+    result = {"status": "started", "vm": vm_name}
+    if wait_ready:
+        # Poll SSH here so agents do not sleep-loop after a start.
+        from automation.commands.vm_lifecycle import wait_ready as _wait_ready
+
+        result["ready"] = _wait_ready(vm, timeout=int(timeout))
+    return jsonrpc_result(req, result)
 
 
 def _vm_stop(req: Request, vm_name: str, jsonrpc_result) -> str:
@@ -850,8 +1028,11 @@ def _build(args: dict) -> dict:
     from automation.proxmox.gpu import ProxmoxLockTimeout
 
     pr_raw = args.get("pr")
+    source = args.get("source") or None
+    if (pr_raw is None or pr_raw == "") and source:
+        pr_raw = 0  # local tree, no PR clone
     if pr_raw is None or pr_raw == "":
-        return _envelope(False, error="missing required argument 'pr'", build_ok=False, deploy=None)
+        return _envelope(False, error="missing required argument 'pr' (or 'source')", build_ok=False, deploy=None)
     try:
         pr = int(pr_raw)
     except (TypeError, ValueError):
@@ -893,6 +1074,7 @@ def _build(args: dict) -> dict:
         config=str(_config_path()) if _config_path() else None,
         dry_run=bool(args.get("dry_run", False)),
         artifact_first=args.get("artifact_first", True),
+        source=source,
     )
 
     def _do_build() -> dict:
@@ -941,12 +1123,22 @@ def _deploy(args: dict) -> dict:
     artifact_path = args.get("artifact_path") or args.get("package_path")
     if not vm_name:
         return _envelope(False, error="missing required argument 'vm'")
-    if not artifact_path:
-        return _envelope(False, error="missing required argument 'artifact_path'")
+    sources = [k for k in ("artifact_on_vm", "pr_build", "release") if args.get(k) not in (None, "")]
+    if artifact_path:
+        sources.append("artifact_path")
+    if not sources:
+        return _envelope(
+            False,
+            error="missing source: pass one of artifact_path, artifact_on_vm, pr_build, release",
+        )
+    if len(sources) > 1:
+        return _envelope(False, error=f"pass only one source, got: {', '.join(sources)}")
 
     vm, err = _resolve_vm(vm_name)
     if err:
         return err
+    if not artifact_path:
+        return _deploy_without_upload(vm, args, sources[0])
 
     pkg = Path(artifact_path)
     if not pkg.exists():
@@ -974,7 +1166,7 @@ def _deploy(args: dict) -> dict:
         outcome = _deploy_dict(res)
         if res.ok:
             return _envelope(True, **outcome)
-        return _envelope(False, error=res.error or "deploy failed", **outcome)
+        return _envelope(False, **{**outcome, "error": res.error or "deploy failed"})
 
     try:
         with _nonblocking_vm_lock(vm.vmid):
@@ -983,37 +1175,190 @@ def _deploy(args: dict) -> dict:
         return _busy_envelope(vm.vmid)
 
 
-def _run_smoke(req: Request, vm_name: str, timeout: int = 120, *, jsonrpc_result, jsonrpc_error) -> str:
-    vm, _ = _vm_config(vm_name)
+def _deploy_without_upload(vm, args: dict, source: str) -> dict:
+    """mosdat_deploy for an installer already on the VM, a PR build dir, or a release tag."""
+    from automation.commands import build as build_mod
+    from automation.proxmox.gpu import ProxmoxLockTimeout
     from automation.transport.ssh import SSHClient
 
-    ssh = SSHClient(vm.ip, user=vm.user or "root")
+    is_windows = bool(getattr(vm, "is_windows", False))
+    if source in ("artifact_on_vm", "pr_build") and not is_windows:
+        return _envelope(False, error=f"{source} is for Windows VMs (got {vm.name})")
+    symbols = _parse_verify_symbols(args.get("verify_symbol"))
+    dry_run = bool(args.get("dry_run", False))
+    user = vm.user or "root"
+
+    def _do() -> dict:
+        if source == "release":
+            res = build_mod.install_release_on_vm(
+                vm.name, vm.ip, user, "windows" if is_windows else (vm.os_type or "linux"),
+                str(args["release"]), symbols, dry_run=dry_run,
+                linux_target=args.get("target") or "deb",
+            )
+        else:
+            on_vm = args.get("artifact_on_vm")
+            if source == "pr_build":
+                on_vm = build_mod.find_windows_build_artifact(
+                    SSHClient(vm.ip, user), int(args["pr_build"])
+                )
+                if not on_vm:
+                    return _envelope(
+                        False,
+                        error=(
+                            f"no installer in {build_mod._windows_build_dir(int(args['pr_build']))}"
+                            "\\dist — the earlier build did not finish packaging; rebuild"
+                        ),
+                    )
+            res = build_mod.install_existing_on_windows_vm(
+                vm.name, vm.ip, user, on_vm, symbols, dry_run=dry_run,
+            )
+        outcome = _deploy_dict(res)
+        if res.ok:
+            return _envelope(True, **outcome)
+        return _envelope(False, **{**outcome, "error": res.error or "deploy failed"})
+
     try:
-        app_path = (
-            vm.packages[0].app_path
-            if vm.packages and vm.packages[0].app_path
-            else "/opt/Rocket.Chat/rocketchat-desktop"
+        with _nonblocking_vm_lock(vm.vmid):
+            return _do()
+    except (ProxmoxLockTimeout, BlockingIOError):
+        return _busy_envelope(vm.vmid)
+
+
+def _kill_existing_app(injector, app_basename: str) -> None:
+    """Best-effort cross-platform kill of any previously-running instance.
+
+    Mirrors the ``Get-Process | Stop-Process`` idiom already used in
+    ``build.py``/``vm_hygiene.py`` for Windows, and the ``pkill -f`` idiom
+    used elsewhere in this codebase for Linux. ``injector.shell`` already
+    branches PowerShell vs. POSIX shell internally.
+    """
+    if injector.is_windows:
+        name = app_basename[:-4] if app_basename.lower().endswith(".exe") else app_basename
+        injector.shell(
+            f"Get-Process -Name '{name}' -ErrorAction SilentlyContinue "
+            "| Stop-Process -Force -ErrorAction SilentlyContinue"
         )
-        cmds = f"""
-set -e
-pkill -f "rocketchat" 2>/dev/null || true
-sleep 1
-timeout {timeout} {app_path} --no-sandbox &
-APP_PID=$!
-sleep 3
-if kill -0 $APP_PID 2>/dev/null; then
-    echo "APP_RUNNING"
-    wmctrl -l 2>/dev/null | grep -i rocket || echo "WINDOW_NOT_FOUND"
-    kill $APP_PID 2>/dev/null || true
-    exit 0
-fi
-echo "APP_DIED"
-exit 1
-"""
-        r2 = ssh.run(cmds, timeout=timeout + 30)
-        return jsonrpc_result(req, {"vm": vm_name, "output": r2.stdout})
+    else:
+        injector.shell(f'pkill -f "{app_basename}" 2>/dev/null || true')
+
+
+def _run_smoke_impl(args: dict) -> dict:
+    """mosdat_run_smoke: cheap cross-platform launch + basic UI check.
+
+    Kills any existing instance, launches the app, and does a single cheap
+    check: process presence (``injector.process_running``) plus one VNC
+    screenshot + one ``vlm.verify`` call — no multi-step scenario, no
+    checkpoint/rewind, no retry-loop budget like ``mosdat_run_functional``.
+    """
+    from automation.proxmox.api import ProxmoxAPI
+    from automation.runners.launch import launch_probe_name, natural_window_name
+    from automation.transport.ssh import SSHClient
+    from automation.transport.vnc import VncClient
+    from automation.vlm.client import VLMClient
+    from automation.vlm.input import InputInjector
+    from automation.vlm.screenshot import Screenshotter
+
+    vm_name = args.get("vm_name") or args.get("vm")
+    vm, err = _resolve_vm(vm_name)
+    if err:
+        return err
+
+    timeout = int(args.get("timeout") or 120)
+    cfg = _config()
+
+    default_app_path = (
+        r"C:\Program Files\Rocket.Chat\Rocket.Chat.exe"
+        if getattr(vm, "is_windows", False)
+        else "/opt/Rocket.Chat/rocketchat-desktop"
+    )
+    app_path = (
+        vm.packages[0].app_path
+        if vm.packages and vm.packages[0].app_path
+        else default_app_path
+    )
+    app_basename = launch_probe_name(app_path, None, vm.is_windows)
+    window_name = natural_window_name(app_basename)
+
+    vlm = VLMClient(
+        base_url=cfg.vlm.base_url,
+        model=cfg.vlm.model,
+        verify_model=cfg.vlm.verify_model or None,
+        api_key=cfg.vlm.api_key,
+        max_tokens_floor=cfg.vlm.max_tokens_floor,
+    )
+    degraded = _probe_vlm_degraded(vlm)
+
+    proxmox = ProxmoxAPI(cfg.proxmox)
+    ssh = SSHClient(vm.ip, vm.user or "root")
+
+    try:
+        with VncClient(proxmox, vmid=vm.vmid) as vnc:
+            screenshotter = Screenshotter(vnc)
+            injector = InputInjector(vnc, ssh, vm.is_windows)
+
+            _kill_existing_app(injector, app_basename)
+            time.sleep(1)
+
+            injector.launch(app_path)
+
+            # Poll for process presence instead of a single check after a
+            # fixed sleep — a cold Electron launch on a VM can take well
+            # past 10s. Poll every 2s up to min(timeout, 60)s (cheap tools
+            # shouldn't default to the full 120s budget), exiting the
+            # moment the process is detected, mirroring the "stop polling
+            # as soon as confirmed" behavior of _run_launch_step.
+            poll_interval = 2
+            effective_cap = min(max(timeout, 1), 60)
+            max_polls = max(1, -(-effective_cap // poll_interval))  # ceil div
+            process_running = False
+            for attempt in range(max_polls):
+                try:
+                    process_running = bool(injector.process_running(app_basename))
+                except Exception:
+                    process_running = False
+                if process_running:
+                    break
+                if attempt < max_polls - 1:
+                    time.sleep(poll_interval)
+
+            window_visible = False
+            if process_running:
+                try:
+                    screenshot, _ = screenshotter.capture()
+                    window_visible = bool(
+                        vlm.verify(
+                            screenshot,
+                            f"is the {window_name} window visible on screen",
+                        )
+                    )
+                except Exception:
+                    window_visible = False
+                    if "vlm_unavailable" not in degraded:
+                        degraded.append("vlm_unavailable")
     except Exception as e:
-        return jsonrpc_error(req, -32000, f"Smoke test failed: {e}")
+        return _envelope(
+            False,
+            error=f"smoke test failed: {e}",
+            vm=vm_name,
+            process_running=False,
+            window_visible=False,
+            verdict="fail",
+        )
+
+    verdict = "pass" if (process_running and window_visible) else "fail"
+    return _envelope(
+        True,
+        degraded=degraded,
+        vm=vm_name,
+        process_running=process_running,
+        window_visible=window_visible,
+        verdict=verdict,
+    )
+
+
+def _run_smoke(req: Request, vm_name: str, timeout: int = 120, *, jsonrpc_result, jsonrpc_error) -> str:
+    result = _run_smoke_impl({"vm_name": vm_name, "timeout": timeout})
+    return jsonrpc_result(req, result)
 
 
 def _probe_vlm_degraded(vlm) -> list:
@@ -1154,6 +1499,13 @@ def _invoke_functional_runner(vm, cfg, scenario_path: Path, args: dict) -> dict:
     until_step = args.get("until_step")
     until_step = int(until_step) if until_step is not None else len(steps)
     steps = steps[from_step - 1 : until_step]
+    if from_step > 1:
+        print(
+            f"[mOSdat] WARNING: starting at step {from_step} — {from_step - 1} "
+            f"earlier step(s) skipped; scenario state (focus, navigation, login) "
+            f"from those steps is NOT guaranteed."
+        )
+        degraded.append("partial_run_no_precondition_guarantee")
 
     passed = False
     log = ""
@@ -1193,6 +1545,7 @@ def _invoke_functional_runner(vm, cfg, scenario_path: Path, args: dict) -> dict:
                 vars=vars_,
                 results_dir=str(screenshot_dir.parent),
                 vm_name=vm.name,
+                start_index=from_step - 1,
             )
         finally:
             if _ssh_atspi is not None:
@@ -1217,6 +1570,10 @@ def _run_functional(args: dict) -> dict:
     vm, err = _resolve_vm(vm_name)
     if err:
         return err
+    if args.get("scenario_yaml"):
+        if scenario:
+            return _envelope(False, error="pass either 'scenario' or 'scenario_yaml', not both")
+        scenario = str(_write_inline_scenario(str(args["scenario_yaml"])))
     meta, err = _resolve_scenario(scenario, platform=getattr(vm, "os_type", None))
     if err:
         return err
@@ -1249,10 +1606,24 @@ def _run_functional(args: dict) -> dict:
     steps = _steps_from_run(screenshot_dir, step_count, passed, log)
     artifacts = _collect_artifacts(screenshot_dir)
     verdict = "pass" if passed else "fail"
+    degraded = raw.get("degraded") or []
+    extra: dict = {}
+    if "vlm_unavailable" in degraded:
+        # A run with no VLM cannot judge its verify/localize steps: a "pass"
+        # only means the steps executed, a "fail" may be the VLM itself.
+        # Say so, and hand the caller the screenshots to judge.
+        vlm_steps = _vlm_step_numbers(meta["resolved_path"], meta.get("platform"))
+        if vlm_steps:
+            verdict = "unverified"
+            extra["unverified_steps"] = vlm_steps
+            extra["screenshots_to_judge"] = [
+                p for p in artifacts if p.lower().endswith((".png", ".jpg", ".jpeg"))
+            ]
     return _envelope(
         True,
-        degraded=raw.get("degraded") or [],
+        degraded=degraded,
         verdict=verdict,
+        **extra,
         steps=steps,
         artifacts=artifacts,
         elapsed_ms=elapsed,
@@ -1309,6 +1680,9 @@ def _list_scenarios(args: Optional[dict] = None) -> dict:
     return _envelope(True, scenarios=scenarios)
 
 
+_WINDOWS_MIN_FREE_GB = 8
+
+
 def _readiness(args: dict) -> dict:
     """mosdat_readiness: wrap doctor/preflight checks into a go/no-go answer."""
     from automation.commands.doctor import check_deps, check_disk_tmp, check_ssh
@@ -1324,6 +1698,7 @@ def _readiness(args: dict) -> dict:
     checks: list[dict] = []
     reachable = False
     deployed_version: Optional[str] = None
+    installed: Optional[dict] = None
 
     ssh = _ssh_client(vm)
     ssh_res = check_ssh(ssh)
@@ -1358,14 +1733,43 @@ def _readiness(args: dict) -> dict:
             # so an agent gets a go/no-go rather than a soft warning.
             disk_status = "PASS" if disk.status == "PASS" else "FAIL"
             checks.append(_check_item("disk_tmp", disk_status, disk.detail))
+        else:
+            try:
+                from automation.commands.vm_lifecycle import windows_disk_free_gb
 
-        deployed_version = _read_deployed_version(ssh)
+                free = windows_disk_free_gb(ssh)
+                # A native Windows build needs ~8 GB on C: (it failed live on a full disk).
+                checks.append(_check_item(
+                    "disk_c", "PASS" if free >= _WINDOWS_MIN_FREE_GB else "FAIL",
+                    f"{free} GB free on C:",
+                ))
+            except Exception as e:
+                checks.append(_check_item("disk_c", "FAIL", f"could not read free space: {e}"))
+
+        is_windows = bool(getattr(vm, "is_windows", False))
+        try:
+            from automation.commands.vm_lifecycle import installed_app_info
+
+            installed = installed_app_info(ssh, is_windows=is_windows)
+        except Exception as e:
+            installed = {"found": False, "error": str(e)}
+        deployed_version = (
+            installed.get("version") if is_windows else _read_deployed_version(ssh)
+        )
         if (expect_pr is not None and expect_pr != "") or expect_symbol:
             checks.append(
-                _expected_build_check(ssh, deployed_version, expect_pr, expect_symbol)
+                _expected_build_check(
+                    ssh, deployed_version, expect_pr, expect_symbol,
+                    is_windows=is_windows, windows_asar=installed.get("asar_path"),
+                )
             )
 
     ready = bool(checks) and all(c["status"] == "PASS" for c in checks)
+    extra: dict = {}
+    if installed is not None:
+        extra["installed"] = installed
+    if not reachable:
+        extra["hints"] = _readiness_hints_safe(vm)
     return _envelope(
         True,
         ready=ready,
@@ -1377,12 +1781,64 @@ def _readiness(args: dict) -> dict:
             "busy": busy,
         },
         checks=checks,
+        **extra,
+    )
+
+
+def _readiness_hints_safe(vm) -> list:
+    """Next steps for an unreachable VM; never raises."""
+    try:
+        from automation.commands.vm_lifecycle import readiness_hints
+
+        proxmox_ok = True
+        try:
+            _get_proxmox_api().get_vm_status(vm.vmid)
+        except Exception:
+            proxmox_ok = False
+        return readiness_hints(vm, _config(), ssh_ok=False, proxmox_ok=proxmox_ok)
+    except Exception:
+        return []
+
+
+def _vm_hygiene(args: dict) -> dict:
+    """mosdat_vm_hygiene: fix Windows focus-thief UI (clock/OneDrive/backup/news)."""
+    from automation.commands.vm_hygiene import exit_code_for, vm_hygiene
+
+    vm_name = args.get("vm") or args.get("vm_name")
+    vm, err = _resolve_vm(vm_name)
+    if err:
+        return err
+
+    if not vm.is_windows:
+        return _envelope(
+            False,
+            error=(
+                "vm-hygiene is not supported for non-Windows VMs "
+                f"(os_type={vm.os_type!r})"
+            ),
+        )
+
+    result = vm_hygiene(vm.name, vm.ip, vm.user or "root", dry_run=False)
+    items = [
+        {"item": i.item, "status": i.status, "detail": i.detail}
+        for i in result.items
+    ]
+    ok = exit_code_for(result) == 0 and not result.error
+    return _envelope(
+        ok,
+        error=result.error or (None if ok else "one or more vm-hygiene items failed"),
+        vm=vm.name,
+        items=items,
     )
 
 
 def _ssh_bootstrap(args: dict) -> dict:
-    """mosdat_ssh_bootstrap: VNC-console SSH key install on a Windows VM."""
-    from automation.commands.ssh_bootstrap import bootstrap_windows_ssh, read_pubkey
+    """mosdat_ssh_bootstrap: install this host's SSH key (Windows: VNC console; Linux: guest agent)."""
+    from automation.commands.ssh_bootstrap import (
+        bootstrap_linux_ssh,
+        bootstrap_windows_ssh,
+        read_pubkey,
+    )
     from automation.proxmox.gpu import ProxmoxLockTimeout
 
     vm_name = args.get("vm") or args.get("vm_name")
@@ -1391,14 +1847,6 @@ def _ssh_bootstrap(args: dict) -> dict:
         return err
 
     os_type = getattr(vm, "os_type", "linux")
-    if os_type != "windows":
-        return _envelope(
-            False,
-            error=(
-                "ssh-bootstrap is not supported for non-Windows VMs "
-                f"(os_type={os_type!r})"
-            ),
-        )
 
     try:
         pubkey = read_pubkey(args.get("pubkey_path"))
@@ -1412,6 +1860,18 @@ def _ssh_bootstrap(args: dict) -> dict:
         from automation.vlm.client import VLMClient
 
         proxmox = ProxmoxAPI(cfg.proxmox)
+        if os_type != "windows":
+            result = bootstrap_linux_ssh(
+                vm.name, vm.ip, vm.user or "root", int(vm.vmid), proxmox, pubkey,
+                dry_run=False,
+            )
+            return _envelope(
+                result.ok,
+                error=result.error or None,
+                already_working=result.already_working,
+                steps=result.steps,
+                vm=vm.name,
+            )
         vlm_cfg = cfg.vlm
         vlm = VLMClient(
             base_url=vlm_cfg.base_url,
@@ -1517,3 +1977,42 @@ def _server_list(args: Optional[dict] = None) -> dict:
 def _ssh_tool(req: Request, vm_name: str, command: str, timeout: int = 30, *, jsonrpc_result) -> str:
     out, ec = _ssh(command, vm_name, timeout)
     return jsonrpc_result(req, {"exit_code": ec, "stdout": out})
+
+
+def _ssh_dispatch(req: Request, args: dict, *, jsonrpc_result) -> str:
+    """mosdat_ssh: a one-line ``command``, or a multi-line ``script`` sent as a file."""
+    vm_name = args.get("vm_name") or args.get("vm")
+    timeout = int(args.get("timeout", 30))
+    script = args.get("script")
+    detach = bool(args.get("detach", False))
+    session = args.get("session") or "ssh"
+    if not script:
+        if detach or session != "ssh":
+            return jsonrpc_result(
+                req,
+                {"exit_code": 2, "stdout": "",
+                 "stderr": "'detach' and 'session' need 'script', not 'command'"},
+            )
+        return _ssh_tool(req, vm_name, args["command"], timeout, jsonrpc_result=jsonrpc_result)
+
+    from automation.transport.remote_script import run_script
+    from automation.transport.ssh import SSHClient
+
+    vm, _ = _vm_config(vm_name)
+    ssh = SSHClient(vm.ip, user=vm.user or "root")
+    try:
+        res = run_script(
+            ssh, script, is_windows=bool(getattr(vm, "is_windows", False)),
+            timeout=timeout, detach=detach, session=session,
+        )
+    except ValueError as e:
+        return jsonrpc_result(req, {"exit_code": 2, "stdout": "", "stderr": str(e)})
+    payload = {
+        "exit_code": res.returncode,
+        "stdout": (res.stdout or "").strip(),
+        "stderr": (res.stderr or "").strip(),
+    }
+    if detach:
+        payload["log_path"] = res.log_path
+        payload["pid"] = res.pid
+    return jsonrpc_result(req, payload)

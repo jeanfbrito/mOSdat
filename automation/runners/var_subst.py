@@ -106,6 +106,7 @@ def _render_step_dict(step: dict, env, step_index: int) -> dict:
         "then_key_pre", "key_pre", "focus", "if_visible",
         "launch", "launch_window",
         "verify_click_diff_prompt", "canary_verify", "canary_char",
+        "poll_shell", "poll_match",
     )
     result = dict(step)
 
@@ -163,6 +164,7 @@ def _render_step_dict_regex(step: dict, vars: dict, step_index: int) -> dict:
         "then_key_pre", "key_pre", "focus", "if_visible",
         "launch", "launch_window",
         "verify_click_diff_prompt", "canary_verify", "canary_char",
+        "poll_shell", "poll_match",
     )
     result = dict(step)
 

@@ -198,6 +198,146 @@ class TestValidSteps:
         assert len(model.cleanup) == 1
 
 
+# ---------------------------------------------------------------------------
+# click_at: literal-coordinate click (skips VLM localize)
+# ---------------------------------------------------------------------------
+
+class TestClickAtStep:
+    def test_click_at_valid_parses(self):
+        model = _validate({"steps": [{"click_at": {"x": 120, "y": 340}}]})
+        assert len(model.steps) == 1
+        assert model.steps[0].click_at.x == 120
+        assert model.steps[0].click_at.y == 340
+
+    def test_click_at_with_click_button_both_present(self):
+        # click_at (coordinates) and click (button choice) are additive, not
+        # mutually exclusive — a right-click at fixed coords.
+        model = _validate({"steps": [{"click_at": {"x": 10, "y": 20}, "click": "right"}]})
+        assert model.steps[0].click_at.x == 10
+        assert model.steps[0].click == "right"
+
+    def test_click_at_missing_x_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"click_at": {"y": 340}}]})
+
+    def test_click_at_missing_y_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"click_at": {"x": 120}}]})
+
+    def test_click_at_unknown_key_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"click_at": {"x": 120, "y": 340, "z": 5}}]})
+
+    def test_step_with_neither_click_at_nor_localize_rejected(self):
+        # Same shape-rejection semantics as today: a step lacking any
+        # recognised discriminator key (localize, click_at, shell, etc.)
+        # fails validation.
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"hover": True}]})
+
+
+# ---------------------------------------------------------------------------
+# poll_shell: deterministic REST/shell outcome polling (Card 2)
+# ---------------------------------------------------------------------------
+
+class TestPollShellStep:
+    def test_poll_shell_with_exit_code_only(self):
+        model = _validate({"steps": [{"poll_shell": "curl -f http://x", "poll_exit_code": 0}]})
+        assert len(model.steps) == 1
+        assert model.steps[0].poll_shell == "curl -f http://x"
+        assert model.steps[0].poll_exit_code == 0
+        assert model.steps[0].poll_match is None
+
+    def test_poll_shell_with_match_only(self):
+        model = _validate({
+            "steps": [{"poll_shell": "curl http://x", "poll_exit_code": None, "poll_match": "ok"}]
+        })
+        assert model.steps[0].poll_exit_code is None
+        assert model.steps[0].poll_match == "ok"
+
+    def test_poll_shell_with_both_criteria(self):
+        model = _validate({
+            "steps": [{"poll_shell": "curl http://x", "poll_exit_code": 0, "poll_match": "ok"}]
+        })
+        assert model.steps[0].poll_exit_code == 0
+        assert model.steps[0].poll_match == "ok"
+
+    def test_poll_shell_defaults(self):
+        model = _validate({"steps": [{"poll_shell": "curl http://x"}]})
+        assert model.steps[0].poll_exit_code == 0
+        assert model.steps[0].poll_timeout == 20
+        assert model.steps[0].poll_interval == 2
+
+    def test_poll_shell_missing_both_criteria_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"poll_shell": "curl http://x", "poll_exit_code": None}]})
+
+    def test_poll_shell_nonpositive_interval_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"poll_shell": "curl http://x", "poll_interval": 0}]})
+
+    def test_poll_shell_negative_interval_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"poll_shell": "curl http://x", "poll_interval": -1}]})
+
+    def test_poll_shell_nonpositive_timeout_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"poll_shell": "curl http://x", "poll_timeout": 0}]})
+
+
+# ---------------------------------------------------------------------------
+# verify_recorded: deferred VLM verification against recording frames (Card 3)
+# ---------------------------------------------------------------------------
+
+class TestVerifyRecordedStep:
+    def test_valid_with_str_labels(self):
+        model = _validate({
+            "steps": [{"verify_recorded": {
+                "prompt": "is a toast visible",
+                "between": ["open toast", "close toast"],
+            }}]
+        })
+        assert len(model.steps) == 1
+        assert model.steps[0].verify_recorded["prompt"] == "is a toast visible"
+        assert model.steps[0].verify_recorded["between"] == ["open toast", "close toast"]
+
+    def test_valid_with_int_step_numbers(self):
+        model = _validate({
+            "steps": [{"verify_recorded": {"prompt": "is a toast visible", "between": [3, 5]}}]
+        })
+        assert model.steps[0].verify_recorded["between"] == [3, 5]
+
+    def test_valid_with_mixed_str_and_int(self):
+        model = _validate({
+            "steps": [{"verify_recorded": {"prompt": "is a toast visible", "between": [3, "close toast"]}}]
+        })
+        assert model.steps[0].verify_recorded["between"] == [3, "close toast"]
+
+    def test_missing_prompt_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"verify_recorded": {"between": [1, 2]}}]})
+
+    def test_empty_prompt_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"verify_recorded": {"prompt": "", "between": [1, 2]}}]})
+
+    def test_between_with_one_element_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"verify_recorded": {"prompt": "x", "between": [1]}}]})
+
+    def test_between_with_three_elements_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"verify_recorded": {"prompt": "x", "between": [1, 2, 3]}}]})
+
+    def test_between_missing_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"verify_recorded": {"prompt": "x"}}]})
+
+    def test_between_wrong_element_type_rejected(self):
+        with pytest.raises(ValidationError):
+            _validate({"steps": [{"verify_recorded": {"prompt": "x", "between": [1.5, 2]}}]})
+
+
 class TestMotionDwellFields:
     def test_click_motion_bezier_accepted(self):
         model = _validate({"steps": [{"localize": "the login button", "motion": "bezier"}]})

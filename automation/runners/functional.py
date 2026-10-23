@@ -119,6 +119,10 @@ class FunctionalRunner(_VerifyMixin, _StepsMixin, _LifecycleMixin):
         self._checkpoints: list = []
         # Track which snapshots were created this run (for cleanup)
         self._created_snapshots: list = []
+        # Card 3: verify_recorded steps are queued here (not run inline) by
+        # run_step; resolved offline against captured recording frames by
+        # automation/runners/deferred_verify.py after the run completes.
+        self._pending_recorded_verifies: list = []
         # CLI overrides for click-verify and canary modes
         self._click_verify_override = click_verify_override
         self._canary_override = canary_override

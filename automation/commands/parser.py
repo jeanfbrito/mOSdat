@@ -305,6 +305,11 @@ def build_parser() -> argparse.ArgumentParser:
     from automation.commands.ssh_bootstrap import add_ssh_bootstrap_subparser
     add_ssh_bootstrap_subparser(sub)
 
+    # mosdat vm-hygiene  (Windows focus-thief UI fixes: clock, OneDrive,
+    # backup nag, taskbar news widget)
+    from automation.commands.vm_hygiene import add_vm_hygiene_subparser
+    add_vm_hygiene_subparser(sub)
+
     from automation.commands.rc_server import (
         add_server_list_subparser,
         add_server_provision_subparser,

@@ -44,6 +44,7 @@ from automation.mcp_tools import (  # noqa: E402
     _resolve_scenario,
     _resolve_vm,
     _run_functional,
+    _run_smoke_impl,
     _ssh_bootstrap,
     _vm_busy,
 )
@@ -439,8 +440,76 @@ def test_run_functional_vlm_unavailable_flagged(mock_registry, mock_env_ready, m
     monkeypatch.setattr("automation.mcp_tools._invoke_functional_runner", _invoke)
     result = _run_functional({"vm": "ubuntu2404", "scenario": "rocketchat-smoke-linux"})
     assert result["ok"] is True
-    assert result["verdict"] == "pass"
+    # No VLM + VLM-judged steps: a "pass" only means the steps executed.
+    assert result["verdict"] == "unverified"
     assert "vlm_unavailable" in result["degraded"]
+    assert result["unverified_steps"]
+    assert "screenshots_to_judge" in result
+
+
+def test_run_functional_vlm_unavailable_without_vlm_steps_keeps_verdict(
+    mock_registry, mock_env_ready, monkeypatch, tmp_path
+):
+    scenario = tmp_path / "shell-only.yaml"
+    scenario.write_text("name: shell-only\nsteps:\n  - shell: echo hi\n")
+
+    def _invoke(vm, cfg, scenario_path, args):
+        return {"passed": True, "log": "PASS", "screenshot_dir": tmp_path,
+                "step_count": 1, "degraded": ["vlm_unavailable"]}
+
+    monkeypatch.setattr("automation.mcp_tools._invoke_functional_runner", _invoke)
+    result = _run_functional({"vm": "ubuntu2404", "scenario": str(scenario)})
+    assert result["verdict"] == "pass"
+    assert "unverified_steps" not in result
+
+
+def test_run_functional_accepts_scenario_path_outside_shared(
+    mock_registry, mock_env_ready, monkeypatch, tmp_path
+):
+    scenario = tmp_path / "scratch.yaml"
+    scenario.write_text("name: scratch\nsteps:\n  - shell: echo hi\n")
+    seen = {}
+
+    def _invoke(vm, cfg, scenario_path, args):
+        seen["path"] = scenario_path
+        return {"passed": True, "log": "PASS", "screenshot_dir": tmp_path,
+                "step_count": 1, "degraded": []}
+
+    monkeypatch.setattr("automation.mcp_tools._invoke_functional_runner", _invoke)
+    result = _run_functional({"vm": "ubuntu2404", "scenario": str(scenario)})
+    assert result["verdict"] == "pass"
+    assert seen["path"] == scenario.resolve()
+
+
+def test_run_functional_inline_scenario_yaml(
+    mock_registry, mock_env_ready, monkeypatch, tmp_path
+):
+    seen = {}
+    def _write(text):
+        path = tmp_path / "inline.yaml"
+        path.write_text(text)
+        return path
+
+    monkeypatch.setattr("automation.mcp_tools._write_inline_scenario", _write)
+
+    def _invoke(vm, cfg, scenario_path, args):
+        seen["text"] = Path(scenario_path).read_text()
+        return {"passed": True, "log": "PASS", "screenshot_dir": tmp_path,
+                "step_count": 1, "degraded": []}
+
+    monkeypatch.setattr("automation.mcp_tools._invoke_functional_runner", _invoke)
+    yaml_text = "name: inline\nsteps:\n  - shell: echo hi\n"
+    result = _run_functional({"vm": "ubuntu2404", "scenario_yaml": yaml_text})
+    assert result["verdict"] == "pass"
+    assert seen["text"] == yaml_text
+
+
+def test_run_functional_rejects_scenario_and_scenario_yaml(mock_registry, mock_env_ready):
+    result = _run_functional(
+        {"vm": "ubuntu2404", "scenario": "x", "scenario_yaml": "name: y\nsteps: []\n"}
+    )
+    assert result["ok"] is False
+    assert "not both" in result["error"]
 
 
 def test_busy_envelope_shape():
@@ -572,7 +641,7 @@ def mock_invoke_functional_deps(monkeypatch):
 
     def fake_load_test_yaml(path, cfg, **kwargs):
         load_test_yaml_calls.append(kwargs)
-        return ("fake-scenario", [], {}, {})
+        return ("fake-scenario", list(range(5)), {}, {})
 
     class FakeVncClient:
         def __init__(self, *a, **kw):
@@ -638,6 +707,37 @@ def test_invoke_functional_runner_defaults_workspace_url_from_config(
 
     run_calls = mock_invoke_functional_deps["run_test_calls"]
     assert run_calls[0]["vars"]["workspace_url"] == "https://configured.example.com"
+
+
+def test_invoke_functional_runner_threads_start_index_for_partial_run(
+    mock_registry, mock_invoke_functional_deps, tmp_path
+):
+    """A partial run (from_step > 1) threads start_index = from_step - 1 into
+    run_test so step numbers logged by FunctionalRunner reflect the true
+    original-scenario step index instead of renumbering from 1."""
+    vm = _make_vm()
+    result = _invoke_functional_runner(
+        vm, mock_registry, tmp_path / "scenario.yaml", {"from_step": 3}
+    )
+
+    run_calls = mock_invoke_functional_deps["run_test_calls"]
+    assert run_calls[0]["start_index"] == 2
+    assert "partial_run_no_precondition_guarantee" in result["degraded"]
+
+
+def test_invoke_functional_runner_full_run_has_zero_start_index_and_no_degraded(
+    mock_registry, mock_invoke_functional_deps, tmp_path
+):
+    """A full run (from_step omitted/1) passes start_index=0 and does not flag
+    the partial-run precondition caveat in degraded."""
+    vm = _make_vm()
+    result = _invoke_functional_runner(
+        vm, mock_registry, tmp_path / "scenario.yaml", {}
+    )
+
+    run_calls = mock_invoke_functional_deps["run_test_calls"]
+    assert run_calls[0]["start_index"] == 0
+    assert "partial_run_no_precondition_guarantee" not in result["degraded"]
 
 
 # ---------------------------------------------------------------------------
@@ -897,15 +997,27 @@ def test_ssh_bootstrap_unknown_vm_lists_alternatives(mock_registry, monkeypatch)
     boot.assert_not_called()
 
 
-def test_ssh_bootstrap_rejects_non_windows(mock_registry, monkeypatch):
-    boot = MagicMock()
-    monkeypatch.setattr(
-        "automation.commands.ssh_bootstrap.bootstrap_windows_ssh", boot,
-    )
-    result = _ssh_bootstrap({"vm": "ubuntu2404"})
-    assert result["ok"] is False
-    assert "non-Windows" in result["error"]
-    boot.assert_not_called()
+def test_ssh_bootstrap_linux_uses_guest_agent_path(mock_registry, monkeypatch, tmp_path):
+    pub = tmp_path / "id_ed25519.pub"
+    pub.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake test@host\n")
+    win_boot = MagicMock()
+    linux_boot = MagicMock(return_value=SimpleNamespace(
+        ok=True, error="", already_working=False, steps=["agent ping ok"],
+    ))
+    monkeypatch.setattr("automation.commands.ssh_bootstrap.bootstrap_windows_ssh", win_boot)
+    monkeypatch.setattr("automation.commands.ssh_bootstrap.bootstrap_linux_ssh", linux_boot)
+    monkeypatch.setattr("automation.proxmox.api.ProxmoxAPI", lambda cfg: MagicMock())
+
+    @contextmanager
+    def _free(vmid):
+        yield
+
+    monkeypatch.setattr("automation.mcp_tools._nonblocking_vm_lock", _free)
+    result = _ssh_bootstrap({"vm": "ubuntu2404", "pubkey_path": str(pub)})
+    assert result["ok"] is True
+    assert result["steps"] == ["agent ping ok"]
+    linux_boot.assert_called_once()
+    win_boot.assert_not_called()
 
 
 def test_ssh_bootstrap_lock_rejection(mock_registry, monkeypatch, tmp_path):
@@ -931,6 +1043,174 @@ def test_ssh_bootstrap_lock_rejection(mock_registry, monkeypatch, tmp_path):
     assert result["ok"] is False
     assert result["error"] == "vm busy: 104 held by another operation"
     boot.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# mosdat_run_smoke
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_smoke_deps(monkeypatch):
+    """Mock every I/O dependency of ``_run_smoke_impl`` (VNC/SSH/VLM/Proxmox).
+
+    Returns the injector/vlm/screenshotter mocks so tests can configure
+    ``process_running``/``verify`` return values and assert on the exact
+    commands passed to ``injector.shell``/``injector.launch``.
+    """
+
+    class FakeVncClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *a):
+            return False
+
+    vlm_mock = MagicMock()
+    vlm_mock.verify.return_value = True
+    injector_mock = MagicMock()
+    injector_mock.is_windows = False
+    injector_mock.process_running.return_value = True
+    screenshotter_mock = MagicMock()
+    screenshotter_mock.capture.return_value = ("fake-screenshot", {})
+
+    monkeypatch.setattr("automation.transport.vnc.VncClient", FakeVncClient)
+    monkeypatch.setattr("automation.transport.ssh.SSHClient", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr("automation.vlm.client.VLMClient", lambda **kw: vlm_mock)
+    monkeypatch.setattr("automation.vlm.input.InputInjector", lambda *a, **kw: injector_mock)
+    monkeypatch.setattr("automation.vlm.screenshot.Screenshotter", lambda *a, **kw: screenshotter_mock)
+    monkeypatch.setattr("automation.proxmox.api.ProxmoxAPI", lambda cfg: MagicMock())
+    monkeypatch.setattr("automation.mcp_tools._probe_vlm_degraded", lambda vlm: [])
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+
+    return {"vlm": vlm_mock, "injector": injector_mock, "screenshotter": screenshotter_mock}
+
+
+def test_run_smoke_linux_pass(mock_registry, mock_smoke_deps):
+    """Process running + window visible on a Linux VM → verdict pass."""
+    result = _run_smoke_impl({"vm_name": "ubuntu2404"})
+
+    assert result["ok"] is True
+    assert result["verdict"] == "pass"
+    assert result["process_running"] is True
+    assert result["window_visible"] is True
+    assert result["vm"] == "ubuntu2404"
+
+    injector = mock_smoke_deps["injector"]
+    injector.launch.assert_called_once()
+    kill_cmd = injector.shell.call_args_list[0][0][0]
+    assert "pkill" in kill_cmd
+    assert "Stop-Process" not in kill_cmd
+    mock_smoke_deps["screenshotter"].capture.assert_called_once()
+    mock_smoke_deps["vlm"].verify.assert_called_once()
+
+
+def test_run_smoke_windows_pass_no_bash_commands(mock_registry, mock_smoke_deps):
+    """Regression test: a Windows VM must never see pkill/wmctrl/bash job
+    control — this is the exact bug that motivated the rewrite."""
+    win = _make_vm("windows10", 104, "windows")
+    mock_registry.vm_by_name["windows10"] = win
+    mock_registry.vms.append(win)
+    mock_smoke_deps["injector"].is_windows = True
+
+    result = _run_smoke_impl({"vm_name": "windows10"})
+
+    assert result["ok"] is True
+    assert result["verdict"] == "pass"
+
+    injector = mock_smoke_deps["injector"]
+    injector.launch.assert_called_once()
+    kill_cmd = injector.shell.call_args_list[0][0][0]
+    assert "Stop-Process" in kill_cmd
+    assert "pkill" not in kill_cmd
+    assert "wmctrl" not in kill_cmd
+    assert "$!" not in kill_cmd
+
+
+def test_run_smoke_process_not_running_fails(mock_registry, mock_smoke_deps):
+    """App fails to launch (process never comes up) → verdict fail, VLM
+    verify is skipped since there's nothing to look at."""
+    mock_smoke_deps["injector"].process_running.return_value = False
+
+    result = _run_smoke_impl({"vm_name": "ubuntu2404"})
+
+    assert result["ok"] is True
+    assert result["verdict"] == "fail"
+    assert result["process_running"] is False
+    assert result["window_visible"] is False
+    mock_smoke_deps["vlm"].verify.assert_not_called()
+
+
+def test_run_smoke_process_appears_late_within_poll_budget(mock_registry, mock_smoke_deps):
+    """process_running returns False on the first few poll attempts and only
+    becomes True later, within the poll budget — must not report a false
+    negative just because the process wasn't up on the very first check."""
+    mock_smoke_deps["injector"].process_running.side_effect = [False, False, False, True]
+
+    result = _run_smoke_impl({"vm_name": "ubuntu2404"})
+
+    assert result["ok"] is True
+    assert result["verdict"] == "pass"
+    assert result["process_running"] is True
+    assert result["window_visible"] is True
+    assert mock_smoke_deps["injector"].process_running.call_count == 4
+    mock_smoke_deps["vlm"].verify.assert_called_once()
+
+
+def test_run_smoke_poll_budget_exhausted_fails(mock_registry, mock_smoke_deps):
+    """process_running never becomes True within the poll budget → clean
+    verdict: fail (poll-exhaustion path), same as today's failure reporting."""
+    mock_smoke_deps["injector"].process_running.return_value = False
+
+    result = _run_smoke_impl({"vm_name": "ubuntu2404", "timeout": 4})
+
+    assert result["ok"] is True
+    assert result["verdict"] == "fail"
+    assert result["process_running"] is False
+    assert result["window_visible"] is False
+    # effective_cap = min(max(4,1),60) = 4, poll_interval = 2 -> max_polls = 2
+    assert mock_smoke_deps["injector"].process_running.call_count == 2
+    mock_smoke_deps["vlm"].verify.assert_not_called()
+
+
+def test_run_smoke_window_not_visible_fails(mock_registry, mock_smoke_deps):
+    """Process running but VLM says no window visible → verdict fail."""
+    mock_smoke_deps["vlm"].verify.return_value = False
+
+    result = _run_smoke_impl({"vm_name": "ubuntu2404"})
+
+    assert result["ok"] is True
+    assert result["verdict"] == "fail"
+    assert result["process_running"] is True
+    assert result["window_visible"] is False
+
+
+def test_run_smoke_unknown_vm_lists_alternatives(mock_registry, mock_smoke_deps):
+    result = _run_smoke_impl({"vm_name": "missing-vm"})
+    assert result["ok"] is False
+    assert "missing-vm" in result["error"]
+    assert "ubuntu2404" in result["error"]
+
+
+def test_run_smoke_registered_in_tool_definitions_and_dispatch():
+    names = [t["name"] for t in TOOL_DEFINITIONS]
+    assert "mosdat_run_smoke" in names
+    import inspect
+
+    from automation import mcp_server
+
+    src = inspect.getsource(mcp_server.handle_tools_call)
+    assert "mosdat_run_smoke" in src
+    assert "_run_smoke" in src
+
+
+def test_run_smoke_envelope_shape(mock_registry, mock_smoke_deps):
+    result = _run_smoke_impl({"vm_name": "ubuntu2404"})
+    for key in ("ok", "error", "degraded", "vm", "process_running", "window_visible", "verdict"):
+        assert key in result
 
 
 # ---------------------------------------------------------------------------
@@ -970,3 +1250,116 @@ def test_live_build_deploy_run_version_matches_just_built():
     # Re-read the version the build just reported — a stale binary would
     # have left installed_version empty or pointing at a previous build.
     assert build["deploy"]["installed_version"] == installed
+
+
+# ---------------------------------------------------------------------------
+# 003 agent friction fixes — MCP wiring
+# ---------------------------------------------------------------------------
+
+
+def _add_windows_vm(registry):
+    win = _make_vm("windows10", 104, "windows")
+    registry.vm_by_name["windows10"] = win
+    registry.vms.append(win)
+    return win
+
+
+def test_readiness_windows_reports_install_and_disk(mock_registry, mock_doctor_ready, monkeypatch):
+    _add_windows_vm(mock_registry)
+    monkeypatch.setattr(
+        "automation.commands.vm_lifecycle.installed_app_info",
+        lambda ssh, is_windows: {"found": True, "version": "4.18.0", "asar_path": r"C:\a\app.asar",
+                                 "path": r"C:\a\Rocket.Chat.exe", "asar_mtime_utc": "2026-10-14T18:00:00Z"},
+    )
+    monkeypatch.setattr("automation.commands.vm_lifecycle.windows_disk_free_gb", lambda ssh: 3.5)
+    result = _readiness({"vm": "windows10"})
+    assert result["vm"]["deployed_version"] == "4.18.0"
+    assert result["installed"]["asar_mtime_utc"] == "2026-10-14T18:00:00Z"
+    disk = next(c for c in result["checks"] if c["label"] == "disk_c")
+    assert disk["status"] == "FAIL"
+    assert result["ready"] is False
+
+
+def test_readiness_unreachable_returns_hints(mock_registry, mock_doctor_ready, monkeypatch):
+    from automation.commands.doctor import CheckResult
+
+    monkeypatch.setattr(
+        "automation.commands.doctor.check_ssh",
+        lambda ssh: CheckResult("SSH reachable", "FAIL", "Permission denied"),
+    )
+    monkeypatch.setattr(
+        "automation.mcp_tools._readiness_hints_safe", lambda vm: ["try ubuntu2204 (same family: ubuntu)"],
+    )
+    result = _readiness({"vm": "ubuntu2404"})
+    assert result["hints"] == ["try ubuntu2204 (same family: ubuntu)"]
+
+
+def test_build_accepts_source_without_pr(mock_registry, monkeypatch):
+    _add_windows_vm(mock_registry)
+    seen = {}
+
+    def _run(ns):
+        seen["ns"] = ns
+        return 0
+
+    monkeypatch.setattr("automation.commands.build.run_build", _run)
+    result = _build({"source": "/tmp/tree", "target": "exe", "deploy_to": "windows10"})
+    assert result["ok"] is True
+    assert seen["ns"].source == "/tmp/tree"
+    assert seen["ns"].pr == 0
+
+
+def test_build_requires_pr_or_source(mock_registry):
+    result = _build({})
+    assert result["ok"] is False
+    assert "source" in result["error"]
+
+
+def test_deploy_rejects_two_sources(mock_registry):
+    result = _deploy({"vm": "ubuntu2404", "artifact_path": "/x.deb", "release": "4.18.3"})
+    assert result["ok"] is False
+    assert "only one source" in result["error"]
+
+
+def test_deploy_pr_build_is_windows_only(mock_registry):
+    result = _deploy({"vm": "ubuntu2404", "pr_build": 3582})
+    assert result["ok"] is False
+    assert "Windows" in result["error"]
+
+
+def test_deploy_pr_build_reports_missing_installer(mock_registry, monkeypatch):
+    _add_windows_vm(mock_registry)
+    monkeypatch.setattr("automation.commands.build.find_windows_build_artifact", lambda ssh, pr: "")
+    install = MagicMock()
+    monkeypatch.setattr("automation.commands.build.install_existing_on_windows_vm", install)
+    result = _deploy({"vm": "windows10", "pr_build": 3589})
+    assert result["ok"] is False
+    assert "pr3589" in result["error"]
+    install.assert_not_called()
+
+
+def test_deploy_release_calls_install_release(mock_registry, monkeypatch):
+    _add_windows_vm(mock_registry)
+    fake = SimpleNamespace(vm="windows10", scp_ok=True, install_ok=True, installed_version="4.18.3",
+                           missing_symbols=[], error="", ok=True, artifact=r"C:\mosdat\tmp\rc.exe")
+    calls = []
+    monkeypatch.setattr(
+        "automation.commands.build.install_release_on_vm",
+        lambda *a, **k: calls.append((a, k)) or fake,
+    )
+    result = _deploy({"vm": "windows10", "release": "4.18.3"})
+    assert result["ok"] is True
+    assert result["artifact"] == r"C:\mosdat\tmp\rc.exe"
+    assert calls[0][0][3] == "windows" and calls[0][0][4] == "4.18.3"
+
+
+def test_deploy_failure_returns_error_envelope(mock_registry, monkeypatch, tmp_path):
+    """A failed deploy returns its error; it used to raise TypeError (duplicate 'error' kwarg)."""
+    pkg = tmp_path / "rc.deb"
+    pkg.write_bytes(b"!<arch>\n")
+    fake = SimpleNamespace(vm="ubuntu2404", scp_ok=False, install_ok=False, installed_version="",
+                           missing_symbols=[], error="refusing to deploy: too small", ok=False, artifact="")
+    monkeypatch.setattr("automation.commands.build.deploy_to_vm", lambda **k: fake)
+    result = _deploy({"vm": "ubuntu2404", "artifact_path": str(pkg), "target": "deb"})
+    assert result["ok"] is False
+    assert result["error"] == "refusing to deploy: too small"

@@ -37,8 +37,11 @@ from automation.commands.preflight import (
     SKIP,
     _check_binary,
     _check_disk_free,
+    _check_disk_free_windows,
     _check_no_stale_rc,
+    _check_no_stale_rc_windows,
     _check_symbol,
+    _check_windows_install,
     _resolve_binary_path,
     _check_tool_deps,
     _check_x11_cookie,
@@ -191,6 +194,80 @@ class TestCheckNoStaleRc:
         assert status == PASS
 
 
+# ---------------------------------------------------------------------------
+# Windows-aware check equivalents
+# ---------------------------------------------------------------------------
+
+class TestCheckWindowsInstall:
+    def test_pass_when_installed_and_symbol_present(self):
+        ssh = MagicMock()
+        ssh.run.side_effect = [
+            SSHResult(
+                0,
+                "INSTALLED_AT=C:\\Users\\jean\\AppData\\Local\\Programs\\rocketchat-desktop\\Rocket.Chat.exe\n"
+                "VERSION=1.2.3",
+                "",
+            ),
+            SSHResult(0, "COUNT=3", ""),
+        ]
+        installed_at, installed_version, missing = _check_windows_install(
+            ssh, ["isTelephonyEnabled"]
+        )
+        assert installed_at
+        assert installed_version == "1.2.3"
+        assert missing == []
+
+    def test_fail_when_not_installed(self):
+        ssh = MagicMock()
+        ssh.run.return_value = SSHResult(1, "", "NOT_FOUND")
+        installed_at, installed_version, missing = _check_windows_install(ssh, [])
+        assert installed_at == ""
+
+
+class TestCheckDiskFreeWindows:
+    def test_pass_when_enough(self):
+        ssh = _ssh(f"FREE={5 * 1024 ** 3}")
+        status, detail = _check_disk_free_windows(ssh)
+        assert status == PASS
+        assert "GB" in detail
+
+    def test_fail_when_too_low(self):
+        ssh = _ssh(f"FREE={500 * 1024 ** 2}")
+        status, detail = _check_disk_free_windows(ssh)
+        assert status == FAIL
+        assert "only" in detail
+
+
+class TestCheckNoStaleRcWindows:
+    def test_pass_when_no_processes(self):
+        ssh = _ssh("COUNT=0")
+        status, detail = _check_no_stale_rc_windows(ssh)
+        assert status == PASS
+
+    def test_fail_when_processes_found(self):
+        ssh = _ssh("COUNT=2")
+        status, detail = _check_no_stale_rc_windows(ssh)
+        assert status == FAIL
+        assert "stale" in detail
+
+
+class TestCheckYamlTimestampVar:
+    def test_scenario_using_timestamp_var_loads_successfully(self, tmp_path):
+        from automation.commands.preflight import _check_yaml
+
+        scenario = tmp_path / "ts.yaml"
+        scenario.write_text(textwrap.dedent("""\
+            name: ts-scenario
+            steps:
+              - shell: echo {{ timestamp }}
+        """))
+        status, detail, data = _check_yaml(
+            scenario, cli_vars={"timestamp": "20260101_000000"}
+        )
+        assert status == PASS
+        assert data is not None
+
+
 class TestDryRunShellSteps:
     def test_runs_first_3_shell_steps_only(self):
         steps = [
@@ -297,6 +374,7 @@ class TestRunPreflight:
         mock_vm.ip = "192.168.1.10"
         mock_vm.user = "jean"
         mock_vm.packages = []
+        mock_vm.is_windows = False
         mock_config.vm_by_name = {"ubuntu2204": mock_vm}
 
         def ssh_run(cmd, timeout=None):
@@ -340,6 +418,54 @@ class TestRunPreflight:
         # The important thing is no exception and consistent return value
         assert rc in (0, 1)
 
+    def test_windows_vm_skips_x11_and_tool_deps_checks(self, tmp_path):
+        """A Windows VM must never hit the Linux-only X11/xdotool checks."""
+        self._make_config(tmp_path)
+        cfg = self._write_fake_toml(tmp_path)
+
+        mock_config = MagicMock()
+        mock_config.framework_path = tmp_path
+        mock_config.app.binary = "/opt/Rocket.Chat/rocketchat-desktop"
+        mock_vm = MagicMock()
+        mock_vm.name = "win11"
+        mock_vm.scenario_subdir = "win11"
+        mock_vm.scenario_fallback_subdirs = ["windows"]
+        mock_vm.ip = "192.168.1.20"
+        mock_vm.user = "jean"
+        mock_vm.packages = []
+        mock_vm.is_windows = True
+        mock_config.vm_by_name = {"win11": mock_vm}
+
+        # Generic PowerShell-probe response covering all the Windows-aware
+        # checks (binary/symbol, disk-free, stale-process) regardless of the
+        # exact base64-encoded script sent — each check only looks for its
+        # own KEY= line.
+        windows_stdout = (
+            "INSTALLED_AT=C:\\Users\\jean\\AppData\\Local\\Programs\\rocketchat-desktop\\Rocket.Chat.exe\n"
+            "VERSION=1.2.3\n"
+            f"FREE={5 * 1024 ** 3}\n"
+            "COUNT=0"
+        )
+        mock_ssh = MagicMock()
+        mock_ssh.run.return_value = SSHResult(0, windows_stdout, "")
+        mock_ssh.host = "192.168.1.20"
+        mock_ssh.user = "jean"
+
+        with patch("automation.commands.preflight.load_config", return_value=mock_config), \
+             patch("subprocess.run") as mock_subprocess, \
+             patch("automation.commands.preflight._check_x11_cookie") as mock_x11, \
+             patch("automation.commands.preflight._check_tool_deps") as mock_tool_deps:
+            mock_subprocess.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+            with patch("automation.commands.preflight.SSHClient", return_value=mock_ssh):
+                rc = run_preflight(
+                    config_path=str(cfg),
+                    scenario_name="test-scenario",
+                    vms=["win11"],
+                )
+
+        mock_x11.assert_not_called()
+        mock_tool_deps.assert_not_called()
+        assert rc in (0, 1)
 
     def test_resolves_vm_scenario_subdir_before_shared_linux(self, tmp_path):
         cfg = self._write_fake_toml(tmp_path)

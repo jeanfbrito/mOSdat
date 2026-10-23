@@ -368,3 +368,178 @@ def test_add_ssh_bootstrap_subparser():
     assert args.command == "ssh-bootstrap"
     assert args.vm == "windows10"
     assert args.dry_run is True
+
+
+# ---------------------------------------------------------------------------
+# Linux: QEMU guest agent path
+# ---------------------------------------------------------------------------
+
+
+from automation.commands.ssh_bootstrap import (  # noqa: E402
+    ERR_AGENT_SSH_STILL_FAILS,
+    ERR_NO_GUEST_AGENT,
+    _linux_key_install_script,
+    bootstrap_linux_ssh,
+)
+
+
+def _linux_args(**kwargs):
+    ns = dict(
+        vm_name="ubuntu2404",
+        vm_ip="192.168.13.82",
+        vm_user="jean",
+        vmid=102,
+        proxmox=MagicMock(),
+        pubkey=PUBKEY,
+    )
+    ns.update(kwargs)
+    return ns
+
+
+def _ssh_sequence(monkeypatch, statuses):
+    seq = list(statuses)
+
+    def _check(ssh):
+        status = seq.pop(0) if seq else statuses[-1]
+        return CheckResult("SSH reachable", status, "" if status == "PASS" else "denied")
+
+    monkeypatch.setattr(mod, "check_ssh", _check)
+
+
+def test_linux_already_working_never_calls_agent(monkeypatch):
+    _ssh_sequence(monkeypatch, ["PASS"])
+    px = MagicMock()
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=False)
+    assert result.ok is True
+    assert result.already_working is True
+    px.agent_ping.assert_not_called()
+    px.agent_exec.assert_not_called()
+
+
+def test_linux_no_guest_agent_names_console_alternative(monkeypatch):
+    _ssh_sequence(monkeypatch, ["FAIL"])
+    px = MagicMock()
+    px.agent_ping.return_value = False
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=False)
+    assert result.ok is False
+    assert result.error == ERR_NO_GUEST_AGENT
+    assert "console" in result.error
+    px.agent_exec.assert_not_called()
+    assert exit_code_for(result) == 2
+
+
+def test_linux_proxmox_unreachable_is_reported(monkeypatch):
+    _ssh_sequence(monkeypatch, ["FAIL"])
+    px = MagicMock()
+    px.agent_ping.side_effect = ConnectionError("no route to host")
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=False)
+    assert result.ok is False
+    assert "Proxmox API not reachable" in result.error
+    px.agent_exec.assert_not_called()
+
+
+def test_linux_happy_path_appends_key_then_ssh_works(monkeypatch):
+    _ssh_sequence(monkeypatch, ["FAIL", "PASS"])
+    px = MagicMock()
+    px.agent_ping.return_value = True
+    px.agent_exec.return_value = {"exited": True, "exitcode": 0, "out": "KEY_ADDED\n", "err": ""}
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=False)
+    assert result.ok is True
+    assert result.already_working is False
+    vmid, argv = px.agent_exec.call_args.args
+    assert vmid == 102
+    assert argv[:2] == ["/bin/sh", "-c"]
+    assert PUBKEY in argv[2]
+    assert any("appended key" in s for s in result.steps)
+
+
+def test_linux_key_install_failure_reports_agent_stderr(monkeypatch):
+    _ssh_sequence(monkeypatch, ["FAIL"])
+    px = MagicMock()
+    px.agent_ping.return_value = True
+    px.agent_exec.return_value = {
+        "exited": True, "exitcode": 3, "out": "", "err": "NO_SUCH_USER=jean\n",
+    }
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=False)
+    assert result.ok is False
+    assert "NO_SUCH_USER=jean" in result.error
+
+
+def test_linux_ssh_still_fails_after_agent_steps(monkeypatch):
+    _ssh_sequence(monkeypatch, ["FAIL"])
+    px = MagicMock()
+    px.agent_ping.return_value = True
+    px.agent_exec.return_value = {"exited": True, "exitcode": 0, "out": "KEY_PRESENT\n", "err": ""}
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=False)
+    assert result.ok is False
+    assert result.error == ERR_AGENT_SSH_STILL_FAILS
+    assert exit_code_for(result) == 1
+    assert any("already in" in s for s in result.steps)
+
+
+def test_linux_dry_run_skips_all_io(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("dry-run must not probe SSH")
+
+    monkeypatch.setattr(mod, "check_ssh", _boom)
+    px = MagicMock()
+    result = bootstrap_linux_ssh(**_linux_args(proxmox=px), dry_run=True)
+    assert result.ok is True
+    assert result.steps and all(s.startswith("[dry-run]") for s in result.steps)
+    px.agent_ping.assert_not_called()
+
+
+def test_linux_key_install_script_quotes_inputs_and_guards_duplicates():
+    script = _linux_key_install_script("jean", PUBKEY)
+    assert f"key='{PUBKEY}'" in script
+    assert "u=jean" in script
+    assert 'grep -qxF "$key" "$f"' in script
+    assert 'chmod 700 "$d"' in script
+    assert 'chmod 600 "$f"' in script
+    assert 'chown "$u:$g"' in script
+    hostile = _linux_key_install_script("jean; rm -rf /", PUBKEY)
+    assert "u='jean; rm -rf /'" in hostile
+
+
+def _real_proxmox_api_module():
+    """Load automation/proxmox/api.py by path.
+
+    Other test files replace ``automation.proxmox.api`` in ``sys.modules``
+    with a stub, so a normal import can return a MagicMock here.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "automation" / "proxmox" / "api.py"
+    spec = importlib.util.spec_from_file_location("automation.proxmox._api_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = "automation.proxmox"
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_proxmox_agent_exec_polls_until_exited(monkeypatch):
+    api_mod = _real_proxmox_api_module()
+
+    px = api_mod.ProxmoxAPI(SimpleNamespace(node="pve"))
+    posts, gets = [], []
+    monkeypatch.setattr(px, "post", lambda ep, data=None: posts.append((ep, data)) or {"data": {"pid": 7}})
+    statuses = [{"exited": 0}, {"exited": 1, "exitcode": 0, "out-data": "KEY_ADDED\n"}]
+    monkeypatch.setattr(px, "get", lambda ep: gets.append(ep) or {"data": statuses.pop(0)})
+    monkeypatch.setattr(api_mod.time, "sleep", lambda s: None)
+    res = px.agent_exec(102, ["/bin/sh", "-c", "true"])
+    assert res == {"exited": True, "exitcode": 0, "out": "KEY_ADDED\n", "err": ""}
+    assert posts == [("/nodes/pve/qemu/102/agent/exec", {"command": ["/bin/sh", "-c", "true"]})]
+    assert gets == ["/nodes/pve/qemu/102/agent/exec-status?pid=7"] * 2
+
+
+def test_proxmox_agent_ping_false_on_api_error(monkeypatch):
+    api_mod = _real_proxmox_api_module()
+
+    px = api_mod.ProxmoxAPI(SimpleNamespace(node="pve"))
+
+    def _post(ep, data=None):
+        raise api_mod.ProxmoxAPIError("API error 500: QEMU guest agent is not running")
+
+    monkeypatch.setattr(px, "post", _post)
+    assert px.agent_ping(102) is False

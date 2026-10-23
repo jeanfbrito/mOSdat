@@ -264,6 +264,61 @@ class ProxmoxAPI:
             pass
         return None
 
+    def agent_ping(self, vmid: int) -> bool:
+        """True when the QEMU guest agent inside the VM answers.
+
+        A Proxmox API error (agent not installed / not running, VM stopped)
+        returns False. A network error to Proxmox itself propagates, so the
+        caller can tell "agent missing" apart from "Proxmox unreachable".
+        """
+        endpoint = f"/nodes/{self.config.node}/qemu/{vmid}/agent/ping"
+        try:
+            self.post(endpoint)
+        except ProxmoxAPIError:
+            return False
+        return True
+
+    def agent_exec(
+        self,
+        vmid: int,
+        argv: list[str],
+        *,
+        timeout: float = 60,
+        poll_interval: float = 0.5,
+    ) -> dict:
+        """Run ``argv`` in the guest through the QEMU guest agent and wait for it.
+
+        Returns ``{"exited": bool, "exitcode": int|None, "out": str, "err": str}``.
+        ``exited`` is False when ``timeout`` elapsed first. The agent runs the
+        command as its own user (root on Linux guests).
+        """
+        node = self.config.node
+        # POST that starts a process — NOT idempotent.
+        started = self.post(
+            f"/nodes/{node}/qemu/{vmid}/agent/exec",
+            data={"command": list(argv)},
+        ).get("data", {}) or {}
+        pid = started.get("pid")
+        if pid is None:
+            raise ProxmoxAPIError(f"agent/exec returned no pid: {started!r}")
+        deadline = time.monotonic() + timeout
+        status: dict = {}
+        while True:
+            status = self.get(
+                f"/nodes/{node}/qemu/{vmid}/agent/exec-status?pid={pid}"
+            ).get("data", {}) or {}
+            if status.get("exited"):
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(poll_interval)
+        return {
+            "exited": bool(status.get("exited")),
+            "exitcode": status.get("exitcode"),
+            "out": status.get("out-data", "") or "",
+            "err": status.get("err-data", "") or "",
+        }
+
     def wait_for_status(self, vmid: int, target_status: str, timeout: int = 120) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:

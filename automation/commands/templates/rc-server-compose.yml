@@ -26,5 +26,14 @@ services:
       MONGO_URL: mongodb://mongo:27017/rocketchat?replicaSet=rs0
       ROOT_URL: ${ROOT_URL}
       PORT: "3000"
+      # Seed an admin and skip the setup wizard so functional runs can drive
+      # the workspace via REST immediately after /livez.
+      ADMIN_USERNAME: ${RC_ADMIN_USERNAME:-mosdat-admin}
+      ADMIN_PASS: ${RC_ADMIN_PASS:-mosdat-admin-pass}
+      ADMIN_EMAIL: ${RC_ADMIN_EMAIL:-admin@mosdat.local}
+      OVERWRITE_SETTING_Show_Setup_Wizard: "completed"
+      # Fresh servers enforce email 2FA, so REST login returns totp-required and hangs.
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_Enabled: "false"
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_By_Email_Enabled: "false"
     ports:
       - "${HOST_PORT}:3000"

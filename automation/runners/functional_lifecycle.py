@@ -385,6 +385,7 @@ class _LifecycleMixin:
         vars: Optional[dict] = None,
         results_dir: Optional[Path] = None,
         vm_name: Optional[str] = None,
+        start_index: int = 0,
     ) -> tuple[bool, str]:
         """Run a sequence of steps.
 
@@ -395,6 +396,12 @@ class _LifecycleMixin:
 
         I2: On FAIL, if results_dir and vm_name are provided, collect VM-side
         debug artifacts into results_dir/<vm_name>/vm-debug/.
+
+        `start_index` is the caller's 0-based offset of `steps[0]` within the
+        scenario's ORIGINAL (unsliced) step list. Callers that pre-slice steps
+        for `--from-step`/`--until-step` partial runs pass `from_step - 1` here
+        so logged/emitted step numbers reflect the true original step index
+        instead of renumbering from 1. Defaults to 0 (full run behaviour).
         """
         if self.screenshot_dir is None:
             raise ValueError("screenshot_dir is required for forensic auditing")
@@ -416,11 +423,13 @@ class _LifecycleMixin:
         # C2: reset checkpoint tracking for this run
         self._checkpoints = []
         self._created_snapshots = []
+        # Card 3: reset deferred verify_recorded queue for this run
+        self._pending_recorded_verifies = []
 
         # C2: step cursor — supports rewind by adjusting where we resume from
         step_index = 0
         while step_index < len(resolved):
-            i = step_index + 1  # 1-indexed step number
+            i = step_index + start_index + 1  # true original-scenario step number
             step = resolved[step_index]
             try:
                 self.run_step(step, i)
@@ -475,8 +484,10 @@ class _LifecycleMixin:
                     self._emit("checkpoint_rewind", name=ckpt_name,
                                from_step=i, to_step=ckpt_step_num + 1)
                     _log(f"  [checkpoint] Rewound — resuming from step {ckpt_step_num + 1}")
-                    # Resume after the checkpoint step (0-indexed)
-                    step_index = ckpt_step_num  # ckpt_step_num is 1-indexed; index = ckpt_step_num
+                    # ckpt_step_num is the checkpoint's true (start_index-offset)
+                    # step number; convert back to a 0-indexed cursor into the
+                    # (possibly sliced) `resolved` list by subtracting start_index.
+                    step_index = ckpt_step_num - start_index
                     continue
                 else:
                     self._cleanup_snapshots(self._checkpoints_retain)

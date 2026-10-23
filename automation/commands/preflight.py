@@ -2,7 +2,7 @@
 
 Checks (each prints PASS / FAIL / SKIP):
   1. YAML parse + ScenarioModel schema validation
-  2. Per-VM:
+  2. Per-VM (Linux):
      a. SSH reachable (BatchMode, timeout 10 s)
      b. X11 cookie present
      c. Tool deps: wmctrl xclip xdotool xdg-mime xdg-open
@@ -11,6 +11,10 @@ Checks (each prints PASS / FAIL / SKIP):
      f. userData dir detection (kill RC, wipe, launch 18 s, list dirs, kill RC)
      g. Disk free > 1 GB in /tmp
      h. No stale RC processes
+     On Windows VMs, b/c/f are SKIPped (no meaningful analogue / requires
+     VNC+UIA plumbing preflight doesn't carry); d/e/g/h run real Windows
+     equivalents via PowerShell (Test-Path/Select-String/Get-PSDrive/
+     Get-Process), reusing the probe already used by ``mosdat build``.
   3. Dry-run first 3 ``shell:`` blocks from scenario (no UI steps)
 
 Exit codes:
@@ -21,8 +25,10 @@ Exit codes:
 
 from __future__ import annotations
 
+import os
 import shlex
 import sys
+from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
 
@@ -55,6 +61,7 @@ def _print(status: str, label: str, detail: str = "") -> None:
 def _check_yaml(
     scenario_path: Path,
     platform: Optional[str] = None,
+    cli_vars: Optional[dict] = None,
 ) -> tuple[str, str, Optional[dict]]:
     """Parse YAML and validate after import/routine expansion."""
     try:
@@ -71,7 +78,9 @@ def _check_yaml(
     try:
         from automation.runners.scenario_loader import load_test_yaml
 
-        _, expanded_steps, _, _ = load_test_yaml(scenario_path, platform=platform)
+        _, expanded_steps, _, _ = load_test_yaml(
+            scenario_path, platform=platform, cli_vars=cli_vars
+        )
     except SystemExit as exc:
         return FAIL, f"Scenario loader failed with exit {exc.code}", None
     except Exception as exc:
@@ -278,6 +287,67 @@ def _check_disk_free(ssh) -> tuple[str, str]:
         return FAIL, f"could not parse df output: {avail_str!r}"
 
 
+def _check_windows_install(
+    ssh, expected_symbols: list[str]
+) -> tuple[str, str, list[str]]:
+    """Windows analogue of ``_resolve_binary_path``/``_check_binary``/``_check_symbol``.
+
+    Reuses ``automation.commands.build``'s established PowerShell probe (same
+    candidate install paths + ``Select-String`` symbol grep used by
+    ``deploy_to_windows_vm``) instead of inventing a new one.
+
+    Returns ``(installed_at, installed_version, missing_symbols)``.
+    """
+    from automation.commands.build import _verify_windows_install
+
+    return _verify_windows_install(ssh, expected_symbols)
+
+
+def _check_disk_free_windows(ssh) -> tuple[str, str]:
+    """Windows analogue of ``_check_disk_free`` via PowerShell ``Get-PSDrive``."""
+    from automation.commands.build import _ps_run
+
+    script = (
+        "$d = Get-PSDrive -Name C -PSProvider FileSystem -ErrorAction SilentlyContinue;"
+        "if ($d) { Write-Host \"FREE=$($d.Free)\" } else { Write-Error 'NO_DRIVE'; exit 1 }"
+    )
+    r = _ps_run(ssh, script, timeout=15)
+    if r.success:
+        for line in (r.stdout or "").splitlines():
+            if line.startswith("FREE="):
+                try:
+                    avail = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    return FAIL, f"could not parse disk-free output: {line!r}"
+                gb = avail / (1024 ** 3)
+                if avail >= 1024 ** 3:
+                    return PASS, f"{gb:.1f} GB free on C:"
+                return FAIL, f"only {gb:.2f} GB free on C: (need >= 1 GB)"
+    return FAIL, "could not query C: drive free space"
+
+
+def _check_no_stale_rc_windows(ssh) -> tuple[str, str]:
+    """Windows analogue of ``_check_no_stale_rc`` via PowerShell ``Get-Process``."""
+    from automation.commands.build import _ps_run
+
+    script = (
+        "$p = Get-Process -Name 'Rocket.Chat','rocketchat-desktop' -ErrorAction SilentlyContinue;"
+        "if ($p) { Write-Host \"COUNT=$($p.Count)\" } else { Write-Host 'COUNT=0' }"
+    )
+    r = _ps_run(ssh, script, timeout=15)
+    count = 0
+    if r.success:
+        for line in (r.stdout or "").splitlines():
+            if line.startswith("COUNT="):
+                try:
+                    count = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    count = 0
+    if count:
+        return FAIL, f"{count} stale Rocket.Chat process(es) running"
+    return PASS, "no stale Rocket.Chat processes"
+
+
 def _check_no_stale_rc(ssh) -> tuple[str, str]:
     r = ssh.run(
         "pgrep -af '(/opt/[R]ocket[.]Chat|[r]ocketchat-desktop|[.]mount_rocket)' 2>/dev/null || true",
@@ -404,9 +474,23 @@ def run_preflight(
     # Check 1: YAML + schema
     # -----------------------------------------------------------------------
     print("=== 1. Scenario YAML + schema ===")
+    # Runtime vars mirror `mosdat functional`'s merge (I8) so scenarios that
+    # reference {{ timestamp }} (or the other functional-config vars) render
+    # correctly during preflight's own scenario-load check instead of failing
+    # or silently leaving the placeholder unrendered.
+    cli_vars = {
+        "workspace_url": config.functional.workspace_url,
+        "test_user": config.functional.test_user,
+        "test_password": config.functional.test_password,
+        "vm_password": os.environ.get(
+            "DEFAULT_VM_PASSWORD", os.environ.get("MOSDAT_VM_PASSWORD", "")
+        ),
+        "timestamp": _dt.now().strftime("%Y%m%d_%H%M%S"),
+    }
     yaml_status, yaml_detail, raw_data = _check_yaml(
         scenario_path,
         platform=first_vm.os_type if first_vm else None,
+        cli_vars=cli_vars,
     )
     _print(yaml_status, "YAML parse + ScenarioModel", yaml_detail)
     if yaml_status == FAIL:
@@ -448,57 +532,110 @@ def run_preflight(
             print()
             continue
 
-        # b. X11 cookie
-        s, d = _check_x11_cookie(ssh)
-        _print(s, "X11 cookie", d)
-        if s == FAIL:
-            any_fail = True
+        if vm.is_windows:
+            # b/c. X11 cookie + Linux desktop tool deps have no Windows
+            # analogue — skip with a clear SKIP rather than force a fake
+            # equivalent (matches doctor.py's Windows-skip precedent).
+            _print(SKIP, "X11 cookie", "N/A on Windows VM — no X11 session")
+            _print(
+                SKIP,
+                "Tool deps (wmctrl xclip xdotool xdg-mime xdg-open)",
+                "N/A on Windows VM — Linux desktop tool deps",
+            )
 
-        # c. Tool deps
-        s, d = _check_tool_deps(ssh)
-        _print(s, "Tool deps (wmctrl xclip xdotool xdg-mime xdg-open)", d)
-        if s == FAIL:
-            any_fail = True
-
-        # d. Binary exists
-        binary_path = _resolve_binary_path(ssh, config, vm)
-
-        s, d = _check_binary(ssh, binary_path)
-        _print(s, "Binary exists", d)
-        if s == FAIL:
-            any_fail = True
-
-        # e. Symbol grep
-        if expected_symbols:
-            asar_path = _find_asar(ssh, binary_path)
-            if not asar_path:
-                for sym in expected_symbols:
-                    _print(FAIL, f"Symbol: {sym}", "app.asar not found — cannot grep")
-                    any_fail = True
+            # d/e. Binary exists + symbol grep — real Windows equivalents,
+            # reusing build.py's established PowerShell probe.
+            installed_at, installed_version, missing_symbols = _check_windows_install(
+                ssh, expected_symbols
+            )
+            if installed_at:
+                _print(PASS, "Binary exists", f"{installed_at} (v{installed_version})")
             else:
-                for sym in expected_symbols:
-                    s, d = _check_symbol(ssh, asar_path, sym)
-                    _print(s, f"Symbol: {sym}", d)
-                    if s == FAIL:
+                _print(FAIL, "Binary exists", "Rocket.Chat.exe not found in known install paths")
+                any_fail = True
+
+            for sym in expected_symbols:
+                if not installed_at:
+                    _print(FAIL, f"Symbol: {sym}", "binary not found — cannot verify symbol")
+                    any_fail = True
+                elif sym in missing_symbols:
+                    _print(FAIL, f"Symbol: {sym}", "not found in installed app.asar")
+                    any_fail = True
+                else:
+                    _print(PASS, f"Symbol: {sym}", "found in installed app.asar")
+
+            # f. userData dir detection requires the same VNC/UIA launch
+            # plumbing used by the functional runner, which preflight does
+            # not carry — skip rather than invent a partial equivalent.
+            _print(
+                SKIP,
+                "userData dir detection",
+                "requires VNC/UIA launch plumbing — not implemented for preflight on Windows",
+            )
+
+            # g. Disk free > 1 GB — real Windows equivalent via Get-PSDrive.
+            s, d = _check_disk_free_windows(ssh)
+            _print(s, "Disk free > 1 GB (C:)", d)
+            if s == FAIL:
+                any_fail = True
+
+            # h. No stale RC processes — real Windows equivalent via Get-Process.
+            s, d = _check_no_stale_rc_windows(ssh)
+            _print(s, "No stale RC processes", d)
+            if s == FAIL:
+                any_fail = True
+        else:
+            # b. X11 cookie
+            s, d = _check_x11_cookie(ssh)
+            _print(s, "X11 cookie", d)
+            if s == FAIL:
+                any_fail = True
+
+            # c. Tool deps
+            s, d = _check_tool_deps(ssh)
+            _print(s, "Tool deps (wmctrl xclip xdotool xdg-mime xdg-open)", d)
+            if s == FAIL:
+                any_fail = True
+
+            # d. Binary exists
+            binary_path = _resolve_binary_path(ssh, config, vm)
+
+            s, d = _check_binary(ssh, binary_path)
+            _print(s, "Binary exists", d)
+            if s == FAIL:
+                any_fail = True
+
+            # e. Symbol grep
+            if expected_symbols:
+                asar_path = _find_asar(ssh, binary_path)
+                if not asar_path:
+                    for sym in expected_symbols:
+                        _print(FAIL, f"Symbol: {sym}", "app.asar not found — cannot grep")
                         any_fail = True
+                else:
+                    for sym in expected_symbols:
+                        s, d = _check_symbol(ssh, asar_path, sym)
+                        _print(s, f"Symbol: {sym}", d)
+                        if s == FAIL:
+                            any_fail = True
 
-        # f. userData dir detection
-        s, d = _check_userdata_dirs(ssh, binary_path)
-        _print(s, "userData dir detection", d)
-        if s == FAIL:
-            any_fail = True
+            # f. userData dir detection
+            s, d = _check_userdata_dirs(ssh, binary_path)
+            _print(s, "userData dir detection", d)
+            if s == FAIL:
+                any_fail = True
 
-        # g. Disk free > 1 GB
-        s, d = _check_disk_free(ssh)
-        _print(s, "Disk free > 1 GB (/tmp)", d)
-        if s == FAIL:
-            any_fail = True
+            # g. Disk free > 1 GB
+            s, d = _check_disk_free(ssh)
+            _print(s, "Disk free > 1 GB (/tmp)", d)
+            if s == FAIL:
+                any_fail = True
 
-        # h. No stale RC processes
-        s, d = _check_no_stale_rc(ssh)
-        _print(s, "No stale RC processes", d)
-        if s == FAIL:
-            any_fail = True
+            # h. No stale RC processes
+            s, d = _check_no_stale_rc(ssh)
+            _print(s, "No stale RC processes", d)
+            if s == FAIL:
+                any_fail = True
 
         print()
 

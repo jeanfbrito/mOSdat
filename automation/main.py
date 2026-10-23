@@ -247,19 +247,6 @@ def cmd_functional(args) -> int:
     if not getattr(args, "skip_warmup", False):
         _warmup_vlm(vlm)
 
-    # P1: preflight workspace URL before per-VM loop to fail fast on dead server
-    if not getattr(args, "skip_workspace_check", False):
-        workspace_url = getattr(config.functional, "workspace_url", None)
-        if workspace_url:
-            print(f"[mOSdat] Pre-flight workspace check: {workspace_url}")
-            ok, detail = _preflight_workspace(workspace_url)
-            if ok:
-                print(f"[mOSdat]   Workspace OK ({detail})")
-            else:
-                print(f"[mOSdat]   ERROR: workspace unreachable — {detail}")
-                print("[mOSdat]   Fix the workspace server (or pass --skip-workspace-check) and retry.")
-                return 2
-
     # H2.3: probe VLM model identity before per-VM loop
     if not getattr(args, "skip_model_check", False):
         try:
@@ -289,8 +276,50 @@ def cmd_functional(args) -> int:
             print(f"[mOSdat] ERROR: duplicate --var key: {k!r}")
             return 1
         cli_vars[k] = v
+    # `timestamp` must be in cli_vars BEFORE load_test_yaml renders {{ }}
+    # placeholders — setting it on the dict load_test_yaml already returned
+    # is too late (a scenario using {{ timestamp }} would fail "undefined").
+    from datetime import datetime as dt
+    cli_vars.setdefault("timestamp", dt.now().strftime("%Y%m%d_%H%M%S"))
 
     name, steps, vars_, yaml_checkpoints = load_test_yaml(test_file, cli_vars=cli_vars, platform=vms[0].os_type)
+
+    # Card 3: verify_recorded is resolved offline against captured recording
+    # frames after the run — without --record-session there are no frames to
+    # check against. Fail fast, BEFORE any VM/Proxmox connection is attempted.
+    # Checked against the full, unsliced step list (not the --from-step/
+    # --until-step subset) since a partial run could still reference a
+    # verify_recorded step. Never silently auto-enable recording.
+    if not getattr(args, "record_session", False):
+        _vr_step_nums = [
+            i + 1 for i, s in enumerate(steps) if getattr(s, "verify_recorded", None)
+        ]
+        if _vr_step_nums:
+            print(
+                f"[mOSdat] ERROR: step(s) {_vr_step_nums} use verify_recorded, "
+                "which requires --record-session (frames are checked after "
+                "the run against captured recording frames). Pass "
+                "--record-session or remove verify_recorded from the scenario."
+            )
+            return 1
+
+    # P1: preflight workspace URL before per-VM loop to fail fast on dead
+    # server. Probes the scenario's OWN resolved workspace_url (YAML vars:
+    # block or --var, already merged into vars_ by load_test_yaml above) —
+    # not just the static [functional] config value, which is often a
+    # placeholder and would otherwise force --skip-workspace-check for any
+    # scenario that sets its own workspace.
+    if not getattr(args, "skip_workspace_check", False):
+        workspace_url = vars_.get("workspace_url") or getattr(config.functional, "workspace_url", None)
+        if workspace_url:
+            print(f"[mOSdat] Pre-flight workspace check: {workspace_url}")
+            ok, detail = _preflight_workspace(workspace_url)
+            if ok:
+                print(f"[mOSdat]   Workspace OK ({detail})")
+            else:
+                print(f"[mOSdat]   ERROR: workspace unreachable — {detail}")
+                print("[mOSdat]   Fix the workspace server (or pass --skip-workspace-check) and retry.")
+                return 2
 
     # C2: resolve checkpoint config (YAML wins unless --no-checkpoints overrides)
     checkpoint_config = dict(yaml_checkpoints)
@@ -337,14 +366,20 @@ def cmd_functional(args) -> int:
     # `platform=vm.os_type` so routine calls resolve to the per-OS variant
     # (`shared/routines/<platform>/<slug>.yaml`). Bounds already validated.
     partial_run = (from_step > 1 or until_step < total_steps)
+    if from_step > 1:
+        print(
+            f"[mOSdat] WARNING: starting at step {from_step} of {total_steps} — "
+            f"{from_step - 1} earlier step(s) skipped; scenario state (focus, "
+            f"navigation, login) from those steps is NOT guaranteed."
+        )
 
-    # Merge config vars (workspace_url, test_user, test_password) into template vars
-    from datetime import datetime as dt
+    # Merge config vars (workspace_url, test_user, test_password) into template vars.
+    # `timestamp` is already correctly set from cli_vars above — load_test_yaml's
+    # merged_vars (yaml_vars + cli_vars) is exactly what's in vars_ here.
     vars_.setdefault("workspace_url", config.functional.workspace_url)
     vars_.setdefault("test_user", config.functional.test_user)
     vars_.setdefault("test_password", config.functional.test_password)
     vars_.setdefault("vm_password", os.environ.get("DEFAULT_VM_PASSWORD", os.environ.get("MOSDAT_VM_PASSWORD", "")))
-    vars_["timestamp"] = dt.now().strftime("%Y%m%d_%H%M%S")
 
     if not config.proxmox.password:
         print("[mOSdat] ERROR: Proxmox password required for VNC screenshots. Set MOSDAT_PROXMOX_PASSWORD or [proxmox].password in config.")
@@ -416,6 +451,19 @@ def cmd_functional(args) -> int:
                 screenshotter = Screenshotter(vnc)
                 injector = InputInjector(vnc, ssh, vm.is_windows)
                 recorder = None
+                # Card 3: bound before the try/finally below so a deferred
+                # verify_recorded resolution error in `finally` (which runs
+                # even if `run_test` never assigned `passed`) has a defined
+                # value to fold its FAIL into.
+                passed = True
+                # Card 3: reset every VM iteration — `runner` is a
+                # function-level (not loop-scoped) name in Python, so
+                # without this reset a setup failure for THIS vm (raised
+                # before `runner = FunctionalRunner(...)` below runs) would
+                # leave `runner` pointing at the PREVIOUS vm's runner in
+                # `finally`, silently resolving verify_recorded against the
+                # wrong VM's events/pending-queue instead of skipping.
+                runner = None
                 # C2: vm_ops needed only when checkpoints are enabled
                 from automation.proxmox.vm import VMOperations
                 _vm_ops_for_ckpt = None
@@ -531,7 +579,9 @@ def cmd_functional(args) -> int:
                                 overall = False
                                 continue
 
-                    passed, log = runner.run_test(vm_steps, name, vars=vm_vars)
+                    passed, log = runner.run_test(
+                        vm_steps, name, vars=vm_vars, start_index=from_step - 1,
+                    )
                     # B4: partial run note
                     if partial_run and until_step < total_steps:
                         remaining = total_steps - until_step
@@ -565,6 +615,47 @@ def cmd_functional(args) -> int:
                             print(f"[mOSdat] Recording GIF: {artifacts.gif_path}")
                         if artifacts.warning:
                             print(f"[mOSdat] Recording WARN: {artifacts.warning}")
+
+                        # Card 3: resolve deferred verify_recorded checks
+                        # against the just-exported frames now that
+                        # filtered_index.jsonl exists, and fold their
+                        # pass/fail into this run's overall result. Known,
+                        # intentional limitation: this runs strictly AFTER
+                        # run_test's per-step retry/checkpoint-rewind loop
+                        # has already returned, so a FAIL discovered here
+                        # cannot trigger a checkpoint rewind — that loop has
+                        # already exited by the time frames are analyzed.
+                        # `runner` is reset to None per-iteration above, so
+                        # this is None (not a stale prior-VM runner) if
+                        # setup failed before `runner = FunctionalRunner(...)`
+                        # ran for this VM.
+                        _runner_for_vr = runner
+                        if _runner_for_vr is not None and getattr(
+                            _runner_for_vr, "_pending_recorded_verifies", None
+                        ):
+                            from automation.runners.deferred_verify import (
+                                resolve_pending_verifies,
+                            )
+                            try:
+                                vr_results = resolve_pending_verifies(
+                                    _runner_for_vr, _runner_for_vr._events_path, artifacts,
+                                )
+                            except Exception as vr_err:
+                                print(
+                                    f"[mOSdat] ERROR: verify_recorded resolution "
+                                    f"failed: {vr_err}"
+                                )
+                                passed = False
+                            else:
+                                for vr in vr_results:
+                                    vr_status = "PASS" if vr["passed"] else "FAIL"
+                                    print(
+                                        f"[mOSdat] verify_recorded step "
+                                        f"{vr['step_num']}: {vr_status} "
+                                        f"(frames_checked={vr['frames_checked']})"
+                                    )
+                                    if not vr["passed"]:
+                                        passed = False
 
             status = "PASS" if passed else "FAIL"
             print(f"[mOSdat]   Result: {status}")
@@ -643,6 +734,7 @@ def main() -> int:
     from automation.commands.replay import run_replay
     from automation.commands.build import run_build
     from automation.commands.ssh_bootstrap import run_ssh_bootstrap
+    from automation.commands.vm_hygiene import run_vm_hygiene
     from automation.commands.rc_server import (
         run_server_list,
         run_server_provision,
@@ -688,6 +780,7 @@ def main() -> int:
         "replay": run_replay,
         "build": run_build,
         "ssh-bootstrap": run_ssh_bootstrap,
+        "vm-hygiene": run_vm_hygiene,
         "server-provision": run_server_provision,
         "server-teardown": run_server_teardown,
         "server-list": run_server_list,

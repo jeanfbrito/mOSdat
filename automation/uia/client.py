@@ -541,11 +541,14 @@ class UiaClient:
             return result
         finally:
             # Best-effort cleanup: delete task + temp files. Don't shadow a
-            # primary error.
+            # primary error. No `$` in this string: the VM's SSH shell is
+            # PowerShell and expands `$null` inside the outer double quotes,
+            # which left `2>` with no target and leaked every task (336 found
+            # on windows10, 2026-10-23).
             try:
                 cleanup = (
                     "powershell -NoProfile -Command \""
-                    f"schtasks /Delete /F /TN '{task_name}' 2>$null | Out-Null; "
+                    f"schtasks /Delete /F /TN '{task_name}' 2>&1 | Out-Null; "
                     f"Remove-Item -Force -ErrorAction SilentlyContinue "
                     f"'{req_path}','{res_path}'\""
                 )

@@ -71,6 +71,23 @@ class FunctionalStep:
     # round-trip. Precedence: if both `wait_for` and `wait` are set,
     # `wait_for` wins (richer primitive — `wait` is a dumb sleep).
     wait_for: Optional[Dict[str, Any]] = None
+    # Literal-coordinate click ({x, y}) — skips VLM localize entirely.
+    # For transient UI (e.g. toasts) where a VLM round-trip is too slow.
+    click_at: Optional[Dict[str, Any]] = None
+    # Card 2: deterministic REST/shell outcome polling — re-runs poll_shell
+    # every poll_interval seconds until poll_timeout elapses or the pass
+    # criteria (poll_exit_code / poll_match) hold. See automation/runners/
+    # functional_steps.py:_run_poll_shell.
+    poll_shell: Optional[str] = None
+    poll_timeout: int = 20
+    poll_interval: int = 2
+    poll_exit_code: Optional[int] = 0
+    poll_match: Optional[str] = None
+    # Card 3: deferred VLM verification against captured recording frames.
+    # Shape: {prompt: str, between: [stepA, stepB]} — see run_step's
+    # early-return branch in functional_steps.py and
+    # automation/runners/deferred_verify.py for the offline resolution pass.
+    verify_recorded: Optional[Dict[str, Any]] = None
 
 
 def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep]:
@@ -117,6 +134,13 @@ def resolve_vars(steps: list[FunctionalStep], vars: dict) -> list[FunctionalStep
             atspi=_resolve_in_dict(step.atspi, vars),
             verify_atspi=_resolve_in_dict(step.verify_atspi, vars),
             wait_for=_resolve_in_dict(step.wait_for, vars),
+            click_at=_resolve_in_dict(step.click_at, vars),
+            poll_shell=_sub(step.poll_shell, vars) if step.poll_shell else None,
+            poll_timeout=step.poll_timeout,
+            poll_interval=step.poll_interval,
+            poll_exit_code=step.poll_exit_code,
+            poll_match=_sub(step.poll_match, vars) if step.poll_match else None,
+            verify_recorded=_resolve_in_dict(step.verify_recorded, vars),
         ))
     return resolved
 
@@ -127,6 +151,10 @@ def _resolve_in_dict(d: Optional[Dict[str, Any]], vars: dict) -> Optional[Dict[s
     Used for atspi: / verify_atspi: fields whose values are simple role/name
     dicts; non-string values pass through untouched. Returns a NEW dict
     (does not mutate input) or None if input is None/empty.
+
+    Card 3: also recurses one level into list values (e.g. verify_recorded's
+    ``between: [stepA, stepB]``) so string entries get substituted while
+    non-string entries (e.g. int step numbers) pass through untouched.
     """
     if not d:
         return None
@@ -134,6 +162,8 @@ def _resolve_in_dict(d: Optional[Dict[str, Any]], vars: dict) -> Optional[Dict[s
     for k, v in d.items():
         if isinstance(v, str):
             out[k] = _sub(v, vars)
+        elif isinstance(v, list):
+            out[k] = [_sub(item, vars) if isinstance(item, str) else item for item in v]
         else:
             out[k] = v
     return out
@@ -718,4 +748,11 @@ def parse_step(raw: dict) -> FunctionalStep:
         atspi=raw.get("atspi"),
         verify_atspi=raw.get("verify_atspi"),
         wait_for=raw.get("wait_for"),
+        click_at=raw.get("click_at"),
+        poll_shell=raw.get("poll_shell"),
+        poll_timeout=int(raw.get("poll_timeout", 20)),
+        poll_interval=int(raw.get("poll_interval", 2)),
+        poll_exit_code=raw.get("poll_exit_code", 0),
+        poll_match=raw.get("poll_match"),
+        verify_recorded=raw.get("verify_recorded"),
     )

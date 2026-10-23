@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -107,6 +108,126 @@ def test_filter_and_copy_all_distinct(tmp_path):
 
     kept = rec._filter_and_copy(frames)
     assert len(kept) == 5
+
+
+# ---------------------------------------------------------------------------
+# Bug 7 / Bug 8 regression: filtered export must cover the full raw input
+# range, and filtered_index.jsonl must correctly describe filtered/ frames
+# (not the raw-sequence frames, which get renumbered independently).
+# ---------------------------------------------------------------------------
+
+
+def _seed_long_run(rec, raw_dir: Path, index_path: Path, n_frames: int, interval_s: float):
+    """Synthesize an n_frames raw capture spanning n_frames*interval_s seconds.
+
+    Every 3rd frame repeats the previous frame's pixel content (dedupe
+    opportunity); all others are visually distinct, and this pattern holds
+    for the *entire* range — so any truncation of filtered/'s time coverage
+    would be a real bug, not an artifact of a genuinely-idle tail.
+    """
+    started_at = datetime(2026, 8, 21, 0, 59, 0)
+    lines = []
+    last_color = None
+    for i in range(1, n_frames + 1):
+        p = raw_dir / f"frame_{i:06d}.png"
+        if i % 3 == 0 and last_color is not None:
+            color = last_color
+        else:
+            color = (i % 256, (i * 7) % 256, (i * 13) % 256)
+        _solid_png(p, color=color)
+        last_color = color
+        ts = started_at + timedelta(seconds=i * interval_s)
+        lines.append(json.dumps({"frame": p.name, "ts": ts.isoformat()}))
+    index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return started_at
+
+
+def test_filter_and_copy_covers_full_time_range_no_early_cap(tmp_path):
+    """Bug 7 regression: a long multi-minute-equivalent run must not have its
+    filtered export stop partway through — the last kept frame's timestamp
+    must reach the end of the raw capture window, not cut off early."""
+    rec = _make_recorder(tmp_path)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    rec.raw_dir = raw_dir
+    rec.filtered_dir = tmp_path / "filtered"
+    rec.index_path = tmp_path / "index.jsonl"
+    rec.filtered_index_path = tmp_path / "filtered_index.jsonl"
+
+    n_frames = 300
+    interval_s = 2.2  # ~11 simulated minutes across 300 frames
+    started_at = _seed_long_run(rec, raw_dir, rec.index_path, n_frames, interval_s)
+
+    raw_frames = sorted(raw_dir.glob("frame_*.png"))
+    kept = rec._filter_and_copy(raw_frames)
+
+    # Every 3rd frame is a duplicate of the prior one → dedup drops ~1/3.
+    assert len(kept) > n_frames * 0.5
+
+    filtered_index_lines = [
+        json.loads(l)
+        for l in rec.filtered_index_path.read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
+    assert len(filtered_index_lines) == len(kept)
+
+    last_ts = datetime.fromisoformat(filtered_index_lines[-1]["ts"])
+    expected_end = started_at + timedelta(seconds=n_frames * interval_s)
+    # Last kept frame must be the raw run's actual last frame (always kept
+    # unconditionally) — its timestamp must land at the very end of the
+    # captured range, not ~1/3 to 1/2 of the way through.
+    assert abs((last_ts - expected_end).total_seconds()) < interval_s * 2
+
+
+def test_filtered_index_matches_filtered_frame_content(tmp_path):
+    """Bug 8 regression: filtered_index.jsonl must describe the *filtered*
+    frame it names — not a raw-sequence frame that happens to share a
+    filename. Every entry's `raw_frame` source must hash-match the filtered
+    file actually on disk, and its `ts` must be that raw frame's own
+    timestamp (not some other frame's)."""
+    import xxhash
+
+    rec = _make_recorder(tmp_path)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    rec.raw_dir = raw_dir
+    rec.filtered_dir = tmp_path / "filtered"
+    rec.index_path = tmp_path / "index.jsonl"
+    rec.filtered_index_path = tmp_path / "filtered_index.jsonl"
+
+    n_frames = 120
+    interval_s = 3.0
+    _seed_long_run(rec, raw_dir, rec.index_path, n_frames, interval_s)
+
+    raw_frames = sorted(raw_dir.glob("frame_*.png"))
+    raw_ts_by_name = rec._load_index_timestamps()
+    kept = rec._filter_and_copy(raw_frames)
+
+    filtered_index_lines = [
+        json.loads(l)
+        for l in rec.filtered_index_path.read_text(encoding="utf-8").splitlines()
+        if l.strip()
+    ]
+    assert len(filtered_index_lines) == len(kept)
+
+    # Filtered files are renumbered sequentially and independently of raw
+    # frame numbers — assert at least one entry where the filtered filename
+    # differs from the raw source it was copied from (proves renumbering is
+    # actually happening in this fixture, i.e. the test exercises the bug).
+    assert any(rec["frame"] != rec["raw_frame"] for rec in filtered_index_lines)
+
+    for rec_entry, dest in zip(filtered_index_lines, kept):
+        assert rec_entry["frame"] == dest.name
+        src = raw_dir / rec_entry["raw_frame"]
+        with Image.open(src) as im_raw, Image.open(dest) as im_dest:
+            assert xxhash.xxh3_64_intdigest(im_raw.tobytes()) == xxhash.xxh3_64_intdigest(
+                im_dest.tobytes()
+            )
+        # The shipped timestamp must be the raw source frame's own timestamp.
+        expected_ts = raw_ts_by_name.get(rec_entry["raw_frame"])
+        assert expected_ts is not None
+        actual_ts = datetime.fromisoformat(rec_entry["ts"]).timestamp()
+        assert abs(actual_ts - expected_ts) < 0.001
 
 
 # ---------------------------------------------------------------------------

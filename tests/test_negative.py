@@ -454,6 +454,102 @@ class TestNegativeSSHRefused(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestPartialRunStepNumbering(unittest.TestCase):
+    """B4/step-numbering bug: partial runs (start_index > 0) must report the
+    scenario's TRUE original step index, not renumber from 1."""
+
+    def test_start_index_offsets_reported_step_numbers(self):
+        """run_test(steps, ..., start_index=N) calls run_step with step
+        numbers N+1, N+2, ... instead of renumbering from 1."""
+        import tempfile
+        import shutil
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            runner, vlm, injector = _make_runner(tmp_path=tmp)
+            calls = []
+            runner.run_step = lambda step, i: calls.append(i)
+            steps = [
+                FunctionalStep(shell="echo a"),
+                FunctionalStep(shell="echo b"),
+            ]
+            passed, log = runner.run_test(steps, "partial-run", start_index=73)
+            self.assertTrue(passed)
+            self.assertEqual(calls, [74, 75],
+                              "start_index=73 must yield step numbers 74, 75 "
+                              "(matching --from-step 74), not 1, 2")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_default_start_index_zero_preserves_full_run_numbering(self):
+        """Omitting start_index (full run) keeps the existing 1-indexed
+        numbering — no regression for non-partial runs."""
+        import tempfile
+        import shutil
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            runner, vlm, injector = _make_runner(tmp_path=tmp)
+            calls = []
+            runner.run_step = lambda step, i: calls.append(i)
+            steps = [FunctionalStep(shell="echo a"), FunctionalStep(shell="echo b")]
+            passed, log = runner.run_test(steps, "full-run")
+            self.assertTrue(passed)
+            self.assertEqual(calls, [1, 2])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_checkpoint_rewind_resumes_at_correct_absolute_step_with_offset(self):
+        """C2 checkpoint/rewind must stay correct when start_index > 0: the
+        checkpoint stores the TRUE (offset) step number, and resuming after a
+        rollback must land back on the correct step of the (possibly sliced)
+        `resolved` list — not fall out of range or replay from the checkpoint
+        step itself."""
+        import tempfile
+        import shutil
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            runner, vlm, injector = _make_runner(tmp_path=tmp)
+            runner._checkpoints_enabled = True
+            runner._checkpoints_rewind = True
+            runner._vm_ops = MagicMock()
+            runner._vm_ops.rollback.return_value = None
+            runner._vm_ops.api.wait_for_ip.return_value = "10.0.0.5"
+            runner._vmid = 42
+
+            fail_state = {"failed_once": False}
+            calls = []
+
+            def fake_run_step(step, i):
+                calls.append(i)
+                if step.shell == "echo ckpt":
+                    runner._checkpoints.append(("cp1", i))
+                    runner._created_snapshots.append("cp1")
+                    return
+                if step.shell == "echo fail":
+                    if not fail_state["failed_once"]:
+                        fail_state["failed_once"] = True
+                        raise StepFailed("boom")
+                    return
+                return
+
+            runner.run_step = fake_run_step
+            steps = [
+                FunctionalStep(shell="echo ckpt"),
+                FunctionalStep(shell="echo fail"),
+                FunctionalStep(shell="echo ok"),
+            ]
+            # start_index=3 simulates a partial run starting at --from-step 4:
+            # true step numbers are 4 (checkpoint), 5 (fails then retried), 6 (ok).
+            passed, log = runner.run_test(steps, "rewind-with-offset", start_index=3)
+            self.assertTrue(passed, f"expected eventual PASS after rewind, log={log!r}")
+            self.assertEqual(
+                calls, [4, 5, 5, 6],
+                "checkpoint at true step 4, failure at true step 5, rewind must "
+                "resume at true step 5 (not step 1/out-of-range), then step 6",
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Parametrized summary (for pytest -v readability)
 # TestNegativePreflightWorkspaceExitCode lives in test_negative_preflight.py

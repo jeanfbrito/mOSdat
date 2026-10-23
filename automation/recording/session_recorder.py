@@ -48,6 +48,7 @@ class RecordingArtifacts:
     manifest_path: Path
     raw_frames: int
     filtered_frames: int
+    filtered_index_path: Optional[Path] = None
     warning: Optional[str] = None
 
 
@@ -70,6 +71,21 @@ class SessionRecorder:
         self.raw_dir = self.recording_dir / "raw"
         self.filtered_dir = self.recording_dir / "filtered"
         self.index_path = self.recording_dir / "index.jsonl"
+        # Bug 8 fix: `index.jsonl` above is keyed by the *raw* capture
+        # sequence (frame_NNNNNN.png numbered 1..raw_frame_count). The
+        # `filtered/` directory below independently renumbers its *kept*
+        # frames sequentially from 1 using the exact same zero-padded
+        # naming scheme — so a consumer who (reasonably) assumes
+        # `index.jsonl` describes `filtered/frame_NNNNNN.png` gets a
+        # completely different frame's timestamp/metadata than the pixel
+        # content actually shown. This is worse than it sounds because
+        # `keep_raw=False` (the default) deletes `raw/` at export time,
+        # removing the only frames `index.jsonl` genuinely describes.
+        # `filtered_index.jsonl` is the delivered artifact's *own* index:
+        # one line per file that actually exists in `filtered/`, carrying
+        # the real capture timestamp (and window-state metadata, when
+        # available) forward from the raw record it was copied from.
+        self.filtered_index_path = self.recording_dir / "filtered_index.jsonl"
         self.manifest_path = self.recording_dir / "manifest.json"
         self.fps = max(1.0, float(fps))
         self.interval = 1.0 / self.fps
@@ -101,6 +117,8 @@ class SessionRecorder:
         self.filtered_dir.mkdir(parents=True, exist_ok=True)
         if self.index_path.exists():
             self.index_path.unlink()
+        if self.filtered_index_path.exists():
+            self.filtered_index_path.unlink()
         self._stop.clear()
         self._frame_id = 0
         self._capture_errors = 0
@@ -180,6 +198,7 @@ class SessionRecorder:
             manifest_path=self.manifest_path,
             raw_frames=len(raw_frames),
             filtered_frames=len(kept_frames),
+            filtered_index_path=self.filtered_index_path if kept_frames else None,
             warning=warning,
         )
 
@@ -392,13 +411,38 @@ class SessionRecorder:
 
         if not raw_frames:
             return []
-        ts_by_name = self._load_index_timestamps()
+        records_by_name = self._load_index_records()
+        ts_by_name = {
+            name: rec["_ts_epoch"] for name, rec in records_by_name.items() if "_ts_epoch" in rec
+        }
+        # Bug 8 fix: `filtered/` renumbers kept frames sequentially from 1,
+        # independent of the raw frame numbers `index.jsonl` refers to. Build
+        # a parallel index — keyed by the *filtered* filename actually on
+        # disk — so a consumer never has to (wrongly) assume the two
+        # directories share frame identity just because they share a naming
+        # scheme.
+        filtered_records: list[dict[str, Any]] = []
+
+        def _record_for(dest: Path, src: Path) -> None:
+            raw_rec = dict(records_by_name.get(src.name, {}))
+            raw_rec.pop("_ts_epoch", None)
+            entry: dict[str, Any] = {"frame": dest.name, "raw_frame": src.name}
+            entry.update({k: v for k, v in raw_rec.items() if k not in ("frame",)})
+            if "ts" not in entry:
+                # No raw index entry (or malformed ts) for this source frame —
+                # fall back to the copied file's own mtime rather than
+                # shipping an entry with no timestamp at all.
+                entry["ts"] = datetime.fromtimestamp(dest.stat().st_mtime).isoformat()
+            filtered_records.append(entry)
+
         if len(raw_frames) == 1:
             dest = self.filtered_dir / "frame_000001.png"
             shutil.copy2(raw_frames[0], dest)
             ts = ts_by_name.get(raw_frames[0].name)
             if ts is not None:
                 os.utime(dest, (ts, ts))
+            _record_for(dest, raw_frames[0])
+            self._write_filtered_index(filtered_records)
             return [dest]
 
         last_idx = len(raw_frames) - 1
@@ -417,12 +461,36 @@ class SessionRecorder:
                 if ts is not None:
                     os.utime(dest, (ts, ts))
                 kept.append(dest)
+                _record_for(dest, src)
                 out_num += 1
                 last_kept_hash = h
+        self._write_filtered_index(filtered_records)
         return kept
 
-    def _load_index_timestamps(self) -> dict[str, float]:
-        out: dict[str, float] = {}
+    def _write_filtered_index(self, records: list[dict[str, Any]]) -> None:
+        """Write `filtered_index.jsonl` — one line per file in `filtered/`.
+
+        This is the index a consumer should use for the delivered artifact.
+        `index.jsonl` (raw-sequence) is not a substitute: `filtered/` frames
+        are renumbered independently and, by default, `raw/` (the frames
+        `index.jsonl` actually describes) is deleted after export.
+        """
+        if not records:
+            return
+        self.filtered_index_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.filtered_index_path.open("w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+
+    def _load_index_records(self) -> dict[str, dict[str, Any]]:
+        """Parse `index.jsonl` into ``{raw_frame_name: full_record}``.
+
+        Each record also carries an internal ``_ts_epoch`` float (parsed from
+        ``ts``) for callers that need a numeric timestamp; malformed lines,
+        and lines missing a valid ``frame``/``ts``, are skipped for the
+        purposes of ``_ts_epoch`` but otherwise-valid fields are still kept.
+        """
+        out: dict[str, dict[str, Any]] = {}
         if not self.index_path.exists():
             return out
         try:
@@ -435,15 +503,26 @@ class SessionRecorder:
                 except json.JSONDecodeError:
                     continue
                 name = rec.get("frame")
+                if not isinstance(name, str):
+                    continue
                 ts_raw = rec.get("ts")
-                if not isinstance(name, str) or not isinstance(ts_raw, str):
-                    continue
-                try:
-                    out[name] = datetime.fromisoformat(ts_raw).timestamp()
-                except ValueError:
-                    continue
+                if isinstance(ts_raw, str):
+                    try:
+                        rec["_ts_epoch"] = datetime.fromisoformat(ts_raw).timestamp()
+                    except ValueError:
+                        pass
+                out[name] = rec
         except OSError:
             return {}
+        return out
+
+    def _load_index_timestamps(self) -> dict[str, float]:
+        """Back-compat helper: ``{raw_frame_name: epoch_ts}`` for valid ``ts`` values."""
+        out: dict[str, float] = {}
+        for name, rec in self._load_index_records().items():
+            ts_epoch = rec.get("_ts_epoch")
+            if isinstance(ts_epoch, float):
+                out[name] = ts_epoch
         return out
 
     @staticmethod
@@ -578,6 +657,9 @@ class SessionRecorder:
             "capture_errors": self._capture_errors,
             "mp4": str(mp4_path) if mp4_path else None,
             "gif": str(gif_path) if gif_path else None,
+            "filtered_index": (
+                str(self.filtered_index_path) if filtered_count else None
+            ),
             "warning": warning,
         }
         self.manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

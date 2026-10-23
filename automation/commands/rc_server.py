@@ -47,12 +47,17 @@ import requests
 
 
 IMAGE_REPO = "ghcr.io/rocketchat/rocket.chat"
+# Release and develop images older than the GHCR publish are on Docker Hub.
+DOCKER_HUB_IMAGE_REPO = "docker.io/rocketchat/rocket.chat"
 DEFAULT_STARTUP_TIMEOUT_S = 180
 POLL_INTERVAL_S = 2.0
+DOCKER_POLL_INTERVAL_S = 3.0
+DOCKER_QUIT_WAIT_S = 5.0
 DAEMON_ERROR = "Docker daemon is not running — start Docker Desktop first"
 COMPOSE_TEMPLATE = Path(__file__).resolve().parent / "templates" / "rc-server-compose.yml"
 
 _PROXMOX_LAN_HINT = ("192.168.13.85", 1)
+_PR_REF_RE = re.compile(r"pr-\d+")
 _NO_IMAGE_TEMPLATE = (
     "no published server image for '{ref}' — this reference cannot be tested "
     "this way (fork PR, or no server-side change published)"
@@ -100,8 +105,11 @@ def project_name(ref: str) -> str:
     return f"mosdat-rc-{raw}" if raw else "mosdat-rc"
 
 
-def _no_image_error(ref: str) -> str:
-    return _NO_IMAGE_TEMPLATE.format(ref=normalize_ref(ref))
+def _no_image_error(ref: str, tried: Optional[list[str]] = None) -> str:
+    text = _NO_IMAGE_TEMPLATE.format(ref=normalize_ref(ref))
+    if tried:
+        text += f"; tried {', '.join(tried)}"
+    return text
 
 
 def _run(
@@ -140,6 +148,56 @@ def _docker_daemon_running() -> bool:
         return False
 
 
+def _open_docker_app() -> tuple[bool, str]:
+    rc, out, err = _run(["open", "-g", "-a", "Docker"], timeout=30)
+    if rc == 0:
+        return True, ""
+    return False, f"{out}{err}".strip()
+
+
+def _wait_for_daemon(seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while True:
+        if _docker_daemon_running():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(DOCKER_POLL_INTERVAL_S)
+
+
+def ensure_docker(timeout: float = 120) -> tuple[bool, str]:
+    """Start Docker Desktop on macOS when the daemon is down.
+
+    Opens the app in the background and polls for half of ``timeout``. If the
+    daemon still does not answer, quits Docker (a hung VM does not recover by
+    itself), opens it again, and polls for the rest of ``timeout``. Other
+    platforms are not auto-started.
+    """
+    if _docker_daemon_running():
+        return True, ""
+    if sys.platform != "darwin":
+        return False, DAEMON_ERROR
+
+    start = time.monotonic()
+    ok, detail = _open_docker_app()
+    if not ok:
+        return False, f"{DAEMON_ERROR} (auto-start tried: open failed: {detail})"
+    if _wait_for_daemon(float(timeout) / 2):
+        return True, ""
+    tried = [f"opened Docker, no daemon after {float(timeout) / 2:.0f}s"]
+
+    _run(["osascript", "-e", 'quit app "Docker"'], timeout=30)
+    _run(["pkill", "-f", "com.docker.backend"], timeout=15)
+    time.sleep(DOCKER_QUIT_WAIT_S)
+    ok, detail = _open_docker_app()
+    tried.append("quit and reopened Docker" if ok else f"reopen failed: {detail}")
+    remaining = float(timeout) - (time.monotonic() - start)
+    if _wait_for_daemon(remaining):
+        return True, ""
+    tried.append(f"no daemon after {max(remaining, 0):.0f}s more")
+    return False, f"{DAEMON_ERROR} (auto-start tried: {'; '.join(tried)})"
+
+
 def _docker_pull(image: str) -> tuple[bool, str]:
     rc, out, err = _run(["docker", "pull", image], timeout=300)
     if rc == 0:
@@ -158,6 +216,33 @@ def _is_no_image_error(text: str) -> bool:
     if "not found" in t:
         return True
     return False
+
+
+def _image_candidates(ref: str) -> list[str]:
+    """GHCR first. Docker Hub is a fallback only for non-PR refs."""
+    norm = normalize_ref(ref)
+    candidates = [resolve_image(ref)]
+    if not _PR_REF_RE.fullmatch(norm):
+        candidates.append(f"{DOCKER_HUB_IMAGE_REPO}:{norm}")
+    return candidates
+
+
+def _pull_first_available(ref: str) -> tuple[str, str]:
+    """Pull the first candidate image that exists.
+
+    Returns ``(image, "")`` on success or ``("", error)``. Only a no-image
+    answer moves on to the next repo. Any other pull failure stops here, so an
+    auth or network error is never reported as a missing image.
+    """
+    missing: list[str] = []
+    for candidate in _image_candidates(ref):
+        ok, detail = _docker_pull(candidate)
+        if ok:
+            return candidate, ""
+        if not _is_no_image_error(detail):
+            return "", f"failed to pull {candidate}: {detail}"
+        missing.append(candidate)
+    return "", _no_image_error(ref, missing)
 
 
 def _compose_up(project: str, compose_file: Path, env: dict) -> tuple[bool, str]:
@@ -193,6 +278,15 @@ def _compose_down(project: str, compose_file: Path) -> tuple[bool, str]:
     if rc == 0:
         return True, ""
     return False, f"{out}{err}".strip()
+
+
+def _service_running(project: str, service: str) -> bool:
+    """True when the Compose service has a running container."""
+    rc, out, _ = _run(
+        ["docker", "compose", "-p", project, "ps", "--status", "running", "-q", service],
+        timeout=20,
+    )
+    return rc == 0 and bool(out.strip())
 
 
 def _discover_host_port(
@@ -302,6 +396,7 @@ def provision_server(
     *,
     dry_run: bool = False,
     timeout: float = DEFAULT_STARTUP_TIMEOUT_S,
+    start_docker: bool = True,
 ) -> ProvisionResult:
     start = time.monotonic()
 
@@ -340,7 +435,11 @@ def provision_server(
         return finish("starting", url=None)
 
     if not _docker_daemon_running():
-        return finish("failed", error=DAEMON_ERROR)
+        if not start_docker:
+            return finish("failed", error=DAEMON_ERROR)
+        ok, detail = ensure_docker()
+        if not ok:
+            return finish("failed", error=detail)
 
     if project in _list_managed_projects():
         port = _discover_host_port(project, "rocketchat", 3000)
@@ -356,11 +455,9 @@ def provision_server(
             return finish("ready", url=url)
         return finish("starting", url=url)
 
-    ok, detail = _docker_pull(image)
-    if not ok:
-        if _is_no_image_error(detail):
-            return finish("failed", error=_no_image_error(norm))
-        return finish("failed", error=f"failed to pull {image}: {detail}")
+    pulled, pull_error = _pull_first_available(ref)
+    if not pulled:
+        return finish("failed", error=pull_error)
 
     host = _advertise_host()
     port = _pick_free_port()
@@ -369,23 +466,30 @@ def provision_server(
     ok, detail = _compose_up(
         project,
         COMPOSE_TEMPLATE,
-        env={"RC_IMAGE": image, "HOST_PORT": str(port), "ROOT_URL": url},
+        env={"RC_IMAGE": pulled, "HOST_PORT": str(port), "ROOT_URL": url},
     )
     if not ok:
         return finish("failed", error=f"compose up failed for '{project}': {detail}")
 
-    deadline = start + float(timeout)
+    deadline = time.monotonic() + float(timeout)
     while True:
         if probe_ready(url):
             return finish("ready", url=url)
         if time.monotonic() >= deadline:
             n = _timeout_label(timeout)
+            if _service_running(project, "rocketchat"):
+                # A cold boot of an older release can take 5+ min (measured:
+                # 7.10.0). Do not block the caller that long and do not call a
+                # healthy boot a failure: report "starting" — provisioning is
+                # idempotent, so calling again polls the same instance.
+                return finish("starting", url=url)
             return finish(
                 "failed",
                 url=url,
                 error=(
                     f"server for '{norm}' did not become ready within {n}s — "
-                    "last state: container running, /livez not yet answering"
+                    "the rocketchat container is not running (see "
+                    f"`docker compose -p {project} logs rocketchat`)"
                 ),
             )
         time.sleep(POLL_INTERVAL_S)
@@ -445,7 +549,10 @@ def run_server_provision(args: argparse.Namespace) -> int:
     timeout = getattr(args, "timeout", DEFAULT_STARTUP_TIMEOUT_S)
     if timeout is None:
         timeout = DEFAULT_STARTUP_TIMEOUT_S
-    result = provision_server(ref, dry_run=dry_run, timeout=float(timeout))
+    start_docker = bool(getattr(args, "start_docker", True))
+    result = provision_server(
+        ref, dry_run=dry_run, timeout=float(timeout), start_docker=start_docker,
+    )
     if result.state in ("ready", "starting"):
         if result.url:
             print(
@@ -462,7 +569,7 @@ def run_server_provision(args: argparse.Namespace) -> int:
     err = result.error or ""
     if err.startswith("no published server image"):
         return 1
-    if err == DAEMON_ERROR or err.startswith("invalid ref"):
+    if err.startswith(DAEMON_ERROR) or err.startswith("invalid ref"):
         return 5
     return 2
 
@@ -513,6 +620,12 @@ def add_server_provision_subparser(sub) -> None:
         default=DEFAULT_STARTUP_TIMEOUT_S,
         metavar="SECONDS",
         help=f"Seconds to wait for /livez (default: {DEFAULT_STARTUP_TIMEOUT_S})",
+    )
+    p.add_argument(
+        "--no-start-docker",
+        action="store_false",
+        dest="start_docker",
+        help="Do not open Docker Desktop when the daemon is down (macOS opens it by default)",
     )
 
 

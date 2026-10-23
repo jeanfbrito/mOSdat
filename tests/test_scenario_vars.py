@@ -77,6 +77,19 @@ def test_substitution_in_shell():
     assert result[0]["shell"] == "xdg-open tel:+491234"
 
 
+def test_substitution_in_poll_shell_and_poll_match():
+    # Card 2 / bug fix: {{ }} inside poll_shell and poll_match must render —
+    # previously missing from _STRING_FIELDS (same shallow-substitution bug
+    # class as docs/KNOWN_ISSUES.md's "_resolve_in_dict is shallow" entry).
+    steps = [{
+        "poll_shell": "curl -s http://{{ host }}/status",
+        "poll_match": "room {{ room_id }} ready",
+    }]
+    result = _render(steps, {"host": "localhost:3000", "room_id": "abc123"})
+    assert result[0]["poll_shell"] == "curl -s http://localhost:3000/status"
+    assert result[0]["poll_match"] == "room abc123 ready"
+
+
 def test_substitution_in_verify():
     steps = [{"verify": "modal shows '{{ title }}'"}]
     result = _render(steps, {"title": "My Server"})

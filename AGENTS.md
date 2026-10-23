@@ -87,20 +87,21 @@ mOSdat exposes a stdio JSON-RPC MCP server via the `mosdat-mcp` entry point
 the scenario ran and asserted unsuccessfully — never an environment problem
 (`env_not_ready: true` is the discriminator; or call `mosdat_readiness` first).
 
-Tools (15):
+Tools (16):
 
 | Tool | Purpose |
 |------|---------|
 | `mosdat_list_vms` | Configured VMs (`name`, `vmid`, `os_type`, `status`) |
 | `mosdat_list_scenarios` | Runnable scenarios (`name`, `path`, `platform`, `step_count`) |
-| `mosdat_readiness` | Go/no-go: SSH, deps, disk, optional `expect_pr`/`expect_symbol`, `busy` |
-| `mosdat_build` | Clone → build → optional deploy → verify-symbol |
-| `mosdat_deploy` | Install an existing artifact |
-| `mosdat_run_functional` | Run a scenario; `verdict` is `pass`/`fail`/`error`. Optional `server_url` overrides the scenario's configured `workspace_url` for this call only (e.g. point at a `mosdat_server_provision` result) |
+| `mosdat_readiness` | Go/no-go: SSH, deps, disk (`/tmp` Linux, `C:` Windows), optional `expect_pr`/`expect_symbol`, `busy`. `installed` = path, version (from the asar's `package.json`), asar mtime — answers "is the PR code installed?". `hints` when unreachable (Proxmox down, other VMs of the same OS) |
+| `mosdat_build` | Clone → build → optional deploy → verify-symbol. `source` builds a local tree (uncommitted files included) natively on the Windows `deploy_to` VM. `deploy.artifact` names the installer |
+| `mosdat_deploy` | Install without rebuilding: `artifact_path` (local), `artifact_on_vm`, `pr_build` (Windows build dir of a PR), or `release` (published tag). Rejects packages that are too small or have the wrong magic bytes; checks Linux package versions after install |
+| `mosdat_run_functional` | Run a scenario; `verdict` is `pass`/`fail`/`error`/`unverified` (`unverified` = VLM down and the scenario has VLM-judged steps: judge `screenshots_to_judge` yourself). `scenario` may be a path to a scratch `.yaml`; `scenario_yaml` takes inline YAML. Optional `server_url` overrides the scenario's configured `workspace_url` for this call only (e.g. point at a `mosdat_server_provision` result) |
 | `mosdat_run_smoke` | Launch + basic UI check |
-| `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | Proxmox VM power |
-| `mosdat_ssh` | Run a command on a VM |
-| `mosdat_ssh_bootstrap` | Install this host's SSH public key onto an unlocked Windows VM via VNC |
+| `mosdat_vm_start` / `mosdat_vm_stop` / `mosdat_vm_status` | Proxmox VM power. `mosdat_vm_start` with `wait_ready: true` returns once SSH answers — do not sleep-loop |
+| `mosdat_ssh` | Run a one-line `command`, or a `script` (PowerShell/bash, sent as a file: `$vars`, quotes and exit codes survive). `detach: true` outlives the call (returns `pid`, `log_path`); `session: "desktop"` runs in the logged-in Windows session (GUI apps, real input) |
+| `mosdat_ssh_bootstrap` | Install this host's SSH public key: Windows via the unlocked VNC console, Linux via the QEMU guest agent |
+| `mosdat_vm_hygiene` | Idempotently fix Windows-VM focus-thief UI (clock drift, OneDrive nag, Windows Backup toast, taskbar news widget) that silently breaks VLM toast/notification testing |
 | `mosdat_server_provision` | Idempotent: provision (or return the state of an already-running) test Rocket.Chat server for a `ref` (PR/tag/`develop`); `state` is `ready`/`starting`/`failed`, `url` present once known |
 | `mosdat_server_teardown` | Tear down the provisioned server for a `ref`; idempotent (`torn_down: false` if none existed) |
 | `mosdat_server_list` | List all currently provisioned server instances (`ref`, `state`, `url`, `elapsed_ms`) |
@@ -173,7 +174,7 @@ For task-specific procedures, see `docs/runbooks/`:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mOSdat** (7065 symbols, 13200 relationships, 273 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mOSdat** (7366 symbols, 13888 relationships, 279 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

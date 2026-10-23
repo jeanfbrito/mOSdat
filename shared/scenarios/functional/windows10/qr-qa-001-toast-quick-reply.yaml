@@ -1,0 +1,1076 @@
+# qa_flow: QR-QA-001
+# pr_source: https://github.com/RocketChat/Rocket.Chat.Electron/pull/3464
+# Windows 10 variant. Validates the Desktop 4.17 fix for Windows notification
+# quick-reply: replies typed into a LIVE toast AND replies typed into the
+# ACTION CENTER (after the toast auto-dismisses, ~5s) both post to the room
+# via `Notification.handleActivation` (win32). Also validates the new
+# `isNotificationQuickReplyEnabled` (default true) override that removes the
+# reply field from the toast entirely when set to false.
+#
+# Content is otherwise IDENTICAL to the windows11/ variant — toast + Action
+# Center are OS shell surfaces (not Rocket.Chat UI), so there is normally no
+# per-OS-version wording difference the way there is for in-app Settings
+# tabs (see tel-qa-002's one tweak line). Two confirmed real divergences
+# (2026-08-20 live-run evidence), analogous to tel-qa-002's own one-line
+# difference:
+#   - D3 opens the notification panel via Win+A here (Win10's Action Center
+#     is still bound to Win+A) — the windows11/ variant uses Win+N (Win11
+#     rebound Win+A to Quick Settings; Win+N opens what Win11 calls
+#     "Notification Center", the same underlying surface).
+#   - F0i/F0j (defensive Esc + explicit refocus before F1's click) are
+#     windows10-only, added after a live run hit a mis-localized click on
+#     this VM's taskbar weather/news widget, which opened Edge fullscreen
+#     and absorbed every subsequent interaction for the rest of section F.
+#
+# ── Mechanism note (deviation from "copy the mention scenario exactly") ────
+# shared/scenarios/functional/linux/rocketchat-mention-linux.yaml triggers its
+# highlight assertion with a SELF-mention (the logged-in test user types
+# "@jean ..." into the room they are already viewing). That is NOT a real
+# notification trigger — RC (like most chat clients) does not fire an OS
+# toast for a message you authored yourself in the room you're actively
+# viewing. There is also no second-account credential slot anywhere in this
+# repo (automation/config.py only defines a single FUNCTIONAL_TEST_USER /
+# FUNCTIONAL_TEST_PASSWORD pair; examples/rocketchat.toml [functional] block
+# documents the same single pair; no REST helper for posting as another user
+# exists in shared/ or automation/).
+#
+# This scenario therefore introduces a NEW trigger mechanism: a direct
+# Rocket.Chat REST API call (`api/v1/login` + `api/v1/chat.postMessage`) run
+# from the VM's PowerShell, authenticated as a SECOND workspace user
+# ({{ second_user }}), posting into the DM/room the FIRST user
+# ({{ test_user }}) is a member of but has navigated AWAY from (so the
+# message is unread and the toast fires). This is the closest achievable
+# proof given the repo's constraints and is flagged here explicitly per the
+# task's request to call out DSL/mechanism limitations rather than guess.
+#
+# {{ second_user }} / {{ second_user_password }} MUST be a real, distinct
+# workspace account with permission to DM {{ test_user }}. Defaults below
+# point at a disposable Rocket.Chat core-fix test server (PR #41875 image,
+# http://192.168.13.162:51340) with two seeded accounts — qa-user (desktop
+# login) and qa-sender (message sender) — both members of #qa-room, 2FA
+# disabled. Not a secret: throwaway server, throwaway creds. Still
+# overridable via --var for other environments.
+#
+# The workspace is plain HTTP on a LAN IP (no TLS). RC's server-add flow
+# accepts http:// URLs as-is — no cert/trust steps are needed; the
+# "Enter your server URL" step below submits the {{ workspace_url }}
+# value verbatim, same as the https:// case.
+#
+# ── Design correction (2026-08-20): default settings + deterministic proof ─
+# An earlier revision toggled the user preference
+# `desktopNotificationRequireInteraction` via REST to keep toasts pinned on
+# screen so slow VLM verify/localize calls in the hot path wouldn't miss the
+# ~5-6s auto-dismiss window. That was a bandaid that mutated the system
+# under test — the customer's actual flow runs on DEFAULT settings with a
+# real ~5-6s toast. Removed. Two structural changes replace it:
+#
+#   1. Hot-path interactions (trigger → toast appears → click reply field →
+#      type → Enter) are now TIMED, not VLM-verified. No localize/verify
+#      calls ride between the REST trigger and the keystrokes — only a
+#      fixed `wait` and a click at a calibrated screen coordinate.
+#   2. Outcome assertions (did the reply actually post, and — for section F
+#      — did it post to the right target) moved from VLM chat-history
+#      verifies to REST polling (im.history / chat.getThreadMessages),
+#      which is exact and fast instead of approximate and slow.
+#
+# ── DSL GAP (reported per task instructions, not worked around) ────────────
+# mosdat has NO fixed-coordinate click primitive. Confirmed by reading
+# automation/scenario.py: `ClickStep.localize` is a REQUIRED `str` (a VLM
+# prompt) with no sibling x/y fields anywhere in the step schema. The only
+# other click path, `atspi:` (optionally `via: "hint"`), still derives its
+# click point from a UIA role/name lookup in the accessibility tree, not
+# from literal YAML-authored coordinates — and is inapplicable here anyway
+# since toast/Action Center live outside RC's own UIA app tree (established
+# in an earlier round of this scenario's development). Tracing
+# automation/runners/functional_steps.py's `_do_click_or_localize_action`
+# confirms every click, whichever path, ends at
+# `self.vlm.localize*(...)` or `AtspiClient.click(...)` to PRODUCE (x, y) at
+# runtime — there is no step shape that hands the runner a literal (x, y)
+# pair from the YAML. The click steps below (C2, D6, E-hotpath, F4b) still
+# use `localize:` because it is the only primitive mosdat has that can put a
+# pointer on the toast at all; they carry NO verify/verify_input in the same
+# step (per instruction, verification moved to REST), and the prompt is
+# narrow ("the empty text input field inside the Rocket.Chat notification")
+# to minimize localize latency/ambiguity. This is flagged as a genuine
+# mosdat feature need — a `click: {x: <int>, y: <int>}` step form would let
+# these hot-path interactions skip the VLM call entirely, which is what the
+# coordinator's brief actually asked for and this DSL cannot yet provide.
+#
+# ── Calibrated screen geometry (screen is 1280x800) ─────────────────────────
+# Measured directly from two PASSED-step screenshots of this exact scenario
+# (results/functional/2026-08-20_220004_functional/windows10/), both already
+# confirmed 1280x800 (matches automation/transport/vnc.py's framebuffer size
+# — click(x, y) coordinates map 1:1 to these pixel measurements, no scaling):
+#   - 220413_step17_verify_poll.png — LIVE toast, bottom-right. The toast's
+#     "Reply" input bar spans roughly x=[917,1200] y=[705,725]; reply-field
+#     centroid used below: x=1055, y=716.
+#   - 220531_step18_verify_poll.png — ACTION CENTER panel (right-docked).
+#     The RC card's reply input spans roughly x=[917,1197] y=[230,252];
+#     reply-field centroid used below: x=1055, y=241.
+# These are used only as anchors for the `localize:` prompt's associated
+# click point once VLM resolves the widget — mosdat's click execution still
+# re-derives (x, y) from the live screenshot every time (see DSL GAP above);
+# the calibration exists so the localize prompt targets the right on-screen
+# region with minimal ambiguity, not to bypass VLM.
+#
+# ── Focus Assist / Do Not Disturb risk ──────────────────────────────────────
+# Nothing in this repo's docs/routines currently disables Windows Focus
+# Assist. If Focus Assist is ON (any level) on the VM, Windows suppresses
+# the toast banner outright (it still lands in Action Center silently),
+# which would fail step C (LIVE toast) while leaving step D (Action Center)
+# unaffected. Step A0 below adds a best-effort registry probe/disable
+# (`HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CloudStore` Focus Assist
+# state is not directly writable via a documented registry key across both
+# Win10/11 builds — this is called out as a RUN RISK, not silently assumed
+# fixed). If step C fails while step D and step E pass, check Focus Assist
+# state manually before treating it as a regression.
+
+name: "qr-qa-001-toast-quick-reply"
+description: |
+  QR-QA-001 — Windows toast + Action Center quick-reply (PR #3464).
+
+  A. Setup: cleanup, pre-stage servers + overridden-settings (quick-reply ON,
+     DEFAULT notification prefs), launch, log in as {{ test_user }}, land on
+     {{ test_room }}.
+  B. Trigger a notification via REST as a second account ({{ second_user }})
+     posting into the room while RC is minimized/unfocused.
+  C. LIVE-TOAST reply: timed click-at-region + type + Enter while the toast
+     is still on-screen (default ~5-6s auto-dismiss window); outcome
+     verified via REST poll (im.history), not VLM.
+  D. ACTION-CENTER reply (the customer bug, core proof): trigger a second
+     notification, wait past auto-dismiss, open Action Center (Win+A),
+     localize+click the persistent AC card's reply field, type + Enter;
+     outcome verified via REST poll.
+  E. Track C: re-stage overridden-settings with
+     isNotificationQuickReplyEnabled=false, relaunch, trigger a third
+     notification, perform the SAME timed click+type+Enter at the toast
+     region (there is no reply field to focus), then REST-assert the typed
+     text never posted anywhere — the negative proof.
+  F. Track B (PR #41875, core-side fix) — thread-reply proof: qa-user posts
+     a thread-root message, qa-sender REST-replies in-thread with a mention
+     while RC is minimized, the toast reply is answered (timed hot path),
+     then REST-verified via chat.getThreadMessages (reply has the right
+     tmid) AND absence-checked in channels.history (did not land as a flat
+     message).
+
+vars:
+  # NOTE: functional_cmd.py's `vars_["timestamp"] = dt.now()...` injection
+  # (functional_cmd.py:198) runs on the dict RETURNED by load_test_yaml —
+  # too late for Jinja `{{ timestamp }}` substitution, which happens INSIDE
+  # load_test_yaml before that assignment ever executes. Confirmed by the
+  # runner's own "'timestamp' is undefined" error. A literal default here
+  # keeps this scenario loadable standalone; override with
+  # `--var timestamp=<value>` for a per-run-unique value.
+  timestamp: "qr001"
+  workspace_url: "http://192.168.13.162:51340"
+  test_room: "qa-room"
+  test_user: "qa-user"
+  test_password: "QaUserPass123!"
+  second_user: "qa-sender"
+  second_user_password: "QaSenderPass123!"
+  live_reply_text_prefix: "mosdat-qr-live-reply-3464"
+  ac_reply_text_prefix: "mosdat-qr-ac-reply-3464"
+  disabled_reply_text_prefix: "mosdat-qr-disabled-reply-3464"
+  thread_root_prefix: "thread-root"
+  thread_ping_prefix: "thread-ping"
+  thread_reply_prefix: "thread-reply"
+
+steps:
+  # ═══════════════════════════════════════════════════════════════════════
+  # A. Setup
+  # ═══════════════════════════════════════════════════════════════════════
+  - label: "A0: cleanup Rocket.Chat (kill processes, wipe userData)"
+    routine: cleanup-rocketchat
+
+  # Kill leftover elevated interactive PowerShell consoles left over from
+  # manual SSH-bootstrap sessions on the VM desktop — these steal focus and
+  # pollute screenshots. Filtered on MainWindowHandle != 0 (window-owning
+  # only): confirmed against automation/transport/ssh.py (SSHClient.run
+  # executes shell steps via `subprocess.run(ssh_cmd)` over the SSH exec
+  # channel, non-interactively — the runner's own shell steps never open a
+  # visible console window on the remote desktop, so this filter cannot
+  # ever kill a runner-owned process, only manually-opened consoles).
+  #
+  # Also kills msedge unconditionally (no window filter needed — Edge is
+  # never a runner-owned process either). Edge is the OS "escape hatch" a
+  # mis-localized click can land on (e.g. the taskbar weather/news widget
+  # opens Edge fullscreen over the desktop — this is exactly what happened
+  # at F-section step 71 on this VM) and it must never be left running into
+  # an interaction section, where it would swallow keystrokes meant for
+  # RC/the toast/Action Center.
+  - label: "A0c: kill any leftover window-owning PowerShell console + any stray Edge process on the VM desktop"
+    shell: |
+        Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Stop-Process -Name msedge -Force -ErrorAction SilentlyContinue
+        Write-Host 'STRAY_CONSOLE_AND_EDGE_CLEANUP_DONE'
+
+  - label: "A0b: best-effort Focus Assist probe (RUN RISK if ON — see header comment)"
+    shell: |
+        try {
+          $fa = Get-ItemPropertyValue -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount\*windows.data.notifications.quiethourssettings\Current' -Name Data -ErrorAction SilentlyContinue
+          if ($fa) {
+            Write-Host 'FOCUS_ASSIST_STATE_BLOB_PRESENT (binary — cannot reliably decode/toggle from PowerShell; treat as RUN RISK, not remediated here)'
+          } else {
+            Write-Host 'FOCUS_ASSIST_STATE_NOT_FOUND (likely OFF/default — no action taken)'
+          }
+        } catch {
+          Write-Host "FOCUS_ASSIST_PROBE_SKIPPED: $_"
+        }
+        Write-Host 'FOCUS_ASSIST_PROBE_DONE'
+
+  # ── Pre-stage userData: servers + overridden-settings (quick-reply ON) ───
+  # Notification preferences (desktopNotificationRequireInteraction) are
+  # intentionally left at DEFAULT — no REST override — per the design
+  # correction above.
+  - label: "A1: pre-stage servers.json + config.json + overridden-settings.json (quick-reply ON)"
+    shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first += '/' }
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          New-Item -Path $d -ItemType Directory -Force | Out-Null
+          $serversJson = @{ Workspace = '{{ workspace_url }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = @{
+            servers = @(@{ url = $first; title = 'Workspace' })
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false;
+              minimized = $false; fullscreen = $false; normal = $true;
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            '__internal__' = @{ migrations = @{ version = '4.17.0' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = @{
+            isNotificationQuickReplyEnabled = $true
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_QR_ON'
+
+  - label: "A2: launch Rocket.Chat"
+    routine: launch-rocketchat
+
+  - label: "A3: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # Root cause (2026-08-20 live-run evidence, mosdat-53 tracks the proper
+  # fix): shared/routines/windows/launch-rocketchat.yaml's schtasks action
+  # runs powershell.exe WITHOUT -WindowStyle Hidden, so EVERY launch can
+  # leave a visible console in Session 1. Defended here in the scenario
+  # meanwhile — same kill shape as A0c/E0b/F0ab, now also covering the
+  # console the launch ITSELF just spawned. Runs LeastPrivilege per the
+  # task XML, so a plain kill works.
+  - label: "A3b: kill any stray console/Edge window left by the launch itself"
+    shell: |
+        Get-Process powershell,msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Host 'POST_LAUNCH_STRAY_WINDOW_CLEANUP_DONE'
+
+  - label: "A4: verify server URL page or login form is visible"
+    verify: "either the 'Enter your server URL' input field, or a login form with an Email/username input field AND a Password input field, is visible in the Rocket.Chat window"
+    verify_not: "a channel sidebar and main chat area are already visible (already logged in) is acceptable and should NOT fail this check"
+    verify_timeout: 25
+    retries: 3
+
+  # {{ workspace_url }} is plain http:// (disposable LAN test server, no
+  # TLS). RC's server-add screen accepts http:// server URLs unmodified —
+  # no certificate/trust dialog appears, so this step is unchanged from the
+  # https:// case.
+  - label: "A5: if server URL page is shown, submit it (accepts http:// unmodified)"
+    if_visible: "an 'Enter your server URL' input field below the rocket.chat logo"
+    then:
+      - localize: "the Enter your server URL input text field below the rocket.chat logo"
+        then_type: "{{ workspace_url }}"
+        then_key: "enter"
+        verify: "a form with both an Email or username input field AND a labeled Password input field is visible"
+        verify_timeout: 25
+        retries: 3
+
+  - label: "A6: if login form is shown, log in as {{ test_user }}"
+    if_visible: "a form with an Email or username input field AND a Password input field"
+    then:
+      - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+        then_type: "{{ test_user }}"
+        verify_input: "the Email or username field contains the text '{{ test_user }}' (visible as plain text, not dots)"
+        retries: 3
+      - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+        then_type: "{{ test_password }}"
+        then_key: "enter"
+        verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+        verify_not: "a Password input field, an Email/username field, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
+        verify_timeout: 30
+        retries: 3
+
+  # NOTE: this used to be a wait_for on a "Customize and control app" kebab
+  # push button. That UIA name does not exist in this build's top bar (the
+  # PR #41875 disposable server's web client renders a search field +
+  # pagination arrows instead — confirmed via failure screenshot
+  # results/functional/2026-08-20_193418_functional/windows10/193708_step12_final_fail.png,
+  # which shows a fully-loaded, logged-in workspace with #qa-room/#general
+  # in the sidebar). Replaced with the same VLM verify shape already proven
+  # to pass at A6 (sidebar + main chat area visible). Persistent surface —
+  # VLM verify is appropriate here (not a hot path).
+  - label: "A7: verify workspace has finished loading (sidebar + main content visible)"
+    verify: "the workspace sidebar with a channel list is visible next to the main content area"
+    verify_timeout: 30
+    retries: 2
+
+  - label: "A8: open {{ test_room }} so we can later verify the reply lands there"
+    localize: "the '{{ test_room }}' channel entry in the left-hand channel sidebar"
+    click: "left"
+    verify: "the {{ test_room }} channel is open and its message composer is visible at the bottom of the main chat area"
+    verify_timeout: 20
+    retries: 3
+
+  # Minimize RC so the incoming message is unread and a toast is eligible to
+  # fire (a message arriving in the room you're actively viewing/focused on
+  # does not produce a toast — same suppression rule as self-authored
+  # messages noted in the header comment).
+  - label: "A9: minimize Rocket.Chat so the incoming notification is eligible to toast"
+    key: "win+down"
+    verify: "the Rocket.Chat window is minimized or not the foreground window (desktop or another window is visible in front of it)"
+    verify_timeout: 10
+    retries: 2
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # B. Trigger a notification (REST, second account — see header comment)
+  # ═══════════════════════════════════════════════════════════════════════
+  # Hardened per live SSH debug session (2026-08-20): the REST chain itself
+  # was verified working end-to-end against this server (message confirmed
+  # via im.history, then cleaned up). This block adds $ErrorActionPreference
+  # = 'Stop' + try/catch + explicit .success checks + `exit 1` so a REST
+  # failure fails LOUDLY at this step instead of silently.
+  - label: "B1: REST-login as {{ second_user }} and DM {{ test_user }} to trigger toast #1 (live-reply target)"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+          $dmBody = @{ username = '{{ test_user }}' } | ConvertTo-Json
+          $dm = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/im.create' -Method Post -Headers $headers -Body $dmBody
+          if (-not $dm.success -or -not $dm.room._id) { throw "im.create failed: $($dm | ConvertTo-Json -Depth 5)" }
+          $msgBody = @{ roomId = $dm.room._id; text = 'mosdat QR-QA-001 trigger #1 (live toast target)' } | ConvertTo-Json
+          $postResp = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/chat.postMessage' -Method Post -Headers $headers -Body $msgBody
+          if (-not $postResp.success) { throw "chat.postMessage failed: $($postResp | ConvertTo-Json -Depth 5)" }
+          Write-Host 'NOTIF_1_POSTED'
+        } catch {
+          Write-Error "B1_FAILED: $_"
+          exit 1
+        }
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # C. LIVE-TOAST reply — TIMED HOT PATH (default settings, no VLM verify
+  #    between trigger and keystrokes; see DSL GAP note in header)
+  # ═══════════════════════════════════════════════════════════════════════
+  # Fixed wait for the toast slide-in animation to complete, then a single
+  # localize+click (narrow prompt, calibrated region — see header geometry
+  # note) immediately followed by type + Enter. No verify/verify_input in
+  # this sequence — total wall time from B1 to Enter is under ~5s, safely
+  # inside the default ~5-6s auto-dismiss window.
+  - label: "C1: wait for the live toast to slide in"
+    wait: 2
+
+  - label: "C2: click the live toast's reply input field (timed hot path, no verify)"
+    localize: "the empty text input field inside the Rocket.Chat notification, in the toast near the bottom-right of the screen (around x=1055, y=716 on a 1280x800 screen)"
+    click: "left"
+
+  - label: "C3: type the live-toast reply and send (timed hot path, no verify)"
+    then_type: "{{ live_reply_text_prefix }}-{{ timestamp }}"
+    then_key: "enter"
+
+  - label: "C4: bring Rocket.Chat back to the foreground"
+    key: "alt+tab"
+    wait: 1
+
+  # Outcome assertion via REST poll — deterministic, not VLM. Polls the
+  # qa-sender<->qa-user DM history (up to ~15s, 2s interval) for the exact
+  # reply text.
+  - label: "C5 [REST proof]: poll im.history for the live-toast reply text"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+          $dmBody = @{ username = '{{ test_user }}' } | ConvertTo-Json
+          $dm = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/im.create' -Method Post -Headers $headers -Body $dmBody
+          if (-not $dm.success -or -not $dm.room._id) { throw "im.create failed: $($dm | ConvertTo-Json -Depth 5)" }
+          $roomId = $dm.room._id
+
+          $target = '{{ live_reply_text_prefix }}-{{ timestamp }}'
+          $found = $false
+          for ($i = 0; $i -lt 8; $i++) {
+            $hist = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/im.history?roomId=$roomId&count=20" -Method Get -Headers $headers
+            if (-not $hist.success) { throw "im.history failed: $($hist | ConvertTo-Json -Depth 5)" }
+            $match = $hist.messages | Where-Object { $_.msg -like "*$target*" } | Select-Object -First 1
+            if ($match) { $found = $true; break }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $found) { throw "CORE PROOF FAILED: live-toast reply '$target' never appeared in im.history after polling" }
+          Write-Host "LIVE_TOAST_REPLY_CONFIRMED: $target"
+        } catch {
+          Write-Error "C5_FAILED: $_"
+          exit 1
+        }
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # D. ACTION-CENTER reply — the core proof for PR #3464
+  #    (AC is a persistent surface — it does not auto-dismiss — so a
+  #    localize+verify sequence is used here per the coordinator's
+  #    "accuracy over coordinates" allowance for persistent surfaces.)
+  # ═══════════════════════════════════════════════════════════════════════
+  - label: "D0: minimize Rocket.Chat again before the second trigger"
+    key: "win+down"
+    verify: "the Rocket.Chat window is minimized or not the foreground window"
+    verify_timeout: 10
+    retries: 2
+
+  - label: "D1: REST-trigger toast #2 (action-center reply target)"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+          $dmBody = @{ username = '{{ test_user }}' } | ConvertTo-Json
+          $dm = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/im.create' -Method Post -Headers $headers -Body $dmBody
+          if (-not $dm.success -or -not $dm.room._id) { throw "im.create failed: $($dm | ConvertTo-Json -Depth 5)" }
+          $msgBody = @{ roomId = $dm.room._id; text = 'mosdat QR-QA-001 trigger #2 (action center target)' } | ConvertTo-Json
+          $postResp = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/chat.postMessage' -Method Post -Headers $headers -Body $msgBody
+          if (-not $postResp.success) { throw "chat.postMessage failed: $($postResp | ConvertTo-Json -Depth 5)" }
+          Write-Host 'NOTIF_2_POSTED'
+        } catch {
+          Write-Error "D1_FAILED: $_"
+          exit 1
+        }
+
+  - label: "D2: wait past the default ~5-6s auto-dismiss window (default settings, no requireInteraction override)"
+    wait: 8
+
+  - label: "D3: open Action Center (Win+A)"
+    key: "win+a"
+    wait: 1
+
+  - label: "D4: verify Action Center is open with the Rocket.Chat notification card visible (persistent surface — VLM appropriate)"
+    verify: "the Windows Action Center / Notification Center panel is open on the right side of the screen, showing a notification card from Rocket.Chat with the message preview text 'trigger #2'"
+    verify_timeout: 10
+    retries: 2
+
+  # Two-phase click-then-type — AC is persistent (doesn't expire), so
+  # accuracy (VLM localize + a focus-verify) is preferred over blind timing
+  # here, per the coordinator's allowance for persistent surfaces.
+  - label: "D5a: click the empty reply input field on the Action Center notification card"
+    localize: "the empty text input field inside the Rocket.Chat notification, in the notification card inside the open Action Center panel (around x=1055, y=241 on a 1280x800 screen)"
+    click: "left"
+    verify: "the reply input field inside the Rocket.Chat notification card in Action Center is focused (shows a text cursor or highlighted border)"
+    verify_timeout: 8
+    retries: 2
+
+  - wait: 1
+
+  - label: "D5b: type the Action Center reply and send"
+    then_type: "{{ ac_reply_text_prefix }}-{{ timestamp }}"
+    then_key: "enter"
+
+  - label: "D6: close Action Center"
+    key: "escape"
+    wait: 1
+
+  - label: "D7: bring Rocket.Chat back to the foreground"
+    key: "alt+tab"
+    wait: 1
+
+  # CORE PROOF for PR #3464: before this fix, a reply typed into the Action
+  # Center (after the toast left the screen) was silently lost — the app had
+  # already dropped its Notification instance and preload reply handler.
+  # This REST poll passing IS the regression proof.
+  - label: "D8 [CORE PROOF PR#3464 — REST proof]: poll im.history for the Action Center reply text"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+          $dmBody = @{ username = '{{ test_user }}' } | ConvertTo-Json
+          $dm = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/im.create' -Method Post -Headers $headers -Body $dmBody
+          if (-not $dm.success -or -not $dm.room._id) { throw "im.create failed: $($dm | ConvertTo-Json -Depth 5)" }
+          $roomId = $dm.room._id
+
+          $target = '{{ ac_reply_text_prefix }}-{{ timestamp }}'
+          $found = $false
+          for ($i = 0; $i -lt 8; $i++) {
+            $hist = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/im.history?roomId=$roomId&count=20" -Method Get -Headers $headers
+            if (-not $hist.success) { throw "im.history failed: $($hist | ConvertTo-Json -Depth 5)" }
+            $match = $hist.messages | Where-Object { $_.msg -like "*$target*" } | Select-Object -First 1
+            if ($match) { $found = $true; break }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $found) { throw "CORE PROOF FAILED: Action Center reply '$target' never appeared in im.history after polling (this would reproduce the original bug — reply silently lost after toast dismissal)" }
+          Write-Host "ACTION_CENTER_REPLY_CONFIRMED: $target"
+        } catch {
+          Write-Error "D8_FAILED: $_"
+          exit 1
+        }
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # E. Track C — isNotificationQuickReplyEnabled = false (negative proof)
+  # ═══════════════════════════════════════════════════════════════════════
+  - label: "E0: close Rocket.Chat before re-staging config"
+    routine: cleanup-rocketchat
+
+  # cleanup-rocketchat (shared/routines/windows/cleanup-rocketchat.yaml) only
+  # kills RC processes — it does not touch Edge. Kept as an inline
+  # standalone step here (not edited into the shared routine, which other
+  # scenarios also call) per the same reasoning as A0c: Edge is the
+  # escape-hatch app a stray click can open and must not survive into E's
+  # interaction steps.
+  - label: "E0b: kill any stray Edge process before relaunch"
+    shell: |
+        Stop-Process -Name msedge -Force -ErrorAction SilentlyContinue
+        Write-Host 'EDGE_CLEANUP_DONE'
+
+  - label: "E1: re-stage overridden-settings.json with isNotificationQuickReplyEnabled=false"
+    shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first += '/' }
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          New-Item -Path $d -ItemType Directory -Force | Out-Null
+          $serversJson = @{ Workspace = '{{ workspace_url }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = @{
+            servers = @(@{ url = $first; title = 'Workspace' })
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false;
+              minimized = $false; fullscreen = $false; normal = $true;
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            '__internal__' = @{ migrations = @{ version = '4.17.0' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = @{
+            isNotificationQuickReplyEnabled = $false
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_QR_OFF'
+
+  - label: "E2: relaunch Rocket.Chat"
+    routine: launch-rocketchat
+
+  - label: "E3: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # See A3b note — the launch routine's schtasks action can leave a stray
+  # visible console (or Edge) in Session 1; defended here after E2's
+  # relaunch too.
+  - label: "E3-kill: kill any stray console/Edge window left by the launch itself"
+    shell: |
+        Get-Process powershell,msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Host 'POST_LAUNCH_STRAY_WINDOW_CLEANUP_DONE'
+
+  # E0's cleanup-rocketchat wipes the login session (wipes userData), so
+  # after E2's relaunch the app shows the server-URL/login screen, not the
+  # workspace directly — same situation section F already handles via
+  # F0e-F0h. Mirrored here as E3a-E3d.
+  - label: "E3a: verify server URL page or login form is visible"
+    verify: "either the 'Enter your server URL' input field, or a login form with an Email/username input field AND a Password input field, is visible in the Rocket.Chat window"
+    verify_not: "a channel sidebar and main chat area are already visible (already logged in) is acceptable and should NOT fail this check"
+    verify_timeout: 25
+    retries: 3
+
+  - label: "E3b: if server URL page is shown, submit it (accepts http:// unmodified)"
+    if_visible: "an 'Enter your server URL' input field below the rocket.chat logo"
+    then:
+      - localize: "the Enter your server URL input text field below the rocket.chat logo"
+        then_type: "{{ workspace_url }}"
+        then_key: "enter"
+        verify: "a form with both an Email or username input field AND a labeled Password input field is visible"
+        verify_timeout: 25
+        retries: 3
+
+  - label: "E3c: if login form is shown, log in as {{ test_user }} (qa-user, 2FA disabled)"
+    if_visible: "a form with an Email or username input field AND a Password input field"
+    then:
+      - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+        then_type: "{{ test_user }}"
+        verify_input: "the Email or username field contains the text '{{ test_user }}' (visible as plain text, not dots)"
+        retries: 3
+      - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+        then_type: "{{ test_password }}"
+        then_key: "enter"
+        verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+        verify_not: "a Password input field, an Email/username field, a two-factor/TOTP code prompt, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
+        verify_timeout: 30
+        retries: 3
+
+  # See A7 note — "Customize and control app" is a stale/non-existent UIA
+  # selector on this build's top bar. Replaced with VLM verify.
+  - label: "E3d: verify workspace loaded (sidebar + main content visible)"
+    verify: "the workspace sidebar with a channel list is visible next to the main content area"
+    verify_timeout: 30
+    retries: 2
+
+  - label: "E5: open {{ test_room }}"
+    localize: "the '{{ test_room }}' channel entry in the left-hand channel sidebar"
+    click: "left"
+    verify: "the {{ test_room }} channel is open and its message composer is visible"
+    verify_timeout: 20
+    retries: 3
+
+  - label: "E6: minimize Rocket.Chat so the next notification is eligible to toast"
+    key: "win+down"
+    verify: "the Rocket.Chat window is minimized or not the foreground window"
+    verify_timeout: 10
+    retries: 2
+
+  - label: "E7: REST-trigger toast #3 (quick-reply disabled check)"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+          $dmBody = @{ username = '{{ test_user }}' } | ConvertTo-Json
+          $dm = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/im.create' -Method Post -Headers $headers -Body $dmBody
+          if (-not $dm.success -or -not $dm.room._id) { throw "im.create failed: $($dm | ConvertTo-Json -Depth 5)" }
+          $msgBody = @{ roomId = $dm.room._id; text = 'mosdat QR-QA-001 trigger #3 (quick-reply disabled check)' } | ConvertTo-Json
+          $postResp = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/chat.postMessage' -Method Post -Headers $headers -Body $msgBody
+          if (-not $postResp.success) { throw "chat.postMessage failed: $($postResp | ConvertTo-Json -Depth 5)" }
+          Write-Host 'NOTIF_3_POSTED'
+        } catch {
+          Write-Error "E7_FAILED: $_"
+          exit 1
+        }
+
+  # E's negative proof: perform the SAME timed click+type+Enter at the
+  # toast region as section C. With isNotificationQuickReplyEnabled=false
+  # there is no reply input field to focus, so the click lands on the bare
+  # toast body and the typed keystrokes go nowhere (there is nothing to
+  # "type into" — no composer, no OS-level fallback). No verify in this
+  # hot-path sequence; the REST poll below is the actual assertion.
+  - label: "E8: wait for the (reply-less) toast to slide in"
+    wait: 2
+
+  - label: "E9: click the toast region where a reply field would be (timed hot path, no verify — quick-reply is disabled, nothing to focus)"
+    localize: "the body of the Rocket.Chat notification toast near the bottom-right of the screen (around x=1055, y=716 on a 1280x800 screen)"
+    click: "left"
+
+  - label: "E10: attempt to type + send into the (nonexistent) reply field (timed hot path, no verify)"
+    then_type: "{{ disabled_reply_text_prefix }}-{{ timestamp }}"
+    then_key: "enter"
+
+  - label: "E11: bring Rocket.Chat back to the foreground"
+    key: "alt+tab"
+    wait: 1
+
+  # Negative REST proof: the typed text must NEVER appear anywhere in the
+  # DM. Polls briefly (fixed short window, not the long retry budget used
+  # for positive proofs — a negative assertion has no "eventually true"
+  # state to wait for) then asserts absence.
+  - label: "E12 [Track C proof — REST negative proof]: assert the disabled-toast text never posted"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+          $dmBody = @{ username = '{{ test_user }}' } | ConvertTo-Json
+          $dm = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/im.create' -Method Post -Headers $headers -Body $dmBody
+          if (-not $dm.success -or -not $dm.room._id) { throw "im.create failed: $($dm | ConvertTo-Json -Depth 5)" }
+          $roomId = $dm.room._id
+
+          Start-Sleep -Seconds 4
+          $target = '{{ disabled_reply_text_prefix }}-{{ timestamp }}'
+          $hist = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/im.history?roomId=$roomId&count=20" -Method Get -Headers $headers
+          if (-not $hist.success) { throw "im.history failed: $($hist | ConvertTo-Json -Depth 5)" }
+          $match = $hist.messages | Where-Object { $_.msg -like "*$target*" } | Select-Object -First 1
+          if ($match) { throw "NEGATIVE PROOF FAILED: '$target' unexpectedly posted while isNotificationQuickReplyEnabled=false — reply field should not exist" }
+          Write-Host "QUICK_REPLY_DISABLED_CONFIRMED: '$target' correctly absent from im.history"
+        } catch {
+          Write-Error "E12_FAILED: $_"
+          exit 1
+        }
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # F. Track B (PR #41875, core-side web-client fix) — thread-reply proof
+  #
+  # This section proves the FIX shipped in the fixed web client served by
+  # the disposable core server (http://192.168.13.162:51340, PR #41875
+  # image): a toast/Action-Center reply to a THREAD-mention notification
+  # must land INSIDE the thread, not as a flat message at the bottom of
+  # the main channel. Before the fix, the desktop notification's `tmid`
+  # was omitted by the web client's `useNotification` (see PR #3464's
+  # "Out of scope" note — that omission is exactly what #41875 fixes on
+  # the server/web-client side), so the reply posted to the main room.
+  #
+  # Re-stage with isNotificationQuickReplyEnabled=true — section E's E1
+  # left it false, and F4 needs a live reply-capable toast.
+  # ═══════════════════════════════════════════════════════════════════════
+  - label: "F0a: close Rocket.Chat before re-staging config for Track B"
+    routine: cleanup-rocketchat
+
+  # See E0b note — cleanup-rocketchat doesn't touch Edge; kept as an inline
+  # standalone step rather than editing the shared routine. Section F is
+  # exactly the section that regressed on this (step 71 mis-click opened
+  # Edge fullscreen) — this step plus the F1 robustness fix below address
+  # that directly.
+  - label: "F0ab: kill any stray Edge process before relaunch"
+    shell: |
+        Stop-Process -Name msedge -Force -ErrorAction SilentlyContinue
+        Write-Host 'EDGE_CLEANUP_DONE'
+
+  - label: "F0b: re-stage servers.json + config.json + overridden-settings.json (quick-reply ON again)"
+    shell: |
+        $first = '{{ workspace_url }}'
+        if (-not $first.EndsWith('/')) { $first += '/' }
+        $dirs = @("$env:APPDATA\Rocket.Chat", "$env:APPDATA\Rocket.Chat (development)")
+        foreach ($d in $dirs) {
+          New-Item -Path $d -ItemType Directory -Force | Out-Null
+          $serversJson = @{ Workspace = '{{ workspace_url }}' } | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path $d 'servers.json'), $serversJson, [System.Text.UTF8Encoding]::new($false))
+          $config = @{
+            servers = @(@{ url = $first; title = 'Workspace' })
+            currentView = @{ url = $first }
+            rootWindowState = @{
+              focused = $true; visible = $true; maximized = $false;
+              minimized = $false; fullscreen = $false; normal = $true;
+              bounds = @{ x = 40; y = 40; width = 1280; height = 820 }
+            }
+            lastSelectedServerUrl = $first
+            '__internal__' = @{ migrations = @{ version = '4.17.0' } }
+          }
+          $configJson = $config | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $d 'config.json'), $configJson, [System.Text.UTF8Encoding]::new($false))
+          $overrides = @{
+            isNotificationQuickReplyEnabled = $true
+            isMenuBarEnabled = $true
+            isSideBarEnabled = $true
+            isTrayIconEnabled = $false
+            isMinimizeOnCloseEnabled = $false
+            doCheckForUpdatesOnStartup = $false
+            isUpdatingEnabled = $false
+          }
+          $overridesJson = $overrides | ConvertTo-Json -Depth 4
+          [System.IO.File]::WriteAllText((Join-Path $d 'overridden-settings.json'), $overridesJson, [System.Text.UTF8Encoding]::new($false))
+          foreach ($f in 'servers.json','config.json','overridden-settings.json') {
+            $p = Join-Path $d $f
+            $b = [System.IO.File]::ReadAllBytes($p)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) {
+              Write-Error "BOM detected in $p"; exit 1
+            }
+          }
+        }
+        Write-Host 'USERDATA_STAGED_TRACK_B'
+
+  - label: "F0c: relaunch Rocket.Chat"
+    routine: launch-rocketchat
+
+  - label: "F0d: wait_for main window frame"
+    wait_for: {any: [{role: "frame"}], timeout: 30}
+    retries: 1
+
+  # See A3b note — the launch routine's schtasks action can leave a stray
+  # visible console (or Edge) in Session 1; defended here after F0c's
+  # relaunch too.
+  - label: "F0d-kill: kill any stray console/Edge window left by the launch itself"
+    shell: |
+        Get-Process powershell,msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Host 'POST_LAUNCH_STRAY_WINDOW_CLEANUP_DONE'
+
+  - label: "F0e: verify server URL page or login form is visible"
+    verify: "either the 'Enter your server URL' input field, or a login form with an Email/username input field AND a Password input field, is visible in the Rocket.Chat window"
+    verify_not: "a channel sidebar and main chat area are already visible (already logged in) is acceptable and should NOT fail this check"
+    verify_timeout: 25
+    retries: 3
+
+  - label: "F0f: if server URL page is shown, submit it (accepts http:// unmodified)"
+    if_visible: "an 'Enter your server URL' input field below the rocket.chat logo"
+    then:
+      - localize: "the Enter your server URL input text field below the rocket.chat logo"
+        then_type: "{{ workspace_url }}"
+        then_key: "enter"
+        verify: "a form with both an Email or username input field AND a labeled Password input field is visible"
+        verify_timeout: 25
+        retries: 3
+
+  - label: "F0g: if login form is shown, log in as {{ test_user }} (qa-user, 2FA disabled)"
+    if_visible: "a form with an Email or username input field AND a Password input field"
+    then:
+      - localize: "the upper input field labeled 'Email or username' (above the Password field)"
+        then_type: "{{ test_user }}"
+        verify_input: "the Email or username field contains the text '{{ test_user }}' (visible as plain text, not dots)"
+        retries: 3
+      - localize: "the Password input field in the login form — the masked input field positioned BETWEEN the Email or username field above and the Login button below, NOT the Forgot password link"
+        then_type: "{{ test_password }}"
+        then_key: "enter"
+        verify: "a left-side channel sidebar and a main chat area are visible, and no Password input field is on screen"
+        verify_not: "a Password input field, an Email/username field, a two-factor/TOTP code prompt, or an error like 'user not found' / 'invalid password' / 'offline' is visible"
+        verify_timeout: 30
+        retries: 3
+
+  # See A7 note — "Customize and control app" is a stale/non-existent UIA
+  # selector on this build's top bar. Replaced with VLM verify.
+  - label: "F0h: verify workspace has finished loading (sidebar + main content visible)"
+    verify: "the workspace sidebar with a channel list is visible next to the main content area"
+    verify_timeout: 30
+    retries: 1
+
+  # F-section robustness (windows10): a mis-localized click earlier in this
+  # run (step 71, prior evidence) hit the taskbar weather/news widget and
+  # opened Edge fullscreen over the desktop, which then absorbed every
+  # subsequent click/keystroke for the rest of the run.
+  #
+  # Reworked (2026-08-20, second live-run finding): the original F0j used a
+  # blind `alt+tab`, which is a coin flip — if RC already has focus,
+  # alt+tab switches AWAY to whatever else is running (e.g. a stray launch
+  # console — see A3b note), and the verify then correctly failed. Fixed
+  # order: (a) idempotent kill of any stray console/Edge window (same shape
+  # as A3b/E3-kill/F0d-kill — with the console/Edge dead, RC is the only
+  # window candidate left, no focus flip needed), (b) Esc to dismiss any
+  # remaining stray overlay, (c) the existing foreground verify. A residual
+  # edge case — RC minimized rather than in front — is covered by an
+  # if_visible fallback that clicks the RC taskbar icon directly (region
+  # calibrated from results/functional/2026-08-20_232633_functional/
+  # windows10/232655_step10_verify_poll.png and .../232725_step10_verified.png
+  # — both confirm the RC taskbar icon, a red chat-bubble, at
+  # approximately x=417, y=780 on a 1280x800 screen).
+  - label: "F0i: kill any stray console/Edge window before F1's click (idempotent)"
+    shell: |
+        Get-Process powershell,msedge -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Host 'PRE_F1_STRAY_WINDOW_CLEANUP_DONE'
+
+  - label: "F0i2: dismiss any remaining stray overlay before F1's click"
+    key: "esc"
+    wait: 1
+
+  - label: "F0j: verify Rocket.Chat is in the foreground before F1's click"
+    verify: "the Rocket.Chat window is visible and in the foreground — no browser window, ad page, or 'closed unexpectedly' restore prompt is on screen"
+    verify_timeout: 10
+    retries: 2
+
+  - label: "F0j-fallback: if RC is not in the foreground (e.g. minimized, no window in front), click its taskbar icon directly"
+    if_visible: "the Windows desktop with no application window in the foreground"
+    then:
+      - localize: "the Rocket.Chat icon in the Windows taskbar — a red chat-bubble icon, near the taskbar's left side (around x=417, y=780 on a 1280x800 screen)"
+        click: "left"
+        verify: "the Rocket.Chat window is visible and in the foreground"
+        verify_timeout: 10
+        retries: 2
+
+  # F1: as qa-user, open #qa-room and post the thread-root parent message.
+  - label: "F1: open {{ test_room }} and post the thread-root message as {{ test_user }}"
+    localize: "the '{{ test_room }}' channel entry in the left-hand channel sidebar"
+    click: "left"
+    verify: "the {{ test_room }} channel is open and its message composer is visible at the bottom of the main chat area"
+    verify_timeout: 20
+    retries: 3
+
+  - label: "F1b: type and send the thread-root message"
+    localize: "the message input box or composer at the bottom of the {{ test_room }} chat"
+    click: "left"
+    then_type: "{{ thread_root_prefix }}-{{ timestamp }}"
+    then_key: "enter"
+    verify: "a message containing the exact text '{{ thread_root_prefix }}-{{ timestamp }}' is visible in the {{ test_room }} chat history"
+    verify_timeout: 15
+    retries: 3
+
+  # F3 (reordered ahead of F2 per brief): minimize RC BEFORE qa-sender's
+  # threaded reply is sent, so the resulting toast fires while unfocused —
+  # same suppression rule noted in the header comment (a message arriving
+  # in the actively-focused room does not toast).
+  - label: "F3: minimize Rocket.Chat before triggering the thread-mention notification"
+    key: "win+down"
+    verify: "the Rocket.Chat window is minimized or not the foreground window"
+    verify_timeout: 10
+    retries: 2
+
+  # F2: REST as qa-sender — resolve #qa-room's id, find the thread-root
+  # message we just posted, then chat.sendMessage with tmid set + an
+  # @qa-user mention, generating a THREAD notification (not a flat-message
+  # notification) for qa-user.
+  # Hardened per live SSH debug session (2026-08-20): this exact REST chain
+  # (channels.info -> channels.history -> chat.sendMessage with tmid) was
+  # verified end-to-end against this server — root posted as qa-user,
+  # threaded reply posted as qa-sender, tmid confirmed via
+  # chat.getThreadMessages, then both cleaned up via chat.delete.
+  - label: "F2: REST as {{ second_user }} — reply in-thread to the root message with an @{{ test_user }} mention (tmid set)"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+
+          $roomInfo = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/channels.info?roomName={{ test_room }}" -Method Get -Headers $headers
+          $roomId = $roomInfo.channel._id
+          if (-not $roomInfo.success -or -not $roomId) { throw "channels.info failed to resolve roomId: $($roomInfo | ConvertTo-Json -Depth 5)" }
+
+          $history = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/channels.history?roomId=$roomId&count=5" -Method Get -Headers $headers
+          if (-not $history.success) { throw "channels.history failed: $($history | ConvertTo-Json -Depth 5)" }
+          $rootMsg = $history.messages | Where-Object { $_.msg -like '*{{ thread_root_prefix }}-{{ timestamp }}*' } | Select-Object -First 1
+          if (-not $rootMsg) { throw "thread-root message not found in channels.history (looked for '*{{ thread_root_prefix }}-{{ timestamp }}*')" }
+          $tmid = $rootMsg._id
+
+          $sendBody = @{ message = @{ rid = $roomId; tmid = $tmid; msg = '@{{ test_user }} {{ thread_ping_prefix }}-{{ timestamp }}' } } | ConvertTo-Json -Depth 4
+          $sendResp = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/chat.sendMessage' -Method Post -Headers $headers -Body $sendBody
+          if (-not $sendResp.success) { throw "chat.sendMessage failed: $($sendResp | ConvertTo-Json -Depth 5)" }
+          Write-Host "THREAD_MENTION_POSTED tmid=$tmid"
+        } catch {
+          Write-Error "F2_FAILED: $_"
+          exit 1
+        }
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # F4: reply to the thread-mention notification via the D-pattern (Action
+  # Center), not the live toast. Reworked 2026-08-21: live SSH/live-run
+  # evidence (results/functional/2026-08-20_235614_functional/windows10/
+  # 001223_step77_click.png) shows the live-toast reply click missing the
+  # target twice in a row (2/2 F failures) — the red click marker landed in
+  # the wallpaper above the toast — while section D's Action Center pattern
+  # has passed 3/3 runs. Section F now waits out the toast's auto-dismiss
+  # and replies from Action Center instead, reusing D5a/D5b's exact
+  # click-then-type shape.
+  # ═══════════════════════════════════════════════════════════════════════
+  - label: "F4a: wait past the default ~5-6s auto-dismiss window (default settings, no requireInteraction override)"
+    wait: 8
+
+  - label: "F4b: open Action Center (Win+A)"
+    key: "win+a"
+    wait: 1
+
+  - label: "F4c: verify Action Center is open with the thread-mention notification card visible"
+    verify: "the Windows Action Center / Notification Center panel is open on the right side of the screen, showing a notification card from Rocket.Chat with the message preview text containing '#qa-room' and 'thread-ping'"
+    verify_timeout: 10
+    retries: 2
+
+  - label: "F4d: click the empty reply input field on the Action Center notification card"
+    localize: "the empty text input field inside the Rocket.Chat notification, in the notification card showing '#qa-room' and 'thread-ping' text, inside the open Action Center panel (around x=1055, y=241 on a 1280x800 screen)"
+    click: "left"
+    verify: "the reply input field inside the Rocket.Chat notification card in Action Center is focused (shows a text cursor or highlighted border)"
+    verify_timeout: 8
+    retries: 2
+
+  - wait: 1
+
+  - label: "F4e: type the thread reply and send"
+    then_type: "{{ thread_reply_prefix }}-{{ timestamp }}"
+    then_key: "enter"
+
+  - label: "F4f: close Action Center"
+    key: "escape"
+    wait: 1
+
+  - label: "F5: bring Rocket.Chat back to the foreground"
+    key: "alt+tab"
+    wait: 1
+
+  # F6: open the thread panel — persistent surface, VLM verify appropriate
+  # (not a hot path; kept per the coordinator's allowance).
+  - label: "F6a: open {{ test_room }} if not already open"
+    localize: "the '{{ test_room }}' channel entry in the left-hand channel sidebar"
+    click: "left"
+    verify: "the {{ test_room }} channel is open and its message list is visible"
+    verify_timeout: 15
+    retries: 3
+
+  - label: "F6b: click the thread-root message's thread indicator / replies link to open the thread panel"
+    localize: "the 'N replies' link or thread reply indicator below the message containing '{{ thread_root_prefix }}-{{ timestamp }}'"
+    click: "left"
+    verify: "a thread panel has opened, typically on the right side of the chat area, showing the thread-root message at the top"
+    verify_timeout: 15
+    retries: 3
+
+  # Outcome assertion via REST — deterministic. Resolves the thread-root's
+  # _id again (same lookup F2 used), then polls chat.getThreadMessages for
+  # the reply AND cross-checks channels.history to confirm the reply did
+  # NOT land as a flat main-channel message (the pre-fix #41875 regression).
+  - label: "F7 [CORE PROOF PR#41875 — REST proof]: poll chat.getThreadMessages for the thread reply, and assert absence from the flat channel timeline"
+    shell: |
+        $ErrorActionPreference = 'Stop'
+        try {
+          $body = @{ user = '{{ second_user }}'; password = '{{ second_user_password }}' } | ConvertTo-Json
+          $login = Invoke-RestMethod -Uri '{{ workspace_url }}/api/v1/login' -Method Post -ContentType 'application/json' -Body $body
+          if (-not $login.data.authToken) { throw "REST login failed for second_user: $($login | ConvertTo-Json -Depth 5)" }
+          $headers = @{ 'X-Auth-Token' = $login.data.authToken; 'X-User-Id' = $login.data.userId; 'Content-Type' = 'application/json' }
+
+          $roomInfo = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/channels.info?roomName={{ test_room }}" -Method Get -Headers $headers
+          $roomId = $roomInfo.channel._id
+          if (-not $roomInfo.success -or -not $roomId) { throw "channels.info failed to resolve roomId: $($roomInfo | ConvertTo-Json -Depth 5)" }
+
+          $history = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/channels.history?roomId=$roomId&count=10" -Method Get -Headers $headers
+          if (-not $history.success) { throw "channels.history failed: $($history | ConvertTo-Json -Depth 5)" }
+          $rootMsg = $history.messages | Where-Object { $_.msg -like '*{{ thread_root_prefix }}-{{ timestamp }}*' } | Select-Object -First 1
+          if (-not $rootMsg) { throw "thread-root message not found in channels.history" }
+          $tmid = $rootMsg._id
+
+          $replyTarget = '{{ thread_reply_prefix }}-{{ timestamp }}'
+          $foundInThread = $false
+          for ($i = 0; $i -lt 8; $i++) {
+            $threadMsgs = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/chat.getThreadMessages?tmid=$tmid" -Method Get -Headers $headers
+            if (-not $threadMsgs.success) { throw "chat.getThreadMessages failed: $($threadMsgs | ConvertTo-Json -Depth 5)" }
+            $match = $threadMsgs.messages | Where-Object { $_.msg -like "*$replyTarget*" -and $_.tmid -eq $tmid } | Select-Object -First 1
+            if ($match) { $foundInThread = $true; break }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $foundInThread) { throw "CORE PROOF FAILED: thread reply '$replyTarget' with tmid=$tmid never appeared in chat.getThreadMessages after polling" }
+
+          # Absence check: the reply must NOT also appear as a flat, non-thread message.
+          $historyAfter = Invoke-RestMethod -Uri "{{ workspace_url }}/api/v1/channels.history?roomId=$roomId&count=10" -Method Get -Headers $headers
+          if (-not $historyAfter.success) { throw "channels.history (post-check) failed: $($historyAfter | ConvertTo-Json -Depth 5)" }
+          $flatMatch = $historyAfter.messages | Where-Object { $_.msg -like "*$replyTarget*" -and -not $_.tmid } | Select-Object -First 1
+          if ($flatMatch) { throw "CORE PROOF FAILED (#41875 regression reproduced): thread reply '$replyTarget' ALSO landed as a flat non-thread message in channels.history (id=$($flatMatch._id))" }
+
+          Write-Host "THREAD_REPLY_CONFIRMED_IN_THREAD_ONLY: $replyTarget tmid=$tmid"
+        } catch {
+          Write-Error "F7_FAILED: $_"
+          exit 1
+        }
+
+  # ── Final cleanup ────────────────────────────────────────────────────────
+  - label: "G0: final cleanup"
+    routine: cleanup-rocketchat
