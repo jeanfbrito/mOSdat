@@ -5,6 +5,8 @@ arg-builder and mock subprocess.run for the close path.
 """
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -163,3 +165,43 @@ def test_run_omits_control_path_args_when_not_persistent(tmp_path, monkeypatch):
         ssh.run("echo OK", timeout=5)
     argv = run.call_args.args[0]
     assert "ControlMaster" not in " ".join(argv)
+
+
+# ---------------------------------------------------------------- stdin isolation
+# The MCP server is a stdio JSON-RPC process. An ssh/scp child that inherits
+# its stdin can read the client's next request bytes (c8883777), so every
+# child must get stdin=DEVNULL.
+def test_run_passes_stdin_devnull(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh = SSHClient("10.0.0.1", "alice")
+    fake_result = mock.Mock(returncode=0, stdout="OK\n", stderr="")
+    with mock.patch("automation.transport.ssh.subprocess.run", return_value=fake_result) as run:
+        ssh.run("echo OK", timeout=5)
+    assert run.call_args.kwargs["stdin"] is subprocess.DEVNULL
+    # A non-UTF-8 byte from a Windows console must not raise.
+    assert run.call_args.kwargs["errors"] == "replace"
+
+
+def test_run_stream_output_passes_stdin_devnull(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh = SSHClient("10.0.0.1", "alice")
+    proc = mock.Mock(returncode=0, stdout=iter(["line\n"]))
+    with mock.patch("automation.transport.ssh.subprocess.Popen", return_value=proc) as popen:
+        result = ssh.run("echo line", stream_output=True)
+    assert popen.call_args.kwargs["stdin"] is subprocess.DEVNULL
+    assert result.stdout == "line\n"
+
+
+@pytest.mark.parametrize("method,args", [
+    ("scp_to", (Path("/tmp/a"), "/tmp/b")),
+    ("scp_from", ("/tmp/b", Path("/tmp/a"))),
+    ("scp_dir_to", (Path("/tmp/a"), "/tmp/b")),
+])
+def test_scp_methods_pass_stdin_devnull(tmp_path, monkeypatch, method, args):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh = SSHClient("10.0.0.1", "alice")
+    fake_result = mock.Mock(returncode=0, stdout="", stderr="")
+    with mock.patch("automation.transport.ssh.subprocess.run", return_value=fake_result) as run:
+        getattr(ssh, method)(*args)
+    assert run.call_args.args[0][0] == "scp"
+    assert run.call_args.kwargs["stdin"] is subprocess.DEVNULL

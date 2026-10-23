@@ -103,13 +103,20 @@ class SSHClient:
         stream_output: bool = False,
     ) -> SSHResult:
         ssh_cmd = self._ssh_args() + [command]
+        # Every ssh/scp child gets stdin=DEVNULL. The MCP server is a stdio
+        # JSON-RPC process: an ssh child that inherits its stdin can read the
+        # client's next request bytes, and the server then looks dead.
+        # errors="replace": a Windows console writes in the OEM codepage, and
+        # one non-UTF-8 byte must not raise UnicodeDecodeError here.
 
         if stream_output:
             process = subprocess.Popen(
                 ssh_cmd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                errors="replace",
                 bufsize=1,
             )
             output_lines: list[str] = []
@@ -129,8 +136,10 @@ class SSHClient:
             try:
                 result = subprocess.run(
                     ssh_cmd,
+                    stdin=subprocess.DEVNULL,
                     capture_output=capture_output,
                     text=True,
+                    errors="replace",
                     timeout=timeout,
                 )
                 if result.returncode == 255 and attempt == 0:
@@ -159,7 +168,10 @@ class SSHClient:
             f"{self.user}@{self.host}:{remote_path}",
         ]
         try:
-            result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(
+                scp_cmd, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=300,
+            )
             return SSHResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
         except subprocess.TimeoutExpired:
             return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
@@ -170,7 +182,10 @@ class SSHClient:
             str(local_path),
         ]
         try:
-            result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                scp_cmd, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=60,
+            )
             return SSHResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
         except subprocess.TimeoutExpired:
             return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
@@ -181,7 +196,10 @@ class SSHClient:
             f"{self.user}@{self.host}:{remote_path}",
         ]
         try:
-            result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(
+                scp_cmd, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=300,
+            )
             return SSHResult(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
         except subprocess.TimeoutExpired:
             return SSHResult(returncode=124, stdout="", stderr="SCP timed out")
@@ -208,7 +226,7 @@ class SSHClient:
                     "-S", self._control_path,
                     f"{self.user}@{self.host}",
                 ],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
             )
             return r.returncode == 0
         except Exception:
@@ -231,7 +249,7 @@ class SSHClient:
                     "-S", self._control_path,
                     f"{self.user}@{self.host}",
                 ],
-                capture_output=True,
+                capture_output=True, stdin=subprocess.DEVNULL,
                 timeout=5,
             )
         except Exception:
