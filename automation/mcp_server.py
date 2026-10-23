@@ -28,7 +28,8 @@ from automation.mcp_tools import (
     _server_list,
     _server_teardown,
     _run_smoke,
-    _ssh_tool,
+    _ssh_dispatch,
+    _vm_hygiene,
     _vm_start,
     _vm_status,
     _vm_stop,
@@ -112,7 +113,11 @@ def handle_tools_call(req: Request) -> str:
         if name == "mosdat_list_vms":
             return jsonrpc_result(req, _list_vms(args))
         elif name == "mosdat_vm_start":
-            return _vm_start(req, args["vm_name"], ok)
+            return _vm_start(
+                req, args["vm_name"], ok,
+                wait_ready=bool(args.get("wait_ready", False)),
+                timeout=int(args.get("timeout", 240)),
+            )
         elif name == "mosdat_vm_stop":
             return _vm_stop(req, args["vm_name"], ok)
         elif name == "mosdat_vm_status":
@@ -131,6 +136,8 @@ def handle_tools_call(req: Request) -> str:
             return jsonrpc_result(req, _readiness(args))
         elif name == "mosdat_ssh_bootstrap":
             return jsonrpc_result(req, _ssh_bootstrap(args))
+        elif name == "mosdat_vm_hygiene":
+            return jsonrpc_result(req, _vm_hygiene(args))
         elif name == "mosdat_server_provision":
             return jsonrpc_result(req, _server_provision(args))
         elif name == "mosdat_server_teardown":
@@ -138,7 +145,7 @@ def handle_tools_call(req: Request) -> str:
         elif name == "mosdat_server_list":
             return jsonrpc_result(req, _server_list(args))
         elif name == "mosdat_ssh":
-            return _ssh_tool(req, args["vm_name"], args["command"], args.get("timeout", 30), jsonrpc_result=ok)
+            return _ssh_dispatch(req, args, jsonrpc_result=ok)
         else:
             return jsonrpc_error(req, -32601, f"Unknown tool: {name}")
     except Exception as e:
@@ -156,11 +163,29 @@ HANDLERS = {
 }
 
 
+def _claim_protocol_stdout():
+    """Reserve the real stdout for JSON-RPC and send everything else to stderr.
+
+    MCP stdio servers must write only protocol messages to stdout. Tool code
+    prints progress (``build._log``, runner logs) and starts subprocesses that
+    inherit fd 1, so a ``print`` there corrupted the stream. Duplicate fd 1
+    for protocol use, then point fd 1 (and ``sys.stdout``) at stderr.
+    """
+    import os
+
+    proto = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
+    sys.stdout.flush()
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return proto
+
+
 def main():
     """Run MCP server: read JSON-RPC from stdin, write responses to stdout."""
     import os
 
     os.chdir(str(FRAMEWORK))
+    out = _claim_protocol_stdout()
 
     print("[mcp] mOSdat MCP server starting", file=sys.stderr)
     print(f"[mcp] Framework: {FRAMEWORK}", file=sys.stderr)
@@ -182,14 +207,11 @@ def main():
             method = req.get("method", "")
             handler = HANDLERS.get(method)
             if handler:
-                response = handler(req)
-                sys.stdout.write(response)
-                sys.stdout.flush()
-            else:
-                sys.stdout.write(jsonrpc_error(req, -32601, f"Method not found: {method}"))
-                sys.stdout.flush()
-
-        sys.stdout.flush()
+                out.write(handler(req))
+            elif "id" in req:
+                # Notifications (no id) never get a response, per JSON-RPC.
+                out.write(jsonrpc_error(req, -32601, f"Method not found: {method}"))
+            out.flush()
 
 
 if __name__ == "__main__":
