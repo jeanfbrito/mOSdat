@@ -220,12 +220,21 @@ def test_startup_timeout_path_a(monkeypatch):
 
     monkeypatch.setattr(mod.time, "monotonic", _monotonic)
     monkeypatch.setattr(mod.time, "sleep", _sleep)
+    monkeypatch.setattr(mod, "_service_running", lambda project, service: False)
     result = provision_server("pr-3464", timeout=0.05)
     assert result.state == "failed"
-    assert "timeout" in result.error or "livez" in result.error
     assert "did not become ready" in result.error
+    assert "not running" in result.error
     compose.assert_called_once()
     pull.assert_called_once()
+
+    # Same timeout with the container still booting: "starting", not "failed".
+    monkeypatch.setattr(mod, "_service_running", lambda project, service: True)
+    monkeypatch.setattr(mod, "_list_managed_projects", lambda: [])
+    result = provision_server("pr-3464", timeout=0.05)
+    assert result.state == "starting"
+    assert result.url
+    assert result.error == ""
 
 
 def test_daemon_not_running_skips_pull_and_up(monkeypatch):
@@ -234,7 +243,7 @@ def test_daemon_not_running_skips_pull_and_up(monkeypatch):
     monkeypatch.setattr(mod, "_docker_daemon_running", lambda: False)
     monkeypatch.setattr(mod, "_docker_pull", pull)
     monkeypatch.setattr(mod, "_compose_up", compose)
-    result = provision_server("develop")
+    result = provision_server("develop", start_docker=False)
     assert result.state == "failed"
     assert result.error == DAEMON_ERROR
     assert "Docker daemon is not running — start Docker Desktop first" in result.error
@@ -275,6 +284,26 @@ def test_other_pull_error_distinct_from_no_image(monkeypatch):
     assert "failed to pull" in result.error
     assert "ghcr.io/rocketchat/rocket.chat:develop" in result.error
     compose.assert_not_called()
+
+
+def test_startup_budget_starts_after_compose_up(monkeypatch):
+    # A slow image pull must not use up the /livez budget: timeout covers polling.
+    clock = {"t": 0.0}
+    monkeypatch.setattr(mod.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(
+        mod.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s),
+    )
+    _path_a_ok(monkeypatch, probe=False)
+
+    def _slow_pull(image):
+        clock["t"] += 200
+        return True, ""
+
+    monkeypatch.setattr(mod, "_docker_pull", _slow_pull)
+    probes = iter([False, False, True])
+    monkeypatch.setattr(mod, "probe_ready", lambda *a, **k: next(probes))
+    result = provision_server("pr-3464", timeout=180)
+    assert result.state == "ready"
 
 
 def test_two_refs_get_distinct_urls(monkeypatch):
@@ -617,6 +646,274 @@ def test_server_teardown_list_registered_in_tool_definitions_and_dispatch():
     assert "_server_teardown" in inspect.getsource(mcp_server.handle_tools_call)
     assert "mosdat_server_list" in inspect.getsource(mcp_server.handle_tools_call)
     assert "_server_list" in inspect.getsource(mcp_server.handle_tools_call)
+
+
+# ---------------------------------------------------------------------------
+# D1 — ensure_docker / start_docker
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def monotonic(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.t += seconds
+
+
+def _patch_docker_timeline(monkeypatch, *, up_at, run_rc=0):
+    """Fake clock; the daemon answers from ``up_at`` on (None = never).
+
+    Records every ``_run`` command. ``run_rc`` is the exit code of each command.
+    """
+    clock = _FakeClock()
+    calls = []
+    monkeypatch.setattr(mod.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    monkeypatch.setattr(mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        mod,
+        "_docker_daemon_running",
+        lambda: up_at is not None and clock.t >= up_at,
+    )
+
+    def _fake_run(cmd, timeout, env=None):
+        calls.append(cmd)
+        return run_rc, "", ""
+
+    monkeypatch.setattr(mod, "_run", _fake_run)
+    return clock, calls
+
+
+OPEN_DOCKER = ["open", "-g", "-a", "Docker"]
+QUIT_DOCKER = ["osascript", "-e", 'quit app "Docker"']
+PKILL_DOCKER = ["pkill", "-f", "com.docker.backend"]
+
+
+def test_ensure_docker_already_running_is_noop(monkeypatch):
+    _clock, calls = _patch_docker_timeline(monkeypatch, up_at=0.0)
+    assert mod.ensure_docker() == (True, "")
+    assert calls == []
+
+
+def test_ensure_docker_starts_on_first_try(monkeypatch):
+    clock, calls = _patch_docker_timeline(monkeypatch, up_at=10.0)
+    assert mod.ensure_docker(timeout=120) == (True, "")
+    assert calls == [OPEN_DOCKER]
+    assert clock.t == 12.0  # polls at 0, 3, 6, 9, 12; up at 10
+
+
+def test_ensure_docker_quits_and_restarts_when_vm_hangs(monkeypatch):
+    # Daemon stays down through the first half of the budget (60 s), then
+    # answers 1 s into the wait after the restart (t=65 + 3 + 3 = 71).
+    _clock, calls = _patch_docker_timeline(monkeypatch, up_at=70.0)
+    assert mod.ensure_docker(timeout=120) == (True, "")
+    assert calls == [OPEN_DOCKER, QUIT_DOCKER, PKILL_DOCKER, OPEN_DOCKER]
+
+
+def test_ensure_docker_gives_up_after_restart(monkeypatch):
+    clock, calls = _patch_docker_timeline(monkeypatch, up_at=None)
+    ok, detail = mod.ensure_docker(timeout=120)
+    assert ok is False
+    assert detail.startswith(DAEMON_ERROR)
+    assert "auto-start tried:" in detail
+    assert "opened Docker, no daemon after 60s" in detail
+    assert "quit and reopened Docker" in detail
+    assert "no daemon after 55s more" in detail
+    assert calls == [OPEN_DOCKER, QUIT_DOCKER, PKILL_DOCKER, OPEN_DOCKER]
+    assert clock.t >= 120
+
+
+def test_ensure_docker_reports_missing_app(monkeypatch):
+    _clock, calls = _patch_docker_timeline(monkeypatch, up_at=None, run_rc=1)
+    ok, detail = mod.ensure_docker()
+    assert ok is False
+    assert detail.startswith(DAEMON_ERROR)
+    assert "open failed" in detail
+    assert calls == [OPEN_DOCKER]
+
+
+def test_ensure_docker_does_not_autostart_off_macos(monkeypatch):
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    monkeypatch.setattr(mod, "_docker_daemon_running", lambda: False)
+    run = MagicMock()
+    monkeypatch.setattr(mod, "_run", run)
+    assert mod.ensure_docker() == (False, DAEMON_ERROR)
+    run.assert_not_called()
+
+
+def test_provision_daemon_down_calls_ensure_docker(monkeypatch):
+    _path_a_ok(monkeypatch, port=54217, probe=True)
+    monkeypatch.setattr(mod, "_docker_daemon_running", lambda: False)
+    ensure = MagicMock(return_value=(True, ""))
+    monkeypatch.setattr(mod, "ensure_docker", ensure)
+    result = provision_server("pr-3464")
+    ensure.assert_called_once_with()
+    assert result.state == "ready"
+
+
+def test_provision_ensure_docker_failure_is_reported(monkeypatch):
+    monkeypatch.setattr(mod, "_docker_daemon_running", lambda: False)
+    detail = f"{DAEMON_ERROR} (auto-start tried: opened Docker, no daemon after 60s)"
+    monkeypatch.setattr(mod, "ensure_docker", lambda *a, **k: (False, detail))
+    pull = MagicMock()
+    monkeypatch.setattr(mod, "_docker_pull", pull)
+    result = provision_server("develop")
+    assert result.state == "failed"
+    assert result.error == detail
+    pull.assert_not_called()
+
+
+def test_provision_no_start_docker_skips_autostart(monkeypatch):
+    monkeypatch.setattr(mod, "_docker_daemon_running", lambda: False)
+    ensure = MagicMock()
+    monkeypatch.setattr(mod, "ensure_docker", ensure)
+    result = provision_server("develop", start_docker=False)
+    assert result.error == DAEMON_ERROR
+    ensure.assert_not_called()
+
+
+def test_server_provision_no_start_docker_flag(monkeypatch):
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command")
+    add_server_provision_subparser(sub)
+    assert parser.parse_args(["server-provision", "3464"]).start_docker is True
+    args = parser.parse_args(["server-provision", "3464", "--no-start-docker"])
+    assert args.start_docker is False
+
+    seen = {}
+
+    def _fake_provision(*a, **k):
+        seen.update(k)
+        return mod.ProvisionResult(ref="pr-3464", state="ready", url="http://x:1")
+
+    monkeypatch.setattr(mod, "provision_server", _fake_provision)
+    assert run_server_provision(args) == 0
+    assert seen["start_docker"] is False
+
+
+def test_run_server_provision_docker_start_failure_exits_5(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "provision_server",
+        lambda *a, **k: mod.ProvisionResult(
+            ref="develop",
+            state="failed",
+            error=f"{DAEMON_ERROR} (auto-start tried: opened Docker)",
+        ),
+    )
+    assert run_server_provision(SimpleNamespace(
+        ref="develop", dry_run=False, timeout=180,
+    )) == 5
+
+
+# ---------------------------------------------------------------------------
+# D2 — image fallback (GHCR first, then Docker Hub for non-PR refs)
+# ---------------------------------------------------------------------------
+
+GHCR_DEVELOP = f"{IMAGE_REPO}:develop"
+HUB_DEVELOP = "docker.io/rocketchat/rocket.chat:develop"
+MANIFEST_UNKNOWN = "Error response from daemon: manifest unknown"
+
+
+def _pull_script(monkeypatch, outcomes):
+    """Map each image to ``(ok, detail)``; return the list of pulls in order."""
+    pulled = []
+
+    def _pull(image):
+        pulled.append(image)
+        return outcomes[image]
+
+    monkeypatch.setattr(mod, "_docker_pull", _pull)
+    return pulled
+
+
+def test_image_candidates_order_and_pr_exclusion():
+    assert mod._image_candidates("develop") == [GHCR_DEVELOP, HUB_DEVELOP]
+    assert mod._image_candidates("6.15.0") == [
+        f"{IMAGE_REPO}:6.15.0",
+        "docker.io/rocketchat/rocket.chat:6.15.0",
+    ]
+    assert mod._image_candidates("3464") == [f"{IMAGE_REPO}:pr-3464"]
+
+
+def test_fallback_ghcr_present_skips_docker_hub(monkeypatch):
+    _pull, compose = _path_a_ok(monkeypatch)
+    pulled = _pull_script(monkeypatch, {GHCR_DEVELOP: (True, "")})
+    result = provision_server("develop")
+    assert result.state == "ready"
+    assert pulled == [GHCR_DEVELOP]
+    assert compose.call_args.kwargs["env"]["RC_IMAGE"] == GHCR_DEVELOP
+
+
+def test_fallback_ghcr_missing_pulls_docker_hub(monkeypatch):
+    _pull, compose = _path_a_ok(monkeypatch)
+    pulled = _pull_script(
+        monkeypatch,
+        {GHCR_DEVELOP: (False, MANIFEST_UNKNOWN), HUB_DEVELOP: (True, "")},
+    )
+    result = provision_server("develop")
+    assert result.state == "ready"
+    assert pulled == [GHCR_DEVELOP, HUB_DEVELOP]
+    assert compose.call_args.kwargs["env"]["RC_IMAGE"] == HUB_DEVELOP
+
+
+def test_fallback_pr_ref_never_tries_docker_hub(monkeypatch):
+    _pull, compose = _path_a_ok(monkeypatch)
+    pr_ghcr = f"{IMAGE_REPO}:pr-9999"
+    pulled = _pull_script(monkeypatch, {pr_ghcr: (False, MANIFEST_UNKNOWN)})
+    result = provision_server("pr-9999")
+    assert result.state == "failed"
+    assert pulled == [pr_ghcr]
+    assert "no published server image for 'pr-9999'" in result.error
+    assert "docker.io" not in result.error
+    compose.assert_not_called()
+
+
+def test_fallback_both_missing_names_both_repos(monkeypatch):
+    _pull, compose = _path_a_ok(monkeypatch)
+    pulled = _pull_script(
+        monkeypatch,
+        {GHCR_DEVELOP: (False, MANIFEST_UNKNOWN), HUB_DEVELOP: (False, MANIFEST_UNKNOWN)},
+    )
+    result = provision_server("develop")
+    assert result.state == "failed"
+    assert result.error.startswith("no published server image for 'develop'")
+    assert "cannot be tested this way" in result.error
+    assert GHCR_DEVELOP in result.error
+    assert HUB_DEVELOP in result.error
+    assert pulled == [GHCR_DEVELOP, HUB_DEVELOP]
+    compose.assert_not_called()
+
+
+def test_fallback_ghcr_auth_error_does_not_try_docker_hub(monkeypatch):
+    _pull, compose = _path_a_ok(monkeypatch)
+    pulled = _pull_script(
+        monkeypatch,
+        {GHCR_DEVELOP: (False, "unauthorized: authentication required")},
+    )
+    result = provision_server("develop")
+    assert result.state == "failed"
+    assert f"failed to pull {GHCR_DEVELOP}" in result.error
+    assert pulled == [GHCR_DEVELOP]
+    compose.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# D3 — compose turns off email 2FA
+# ---------------------------------------------------------------------------
+
+
+def test_compose_template_turns_off_two_factor_auth():
+    text = mod.COMPOSE_TEMPLATE.read_text(encoding="utf-8")
+    assert 'OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_Enabled: "false"' in text
+    assert (
+        'OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_By_Email_Enabled: "false"'
+        in text
+    )
 
 
 @pytest.mark.live
