@@ -196,45 +196,65 @@ class _StepsMixin:
                     raise
                 self.log(f"    ✗ atspi failed ({e}); falling back to VLM localize")
 
-        if self.popup_sweep:
-            self._sweep_popups(step_num)
-        self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
-        diff_enabled, yesno_enabled = self._resolve_click_mode(step)
-        screenshot_before_click = None
-        if diff_enabled:
-            screenshot_before_click, _ = self.screenshotter.capture()
-        screenshot, screen_size = self.screenshotter.capture()
-        self._save_screenshot(screenshot, f"step{step_num}_localize")
-
-        t0_loc = time.perf_counter()
-        if step.localize_consistent:
-            x, y = self.vlm.localize_consistent(screenshot, step.localize, screen_size)
-            latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
-            self._emit("vlm_localize_consistent", step_num=step_num, attempt=attempt,
-                       target=step.localize[:80], centroid=(x, y),
-                       latency_ms=latency_ms_loc)
-            if step.precheck_click:
-                crop_size = 100
-                w_s, h_s = screen_size
-                box = (
-                    max(0, x - crop_size), max(0, y - crop_size),
-                    min(w_s, x + crop_size), min(h_s, y + crop_size),
+        if step.click_at is not None:
+            # Literal coordinates — skip VLM localize entirely. Still needs a
+            # live screenshot to bounds-check (x, y) against the actual
+            # captured screen before injecting the click.
+            x = int(step.click_at["x"])
+            y = int(step.click_at["y"])
+            screenshot, screen_size = self.screenshotter.capture()
+            self._save_screenshot(screenshot, f"step{step_num}_click_at")
+            w_s, h_s = screen_size
+            if not (0 <= x < w_s and 0 <= y < h_s):
+                raise StepFailed(
+                    f"Step {step_num}: click_at ({x}, {y}) is out of bounds "
+                    f"for captured screen size {screen_size}"
                 )
-                crop = screenshot.crop(box)
-                from automation.vlm.client import VLMError
-                if not self.vlm.verify(crop, f"is this {step.localize}"):
-                    raise VLMError(
-                        f"Pre-click verify failed: VLM denies centroid ({x},{y}) is '{step.localize}'"
-                    )
-        elif step.precheck_click:
-            x, y = self.vlm.localize_verified(screenshot, step.localize, screen_size)
-            latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+            self.log(f"  Step {step_num}: click_at ({x}, {y}){retry_label}")
+            self._emit("click_at", step_num=step_num, attempt=attempt,
+                       x=x, y=y, screen_size=screen_size)
+            diff_enabled, yesno_enabled = self._resolve_click_mode(step)
+            screenshot_before_click = screenshot if diff_enabled else None
         else:
-            x, y = self.vlm.localize(screenshot, step.localize, screen_size)
-            latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
-        if not step.localize_consistent:
-            self._emit("vlm_localize", step_num=step_num, attempt=attempt,
-                       target=step.localize[:80], x=x, y=y, latency_ms=latency_ms_loc)
+            if self.popup_sweep:
+                self._sweep_popups(step_num)
+            self.log(f"  Step {step_num}: locate '{label}'{retry_label}")
+            diff_enabled, yesno_enabled = self._resolve_click_mode(step)
+            screenshot_before_click = None
+            if diff_enabled:
+                screenshot_before_click, _ = self.screenshotter.capture()
+            screenshot, screen_size = self.screenshotter.capture()
+            self._save_screenshot(screenshot, f"step{step_num}_localize")
+
+            t0_loc = time.perf_counter()
+            if step.localize_consistent:
+                x, y = self.vlm.localize_consistent(screenshot, step.localize, screen_size)
+                latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+                self._emit("vlm_localize_consistent", step_num=step_num, attempt=attempt,
+                           target=step.localize[:80], centroid=(x, y),
+                           latency_ms=latency_ms_loc)
+                if step.precheck_click:
+                    crop_size = 100
+                    w_s, h_s = screen_size
+                    box = (
+                        max(0, x - crop_size), max(0, y - crop_size),
+                        min(w_s, x + crop_size), min(h_s, y + crop_size),
+                    )
+                    crop = screenshot.crop(box)
+                    from automation.vlm.client import VLMError
+                    if not self.vlm.verify(crop, f"is this {step.localize}"):
+                        raise VLMError(
+                            f"Pre-click verify failed: VLM denies centroid ({x},{y}) is '{step.localize}'"
+                        )
+            elif step.precheck_click:
+                x, y = self.vlm.localize_verified(screenshot, step.localize, screen_size)
+                latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+            else:
+                x, y = self.vlm.localize(screenshot, step.localize, screen_size)
+                latency_ms_loc = round((time.perf_counter() - t0_loc) * 1000)
+            if not step.localize_consistent:
+                self._emit("vlm_localize", step_num=step_num, attempt=attempt,
+                           target=step.localize[:80], x=x, y=y, latency_ms=latency_ms_loc)
 
         if step.hover:
             self.log(f"    → hover ({x}, {y})")
@@ -242,9 +262,19 @@ class _StepsMixin:
             self.injector.hover(x, y, motion=step.motion, dwell_ms=step.dwell_ms)
         else:
             click_button = 3 if step.click == "right" else 1
-            self.log(f"    → {step.click or 'left'} click ({x}, {y})")
-            self._emit("click", step_num=step_num, x=x, y=y, button=step.click or "left")
-            self.injector.click(x, y, button=click_button, motion=step.motion, dwell_ms=step.dwell_ms)
+            native = step.click_at is not None and step.click_at.get("native") is True
+            if native and not getattr(self.injector, "is_windows", False):
+                self.log("    ⚠ native click is Windows-only; using VNC")
+                native = False
+            if native:
+                self.log(f"    → native {step.click or 'left'} click ({x}, {y})")
+                self._emit("click", step_num=step_num, x=x, y=y,
+                           button=step.click or "left", native=True)
+                self.injector.native_click(x, y, button=click_button)
+            else:
+                self.log(f"    → {step.click or 'left'} click ({x}, {y})")
+                self._emit("click", step_num=step_num, x=x, y=y, button=step.click or "left")
+                self.injector.click(x, y, button=click_button, motion=step.motion, dwell_ms=step.dwell_ms)
         self._save_click_overlay(screenshot, x, y, step_num)
         time.sleep(0.4)
 
@@ -353,6 +383,76 @@ class _StepsMixin:
         except Exception as _e:
             self.log(f"    → config snapshot error ({_e}), skipping")
 
+    def _run_poll_shell(self, step: "FunctionalStep", step_num) -> None:
+        """Card 2: poll ``step.poll_shell`` on the VM until pass criteria hold.
+
+        Host-side loop — re-invokes ``self.injector.shell_result()`` every
+        ``poll_interval`` seconds until ``poll_timeout`` elapses or the pass
+        criteria hold: ``(poll_exit_code is None or rc == poll_exit_code)
+        AND (poll_match is None or poll_match in stdout)``. Emits a
+        ``poll_shell_attempt`` event per try plus a ``step_end`` on
+        completion. Raises ``StepFailed`` on exhaustion.
+        """
+        shell_body = step.poll_shell
+        if getattr(self, "_x11_mode", "off") == "auto":
+            from automation.transport.x11_preamble import inject as _x11_inject
+            shell_body = _x11_inject(shell_body)
+
+        start_ts = time.perf_counter()
+        attempt = 0
+        last_rc = None
+        last_stdout = ""
+        last_stderr = ""
+        while True:
+            attempt += 1
+            result = self.injector.shell_result(shell_body)
+            rc = getattr(result, "returncode", None)
+            stdout = getattr(result, "stdout", "") or ""
+            stderr = getattr(result, "stderr", "") or ""
+            if not isinstance(stdout, str):
+                stdout = str(stdout)
+            if not isinstance(stderr, str):
+                stderr = str(stderr)
+            if rc is not None and not isinstance(rc, int):
+                try:
+                    rc = int(rc)
+                except Exception:
+                    rc = None
+            last_rc, last_stdout, last_stderr = rc, stdout, stderr
+
+            passed = (
+                (step.poll_exit_code is None or rc == step.poll_exit_code)
+                and (step.poll_match is None or step.poll_match in stdout)
+            )
+            self._emit(
+                "poll_shell_attempt",
+                step_num=step_num,
+                attempt=attempt,
+                exit_code=rc,
+                stdout_tail=self._redact(stdout),
+                stderr_tail=self._redact(stderr),
+            )
+            if passed:
+                duration_ms = round((time.perf_counter() - start_ts) * 1000)
+                self._emit("step_end", step_num=step_num, status="ok",
+                           attempts=attempt, duration_ms=duration_ms)
+                self.log(f"    ✓ poll_shell passed on attempt {attempt} (rc={rc})")
+                return
+
+            elapsed = time.perf_counter() - start_ts
+            if elapsed >= step.poll_timeout:
+                break
+            time.sleep(step.poll_interval)
+
+        duration_ms = round((time.perf_counter() - start_ts) * 1000)
+        self._emit("step_end", step_num=step_num, status="failed",
+                   attempts=attempt, duration_ms=duration_ms)
+        raise StepFailed(
+            f"Step {step_num}: poll_shell exhausted after {attempt} attempt(s) "
+            f"over {step.poll_timeout}s (rc={last_rc}, "
+            f"stdout={self._redact(last_stdout)!r}, stderr={self._redact(last_stderr)!r})"
+        )
+
     def run_step(self, step: "FunctionalStep", step_num) -> None:
         """Execute a single test step with retries.
 
@@ -404,6 +504,44 @@ class _StepsMixin:
                        attempts=1, duration_ms=duration_ms)
             return
 
+        # Card 3: verify_recorded — deferred VLM verification against
+        # captured recording frames. NOT run inline (no self.vlm.verify
+        # call, no blocking) — just queue {prompt, between, step_num} for
+        # offline resolution after the run via
+        # automation/runners/deferred_verify.py:resolve_pending_verifies.
+        # Early-return before the click/localize/verify pipeline, like
+        # `wait_for`/`poll_shell`/`checkpoint`.
+        if step.verify_recorded is not None:
+            _vr_label = f"verify_recorded:{step.verify_recorded.get('prompt', '')}"[:60]
+            _vr_display = f"{step_num}: {step.label}" if getattr(step, "label", None) else str(step_num)
+            self._emit("step_start", step_num=step_num, label=_vr_label,
+                       step_label=_vr_display, kind="verify_recorded")
+            self.log(
+                f"  Step {_vr_display}: verify_recorded (deferred) "
+                f"'{step.verify_recorded.get('prompt', '')[:60]}'"
+            )
+            self._pending_recorded_verifies.append({
+                "prompt": step.verify_recorded.get("prompt"),
+                "between": step.verify_recorded.get("between"),
+                "step_num": step_num,
+            })
+            self._emit("step_end", step_num=step_num, status="deferred",
+                       attempts=1, duration_ms=0)
+            return
+
+        # Card 2: poll_shell — deterministic REST/shell outcome polling.
+        # Re-invokes injector.shell_result() every poll_interval seconds
+        # until poll_timeout elapses or the pass criteria hold. Early-return
+        # before the click/localize/verify pipeline, like `wait_for`/`checkpoint`.
+        if step.poll_shell is not None:
+            _ps_label = f"poll_shell:{self._redact(step.poll_shell)}"[:60]
+            _ps_display = f"{step_num}: {step.label}" if getattr(step, "label", None) else str(step_num)
+            self._emit("step_start", step_num=step_num, label=_ps_label,
+                       step_label=_ps_display, kind="poll_shell")
+            self.log(f"  Step {_ps_display}: poll_shell '{self._redact(step.poll_shell)}'")
+            self._run_poll_shell(step, step_num)
+            return
+
         # Stage 1D: atspi steps surface as their own kind in events.jsonl.
         _atspi_label = ""
         if step.atspi:
@@ -411,13 +549,18 @@ class _StepsMixin:
                 f"atspi:{step.atspi.get('role', '?')}:"
                 f"{(step.atspi.get('name') or step.atspi.get('name_substr') or '')}"
             )[:60]
+        _click_at_label = (
+            f"click_at:({step.click_at['x']},{step.click_at['y']})" if step.click_at else ""
+        )
         label = (
             step.localize[:60] if step.localize
             else _atspi_label if step.atspi
+            else _click_at_label if step.click_at
             else (step.launch or step.shell or "")[:60]
         )
         kind = ("localize" if step.localize else
                 "atspi" if step.atspi else
+                "click_at" if step.click_at else
                 "launch" if step.launch else
                 "shell" if step.shell else
                 "if_visible" if step.if_visible is not None else
@@ -489,11 +632,11 @@ class _StepsMixin:
         if step.launch:
             self._run_launch_step(step, step_num)
 
-        # Standalone key/type steps (no localize, launch, shell, atspi, wait_for)
+        # Standalone key/type steps (no localize, launch, shell, atspi, wait_for, click_at)
         # (wait_for already early-returned above; listed here for safety/clarity.)
         if (
             not step.localize and not step.launch and not step.shell
-            and not step.atspi and not step.wait_for
+            and not step.atspi and not step.wait_for and not step.click_at
         ):
             self._run_standalone_input(step, step_num)
 
@@ -520,7 +663,7 @@ class _StepsMixin:
                         self.log("    ✓ already verified (state settled between attempts)")
                         return
 
-                if step.localize or step.atspi:
+                if step.localize or step.atspi or step.click_at:
                     directive = self._run_localize_body(step, attempt, step_num, label, retry_label)
                     if directive == "continue":
                         continue

@@ -1,0 +1,73 @@
+name: "Tray presence menu (Linux) - simple"
+# Tests: verify tray icon is visible and right-click opens context menu with presence status submenu.
+# No login required — just launch and check tray UI.
+
+steps:
+  # Kill any running Rocket.Chat
+  - shell: |
+      pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      pkill -x update-manager 2>/dev/null || true
+      pkill -x update-notifier 2>/dev/null || true
+      for i in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        pgrep -x rocketchat-desktop.bin >/dev/null || break
+        pkill -9 -x rocketchat-desktop.bin 2>/dev/null || true
+      done
+      rm -rf "$HOME/.config/Rocket.Chat"
+      rm -rf "$HOME/.config/Rocket.Chat (development)"
+      rm -rf "$HOME/.config/Rocket.Chat Electron"
+      for d in "$HOME"/snap/rocketchat-desktop/*/.config/"Rocket.Chat"*; do
+        [ -e "$d" ] && rm -rf "$d"
+      done
+      rm -rf "$HOME/.cache/Rocket.Chat" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat (development)" 2>/dev/null || true
+      rm -rf "$HOME/.cache/Rocket.Chat Electron" 2>/dev/null || true
+      echo cleanup:ok
+
+  # Reset desktop
+  - key: "escape"
+    wait: 1
+
+  # Launch app (no-sandbox for VM compatibility)
+  - launch: "{app_path} --no-sandbox"
+    wait: 30
+    launch_window: "Rocket.Chat"
+    # Don't verify specific content; just wait for window to appear
+    verify: "the Rocket.Chat application window is visible and has started loading"
+    verify_timeout: 20
+    retries: 2
+
+  # Wait for app to fully load and tray to initialize
+  - wait: 5
+
+  # Locate the tray icon: grey Rocket.Chat rocket-shaped icon in system tray
+  # The icon may have a presence bullet: filled green (online), yellow (away),
+  # red (busy), grey (offline), or amber with ! (disconnected)
+  - localize: "the Rocket.Chat icon (a grey speech-bubble shaped like a rocket) in the system tray or top panel, which may have a small coloured circle or bullet overlay showing presence status"
+    wait: 1
+    verify: "the Rocket.Chat icon is visible in the system tray / top panel"
+    verify_timeout: 10
+    retries: 2
+
+  # Right-click the tray icon to open context menu
+  - localize: "the Rocket.Chat icon (a grey speech-bubble shaped like a rocket) in the system tray or top panel"
+    click: "right"
+    wait: 2
+    # Verify context menu is open with first item showing status (Online/Away/Busy/Offline)
+    verify: "a context menu is open showing items like Status, Show/Hide, Quit, or similar app menu items"
+    verify_timeout: 10
+    retries: 2
+
+  # Verify that the first menu item contains a status word and a submenu arrow
+  - verify: "the context menu's first item displays a status word like 'Online', 'Away', 'Busy', or 'Offline' with a small coloured icon to its left and an arrow or indicator showing it has a submenu"
+    verify_timeout: 10
+
+  # Try to locate and hover/click the first menu item to open its submenu
+  - localize: "the first item in the open context menu that shows a status word (Online, Away, Busy, or Offline) with a coloured icon and a submenu arrow"
+    click: "left"
+    wait: 1
+
+  # Verify submenu is now visible with all four status options
+  - verify: "a submenu is now open showing four status options: Online, Away, Busy, and Offline, each with a small coloured circle or icon, and one of them has a checkmark or is highlighted indicating the current status"
+    verify_timeout: 10
+    retries: 2

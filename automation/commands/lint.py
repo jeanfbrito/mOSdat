@@ -11,10 +11,16 @@ Checks:
   5. Heredoc inside YAML literal scalar (breaks YAML portability)
   6. tel:/callto: dispatch without XAUTHORITY env set nearby
   7. config.json write missing __internal__.migrations.version
+  8. schema validation via the SAME loader path the real functional runner
+     uses (``load_test_yaml`` -> ``ScenarioModel.model_validate``) — a
+     scenario that fails this is one the runner will reject at load time
+     (exit code 4), so lint must not bless it as clean.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 import sys
 from pathlib import Path
@@ -301,6 +307,117 @@ def check_config_json_migrations(lines: list[str], filename: str) -> list[LintDi
 
 
 # ---------------------------------------------------------------------------
+# Check 8 — schema validation via the real runner's loader path
+# ---------------------------------------------------------------------------
+
+def check_schema_validation(
+    scenario_path: Path, filename: str, already_explained: bool = False
+) -> list[LintDiag]:
+    """Validate the scenario the SAME way the real functional runner does.
+
+    ``load_test_yaml`` expands imports/routines, renders vars, then calls
+    ``ScenarioModel.model_validate`` and — on failure — prints to stderr and
+    calls ``sys.exit(4)``. We call the real loader (unmodified) and turn that
+    exit into a WARN diag so lint no longer blesses scenarios the runner
+    would reject outright.
+
+    ``already_explained``: when ``check_step_type_discriminator`` already
+    produced a clear one-line explanation for a no-type-match step, we skip
+    dumping the raw (often ~20-line, mostly-redundant) pydantic union-mismatch
+    cascade here and just report that schema validation failed.
+    """
+    diags: list[LintDiag] = []
+    try:
+        from automation.runners.scenario_loader import load_test_yaml
+    except ImportError as exc:
+        diags.append(LintDiag(
+            "INFO", filename, 0, "schema-validation-unavailable",
+            f"could not import scenario_loader for schema validation: {exc}",
+        ))
+        return diags
+
+    stderr_buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(stderr_buf):
+            load_test_yaml(scenario_path)
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            message = (
+                f"scenario fails real-runner schema validation "
+                f"(load_test_yaml exit code {exc.code})"
+            )
+            if already_explained:
+                message += " — see step-no-type-match finding(s) above for details"
+            else:
+                detail = stderr_buf.getvalue().strip()
+                if detail:
+                    message += f":\n{detail}"
+            diags.append(LintDiag("WARN", filename, 0, "schema-validation", message))
+    except Exception as exc:  # noqa: BLE001 - any loader failure is a real problem
+        diags.append(LintDiag(
+            "WARN", filename, 0, "schema-validation",
+            f"scenario fails real-runner validation: {exc}",
+        ))
+    return diags
+
+
+# ---------------------------------------------------------------------------
+# Check 9 — step dict matches no recognized step-type discriminator
+# ---------------------------------------------------------------------------
+#
+# When a step dict has none of the fields below, it matches ZERO members of
+# the AnyStep union and pydantic dumps a full cascade of "field required"
+# errors for every union member (one real problem, ~20+ noisy lines). We
+# detect that shape cheaply and surface ONE clear message instead.
+
+_STEP_TYPE_FIELDS = {
+    "checkpoint", "import", "shell", "launch", "if_visible", "popup_sweep",
+    "atspi", "verify_atspi", "wait_for", "localize", "accept_any", "verify",
+    "wait", "key", "then_key", "then_key_pre", "key_pre", "then_type", "type",
+    "click_at", "poll_shell", "verify_recorded",
+}
+
+# Keys that are valid on a raw (pre-expansion) step dict but are resolved
+# away by import/routine expansion before schema validation runs — not
+# themselves step-type discriminators, but not errors either.
+_PRE_EXPANSION_ONLY_FIELDS = {"routine", "with"}
+
+
+def _walk_raw_steps(steps: list) -> list[tuple[int, dict]]:
+    """Flatten a raw steps list (including nested ``then:`` blocks) into
+    ``(index, step_dict)`` pairs, skipping non-dict entries."""
+    out: list[tuple[int, dict]] = []
+    for idx, raw in enumerate(steps):
+        if not isinstance(raw, dict):
+            continue
+        out.append((idx, raw))
+        nested = raw.get("then")
+        if isinstance(nested, list):
+            out.extend(_walk_raw_steps(nested))
+    return out
+
+
+def check_step_type_discriminator(raw_data: dict, filename: str) -> list[LintDiag]:
+    diags: list[LintDiag] = []
+    for key in ("steps", "cleanup"):
+        steps = raw_data.get(key)
+        if not isinstance(steps, list):
+            continue
+        for idx, raw in _walk_raw_steps(steps):
+            if any(f in raw for f in _STEP_TYPE_FIELDS):
+                continue
+            if any(f in raw for f in _PRE_EXPANSION_ONLY_FIELDS):
+                continue
+            fields = sorted(raw.keys())
+            diags.append(LintDiag(
+                "WARN", filename, 0, "step-no-type-match",
+                f"{key}[{idx}]: no recognized step type — got fields {fields}, "
+                "expected one of: " + ", ".join(sorted(_STEP_TYPE_FIELDS))
+            ))
+    return diags
+
+
+# ---------------------------------------------------------------------------
 # Optional: consult capability manifest if scenario has requires_capabilities:
 # ---------------------------------------------------------------------------
 
@@ -363,7 +480,11 @@ def run_lint(args) -> int:
 
     lines = content.splitlines()
 
-    # Optionally validate with ScenarioModel (non-fatal — lint proceeds even on schema errors)
+    # Parse the raw YAML for checks that need structured data (capability
+    # manifest, step-shape check). Schema validation (check 8) goes through
+    # the real runner's loader below and is FATAL — a step-type mismatch or
+    # any other ScenarioModel validation failure here means the runner would
+    # reject this scenario outright (exit code 4); lint must not bless it.
     raw_data: dict = {}
     try:
         import yaml as _yaml
@@ -379,6 +500,11 @@ def run_lint(args) -> int:
     all_diags += check_heredoc_in_yaml(lines, filename)
     all_diags += check_tel_dispatch_xauthority(lines, filename)
     all_diags += check_config_json_migrations(lines, filename)
+    step_type_diags = check_step_type_discriminator(raw_data, filename)
+    all_diags += step_type_diags
+    all_diags += check_schema_validation(
+        scenario_path, filename, already_explained=bool(step_type_diags)
+    )
     all_diags += _check_capability_manifest(raw_data, filename)
 
     if not all_diags:

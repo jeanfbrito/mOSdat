@@ -1,0 +1,11 @@
+name: verify-recorded-no-session
+vars:
+  workspace_url: "https://example.com"
+  test_user: "admin"
+  test_password: "pass"
+
+steps:
+  - shell: "echo health_ping"
+  - verify_recorded:
+      prompt: "is a toast visible"
+      between: ["open toast", "close toast"]

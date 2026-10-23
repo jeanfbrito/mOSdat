@@ -181,6 +181,31 @@ class ClickStep(_StepBase):
 LocalizeStep = ClickStep
 
 
+class ClickAtCoords(BaseModel):
+    """Literal screen coordinates for ``click_at:`` — no VLM localize round-trip."""
+    model_config = ConfigDict(extra="forbid")
+
+    x: int
+    y: int
+    # Windows only: click from inside the desktop session (user32 SetCursorPos
+    # + mouse_event) instead of the VNC pointer. A VNC click on a Windows toast
+    # dismisses it; a native click activates it. On Linux the runner warns and
+    # uses VNC.
+    native: bool = False
+
+
+class ClickAtStep(_StepBase):
+    """Literal-coordinate click — bypasses VLM localize for transient UI.
+
+    Discriminated by presence of ``click_at`` key. ``click`` (button choice)
+    is a separate, additive field — coordinates and button choice do not
+    collide, e.g. ``click_at: {x, y}`` + ``click: "right"`` for a right-click
+    at fixed coords.
+    """
+    click_at: ClickAtCoords
+    click: Optional[Literal["left", "right"]] = None
+
+
 class VerifyStep(_StepBase):
     verify: str  # override Optional — required on VerifyStep
 
@@ -203,6 +228,35 @@ class AcceptAnyStep(_StepBase):
 
 class ShellStep(_StepBase):
     shell: str
+
+
+class PollShellStep(_StepBase):
+    """Card 2: deterministic REST/shell outcome polling as a first-class step.
+
+    Replaces hand-rolled PowerShell/bash retry loops in scenario YAML (see
+    ``shared/scenarios/functional/windows11/qr-qa-001-toast-quick-reply.yaml``
+    for the regression example of the pattern this step is meant to
+    replace). Discriminated by presence of ``poll_shell`` — flat scalar
+    fields on the step itself, matching ``ShellStep``'s convention.
+    """
+    poll_shell: str
+    poll_timeout: int = 20
+    poll_interval: int = 2
+    poll_exit_code: Optional[int] = 0
+    poll_match: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_poll_shell_config(self) -> "PollShellStep":
+        if self.poll_exit_code is None and self.poll_match is None:
+            raise ValueError(
+                "poll_shell requires at least one of poll_exit_code/poll_match "
+                "to be set (a poll with no pass criteria is a spec error)"
+            )
+        if self.poll_interval <= 0:
+            raise ValueError("poll_shell requires poll_interval > 0")
+        if self.poll_timeout <= 0:
+            raise ValueError("poll_shell requires poll_timeout > 0")
+        return self
 
 
 class WaitStep(_StepBase):
@@ -288,6 +342,42 @@ class WaitForStep(_StepBase):
     wait_for: dict[str, Any]
 
 
+class VerifyRecordedStep(_StepBase):
+    """Card 3: deferred VLM verification against captured recording frames.
+
+    Discriminated by presence of ``verify_recorded`` key. Shape:
+    ``{prompt: str, between: [stepA, stepB]}`` where each of the 2
+    ``between`` entries is a step label (str) or step number (int). The
+    check is NOT run inline — ``run_step`` just queues it (see
+    ``automation/runners/functional_steps.py``); the actual VLM verify
+    happens after the scenario run, against frames already captured by the
+    ``SessionRecorder`` (see ``automation/runners/deferred_verify.py``).
+    """
+    verify_recorded: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _check_verify_recorded_config(self) -> "VerifyRecordedStep":
+        vr = self.verify_recorded
+        prompt = vr.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError(
+                "verify_recorded requires a non-empty 'prompt' string"
+            )
+        between = vr.get("between")
+        if not isinstance(between, list) or len(between) != 2:
+            raise ValueError(
+                "verify_recorded.between must be a list of exactly 2 "
+                "elements (each a step label or step number)"
+            )
+        for entry in between:
+            if isinstance(entry, bool) or not isinstance(entry, (str, int)):
+                raise ValueError(
+                    "verify_recorded.between elements must each be a "
+                    "str (step label) or int (step number)"
+                )
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Step union — order matters: pydantic tries each in sequence
 # Discriminator by presence of key fields handled via model_validator below.
@@ -297,12 +387,15 @@ AnyStep = Union[
     CheckpointStep,
     ImportStep,      # I11: must precede ShellStep (import key not in _StepBase)
     ShellStep,
+    PollShellStep,   # Card 2: poll_shell key not in _StepBase; order vs. ShellStep irrelevant
     LaunchStep,
     IfVisibleStep,
     PopupSweepStep,
     AtspiStep,       # Stage 1D: before ClickStep — atspi key not in _StepBase
     VerifyAtspiStep, # Stage 1D: before VerifyStep — verify_atspi key not in _StepBase
     WaitForStep,     # Stage 2: before ClickStep — wait_for key not in _StepBase
+    VerifyRecordedStep,  # Card 3: before VerifyStep — verify_recorded key not in _StepBase
+    ClickAtStep,     # before ClickStep — click_at key not in _StepBase
     ClickStep,       # covers LocalizeStep (has localize field)
     AcceptAnyStep,   # I7: before VerifyStep — requires accept_any key
     VerifyStep,

@@ -20,6 +20,43 @@ def _ps_encoded(script: str) -> str:
     return f"$ProgressPreference='SilentlyContinue'; powershell.exe -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
 
+# mouse_event flags per VNC-style button number: (down, up).
+_NATIVE_BUTTON_FLAGS = {
+    1: (0x0002, 0x0004),  # MOUSEEVENTF_LEFTDOWN / LEFTUP
+    3: (0x0008, 0x0010),  # MOUSEEVENTF_RIGHTDOWN / RIGHTUP
+}
+_NATIVE_CLICK_DONE = "C:\\tmp\\mosdat_click.done"
+
+
+def _native_click_inner_ps(x: int, y: int, button: int = 1) -> str:
+    """PowerShell that runs in Session 1 and clicks with user32.
+
+    SetProcessDPIAware comes first so SetCursorPos takes physical pixels,
+    the same pixels as the VNC framebuffer. The script writes a marker file
+    after the button-up, so the SSH caller can wait for the click.
+    """
+    if button not in _NATIVE_BUTTON_FLAGS:
+        raise ValueError(f"native_click: unsupported button {button} (use 1=left or 3=right)")
+    down, up = _NATIVE_BUTTON_FLAGS[button]
+    return f"""
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class MosdatClick {{
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+}}
+"@ -ErrorAction SilentlyContinue
+[MosdatClick]::SetProcessDPIAware() | Out-Null
+[MosdatClick]::SetCursorPos({int(x)}, {int(y)}) | Out-Null
+Start-Sleep -Milliseconds 100
+[MosdatClick]::mouse_event(0x{down:04X}, 0, 0, 0, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 50
+[MosdatClick]::mouse_event(0x{up:04X}, 0, 0, 0, [UIntPtr]::Zero)
+[System.IO.File]::WriteAllText('{_NATIVE_CLICK_DONE}', 'ok')
+"""
+
+
 class InputInjector:
     def __init__(
         self,
@@ -70,6 +107,46 @@ class InputInjector:
     ) -> None:
         self._position_cursor(x, y, motion=motion, dwell_ms=dwell_ms)
         self.vnc.click(x, y, button=button)
+
+    def native_click(self, x: int, y: int, button: int = 1, timeout_s: int = 15) -> None:
+        """Click at (x, y) from inside the Windows desktop session (Session 1).
+
+        A VNC pointer click on a Windows toast dismisses the toast; a click
+        made with user32 SetCursorPos + mouse_event in Session 1 activates it.
+        Runs a schtasks InteractiveToken task (same pattern as focus_app) and
+        waits for the task's marker file, so the click is done on return.
+        Does not use VNC. Windows only.
+        """
+        if not self.is_windows:
+            raise RuntimeError("native_click is Windows-only")
+        inner = _native_click_inner_ps(x, y, button)
+        enc = base64.b64encode(inner.encode("utf-16-le")).decode()
+        ps = f"""
+$ProgressPreference='SilentlyContinue'
+$null = New-Item -Force -ItemType Directory C:\\tmp
+$done = '{_NATIVE_CLICK_DONE}'
+Remove-Item -Force -ErrorAction SilentlyContinue $done
+$xml = @'
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Principals><Principal id="A"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><ExecutionTimeLimit>PT1M</ExecutionTimeLimit><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings><Actions Context="A"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand {enc}</Arguments></Exec></Actions></Task>
+'@
+[System.IO.File]::WriteAllText('C:\\tmp\\mosdat_click.xml', $xml, [System.Text.Encoding]::Unicode)
+schtasks /Delete /F /TN "mosdat-click" 2>$null | Out-Null
+schtasks /Create /F /TN "mosdat-click" /XML 'C:\\tmp\\mosdat_click.xml' 2>$null | Out-Null
+schtasks /Run /TN "mosdat-click" 2>$null | Out-Null
+$deadline = (Get-Date).AddSeconds({int(timeout_s)})
+while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) {{ Start-Sleep -Milliseconds 100 }}
+$ok = Test-Path $done
+schtasks /Delete /F /TN "mosdat-click" 2>$null | Out-Null
+Remove-Item -Force -ErrorAction SilentlyContinue $done, 'C:\\tmp\\mosdat_click.xml'
+if ($ok) {{ Write-Output "native_click:ok" }} else {{ Write-Output "native_click:timeout" }}
+"""
+        result = self.ssh.run(_ps_encoded(ps), timeout=int(timeout_s) + 15)
+        if "native_click:ok" not in (getattr(result, "stdout", "") or ""):
+            raise RuntimeError(
+                f"native_click ({x}, {y}) did not complete in Session 1 within "
+                f"{timeout_s}s: {getattr(result, 'stdout', '')!r} {getattr(result, 'stderr', '')!r}"
+            )
 
     def hover(
         self,

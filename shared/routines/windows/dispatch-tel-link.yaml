@@ -66,7 +66,7 @@ steps:
       <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
         <Principals><Principal id="A"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
         <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT2M</ExecutionTimeLimit></Settings>
-        <Actions Context="A"><Exec><Command>powershell.exe</Command><Arguments>-ExecutionPolicy Bypass -EncodedCommand $enc</Arguments></Exec></Actions>
+        <Actions Context="A"><Exec><Command>powershell.exe</Command><Arguments>-WindowStyle Hidden -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc</Arguments></Exec></Actions>
       </Task>
       "@
       [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.Encoding]::Unicode)

@@ -495,3 +495,148 @@ class TestWaitForStep:
         )
         with pytest.raises(RuntimeError, match="AtspiClient"):
             runner.run_step(step, 1)
+
+
+# ---------------------------------------------------------------------------
+# click_at: literal-coordinate click — skips VLM localize entirely
+# ---------------------------------------------------------------------------
+
+class TestClickAtStep:
+    def test_click_at_issues_click_with_literal_coords_no_vlm(self):
+        runner, vlm, _, inj = _make_runner()
+        step = FunctionalStep(click_at={"x": 50, "y": 75}, retries=1)
+        runner.run_step(step, 1)
+        inj.click.assert_called_once_with(50, 75, button=1, motion=None, dwell_ms=None)
+        vlm.localize.assert_not_called()
+
+    def test_click_at_with_right_button(self):
+        runner, vlm, _, inj = _make_runner()
+        step = FunctionalStep(click_at={"x": 50, "y": 75}, click="right", retries=1)
+        runner.run_step(step, 1)
+        inj.click.assert_called_once_with(50, 75, button=3, motion=None, dwell_ms=None)
+        vlm.localize.assert_not_called()
+
+    def test_click_at_out_of_bounds_raises_step_failed(self):
+        # Screenshotter captures a (1920, 1080) screen (see _make_runner);
+        # coordinates beyond that must raise StepFailed, never misclick.
+        runner, vlm, _, inj = _make_runner()
+        step = FunctionalStep(click_at={"x": 5000, "y": 75}, retries=1)
+        with pytest.raises(StepFailed, match="click_at"):
+            runner.run_step(step, 1)
+        inj.click.assert_not_called()
+        vlm.localize.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# poll_shell: deterministic REST/shell outcome polling (Card 2)
+# ---------------------------------------------------------------------------
+
+class _FakeShellResult:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class TestPollShellStep:
+    def test_poll_shell_passes_on_first_try(self):
+        runner, vlm, _, inj = _make_runner()
+        inj.shell_result.return_value = _FakeShellResult(returncode=0, stdout="ok")
+        step = FunctionalStep(
+            poll_shell="check.sh", poll_exit_code=0,
+            poll_timeout=5, poll_interval=0.05,
+        )
+        runner.run_step(step, 1)
+        assert inj.shell_result.call_count == 1
+        vlm.localize.assert_not_called()
+
+    def test_poll_shell_passes_on_nth_try(self):
+        runner, vlm, _, inj = _make_runner()
+        inj.shell_result.side_effect = [
+            _FakeShellResult(returncode=1, stdout="not yet"),
+            _FakeShellResult(returncode=1, stdout="still not"),
+            _FakeShellResult(returncode=0, stdout="done"),
+        ]
+        step = FunctionalStep(
+            poll_shell="check.sh", poll_exit_code=0,
+            poll_timeout=5, poll_interval=0.02,
+        )
+        runner.run_step(step, 1)
+        assert inj.shell_result.call_count == 3
+
+    def test_poll_shell_exhaustion_raises_step_failed(self):
+        runner, vlm, _, inj = _make_runner()
+        inj.shell_result.return_value = _FakeShellResult(returncode=1, stdout="nope")
+        step = FunctionalStep(
+            poll_shell="check.sh", poll_exit_code=0,
+            poll_timeout=0.15, poll_interval=0.05,
+        )
+        with pytest.raises(StepFailed, match="poll_shell"):
+            runner.run_step(step, 1)
+        assert inj.shell_result.call_count >= 2
+
+    def test_poll_shell_match_substring(self):
+        runner, vlm, _, inj = _make_runner()
+        inj.shell_result.return_value = _FakeShellResult(
+            returncode=0, stdout="server is ready to accept connections"
+        )
+        step = FunctionalStep(
+            poll_shell="check.sh", poll_exit_code=0, poll_match="ready to accept",
+            poll_timeout=5, poll_interval=0.05,
+        )
+        runner.run_step(step, 1)
+        assert inj.shell_result.call_count == 1
+
+    def test_poll_shell_match_only_mode_exit_code_none(self):
+        # poll_exit_code=None means only poll_match is checked — a nonzero
+        # rc must not block success.
+        runner, vlm, _, inj = _make_runner()
+        inj.shell_result.return_value = _FakeShellResult(
+            returncode=1, stdout="status: ready"
+        )
+        step = FunctionalStep(
+            poll_shell="check.sh", poll_exit_code=None, poll_match="ready",
+            poll_timeout=5, poll_interval=0.05,
+        )
+        runner.run_step(step, 1)
+        assert inj.shell_result.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# verify_recorded: deferred VLM verification — queued, not run inline (Card 3)
+# ---------------------------------------------------------------------------
+
+class TestVerifyRecordedStep:
+    def test_verify_recorded_is_queued_not_run_inline(self):
+        runner, vlm, _, inj = _make_runner()
+        step = FunctionalStep(
+            verify_recorded={"prompt": "is a toast visible", "between": ["open toast", "close toast"]},
+        )
+        runner.run_step(step, 3)
+        assert runner._pending_recorded_verifies == [{
+            "prompt": "is a toast visible",
+            "between": ["open toast", "close toast"],
+            "step_num": 3,
+        }]
+        vlm.verify.assert_not_called()
+        vlm.localize.assert_not_called()
+
+    def test_verify_recorded_does_not_touch_injector(self):
+        runner, vlm, _, inj = _make_runner()
+        step = FunctionalStep(
+            verify_recorded={"prompt": "is a toast visible", "between": [1, 2]},
+        )
+        runner.run_step(step, 1)
+        inj.click.assert_not_called()
+        inj.type_text.assert_not_called()
+
+    def test_multiple_verify_recorded_steps_all_queued(self):
+        runner, vlm, _, inj = _make_runner()
+        step_a = FunctionalStep(verify_recorded={"prompt": "a", "between": [1, 2]})
+        step_b = FunctionalStep(verify_recorded={"prompt": "b", "between": [3, 4]})
+        runner.run_step(step_a, 1)
+        runner.run_step(step_b, 2)
+        assert len(runner._pending_recorded_verifies) == 2
+        assert runner._pending_recorded_verifies[0]["prompt"] == "a"
+        assert runner._pending_recorded_verifies[1]["prompt"] == "b"
+        vlm.verify.assert_not_called()

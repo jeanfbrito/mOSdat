@@ -1,0 +1,25 @@
+name: "tray-presence-snapshot"
+description: |
+  CORE-2525 — app already running. Reconnect if the workspace is offline,
+  then right-click the GREY notification-area tray icon at known coordinates
+  (not the red taskbar button) and capture the presence badge.
+
+  Coordinates are for the windows10 VM at 1280x800, measured from
+  2026-08-21_222438 step3: Connect button ~ (965, 80), tray bubble ~ (1038, 780).
+
+steps:
+  - label: "dismiss leftover menus"
+    key: "escape"
+
+  - label: "snapshot the window"
+    click_at: {x: 10, y: 10}
+
+  - label: "right-click the grey Rocket.Chat tray bubble"
+    click_at: {x: 1042, y: 782}
+    click: "right"
+
+  - label: "let the tray context menu paint"
+    wait: 2
+
+  - label: "snapshot the open tray menu"
+    click_at: {x: 200, y: 200}

@@ -301,7 +301,13 @@ class VncClient:
         elif len(main) == 1:
             main_sym = _char_keysym(main)
         else:
-            raise VncClientError(f"Unknown key: {name!r}")
+            hint = (
+                " — key: expects a single key or a modifier combo (e.g. "
+                "'ctrl+a', 'alt+f4'), not text; use type:/then_type: to enter text"
+                if len(main) > 1
+                else ""
+            )
+            raise VncClientError(f"Unknown key: {name!r}{hint}")
         for sym in mod_syms:
             self._key_event(sym, True)
         self._key_event(main_sym, True)

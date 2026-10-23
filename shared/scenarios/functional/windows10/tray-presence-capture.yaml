@@ -1,0 +1,36 @@
+name: "tray-presence-capture"
+description: |
+  CORE-2525 — capture tray context menu and presence submenu.
+
+steps:
+  - label: "dismiss any overlays"
+    key: "escape"
+
+  - label: "wait for settle"
+    wait: 1
+
+  - label: "right-click at tray icon coordinates (bottom-right)"
+    click_at: {x: 1042, y: 782}
+    click: "right"
+
+  - label: "wait for context menu to paint"
+    wait: 3
+
+  - label: "capture context menu with Offline item visible (step 1)"
+    click_at: {x: 500, y: 400}
+
+  - label: "right-click tray again"
+    click_at: {x: 1042, y: 782}
+    click: "right"
+
+  - label: "wait for context menu to appear again"
+    wait: 2
+
+  - label: "hover over the Offline item to trigger submenu"
+    click_at: {x: 1040, y: 673}
+
+  - label: "wait for submenu to appear"
+    wait: 2
+
+  - label: "capture submenu with all status options (step 2)"
+    click_at: {x: 500, y: 400}

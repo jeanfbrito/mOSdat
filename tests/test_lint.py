@@ -56,7 +56,9 @@ from automation.commands.lint import (  # noqa: E402
     check_config_json_migrations,
     check_heredoc_in_yaml,
     check_key_combos,
+    check_schema_validation,
     check_settings_toggle_pattern,
+    check_step_type_discriminator,
     check_tel_dispatch_xauthority,
     check_transient_localize,
     check_xdotool_coords,
@@ -261,7 +263,7 @@ steps:
   - shell: |
       echo hello
   - localize: General tab in Settings panel
-    click: true
+    click: left
     then_key: ctrl+f
   - verify: search box is visible
 """)
@@ -275,3 +277,81 @@ steps:
         args.scenario = str(tmp_path / "nonexistent.yaml")
         result = run_lint(args)
         assert result == 2
+
+
+# ---------------------------------------------------------------------------
+# Check 8/9 — schema validation via the real runner's loader path, and the
+# no-recognized-step-type shortcut (F1a bug fix: lint must not bless a
+# scenario the real functional runner would reject at load time).
+# ---------------------------------------------------------------------------
+
+class TestSchemaValidationCheck:
+    def test_step_with_no_type_discriminator_fails_lint(self, tmp_path):
+        """A step with only label/verify_not/verify_timeout/retries (no
+        launch/localize/verify/key/etc.) matches zero AnyStep union members —
+        the real runner rejects this at exit code 4. Lint must not pass it."""
+        scenario = tmp_path / "broken.yaml"
+        scenario.write_text("""\
+name: broken-test
+steps:
+  - label: some step
+    verify_not: something bad
+    verify_timeout: 15
+    retries: 2
+""")
+        args = MagicMock()
+        args.scenario = str(scenario)
+        result = run_lint(args)
+        assert result == 1
+
+    def test_step_type_discriminator_direct(self):
+        raw_data = {
+            "steps": [
+                {"label": "x", "verify_not": "y", "verify_timeout": 15, "retries": 2},
+            ]
+        }
+        diags = _warns(check_step_type_discriminator(raw_data, "f.yaml"))
+        assert len(diags) == 1
+        assert "step-no-type-match" in diags[0].rule
+        assert "steps[0]" in diags[0].message
+
+    def test_step_type_discriminator_allows_routine(self):
+        """Pre-expansion 'routine:' steps are resolved before schema
+        validation runs — they must not be flagged as no-type-match."""
+        raw_data = {"steps": [{"routine": "cleanup-rocketchat"}]}
+        assert check_step_type_discriminator(raw_data, "f.yaml") == []
+
+    @pytest.mark.parametrize("step", [
+        {"click_at": {"x": 1, "y": 2, "native": True}},
+        {"poll_shell": "true"},
+        {"verify_recorded": {"prompt": "p", "between": [1, 2]}},
+    ])
+    def test_step_type_discriminator_allows_dsl_steps(self, step):
+        """click_at / poll_shell / verify_recorded are real step types."""
+        assert check_step_type_discriminator({"steps": [step]}, "f.yaml") == []
+
+    def test_valid_scenario_passes_schema_validation(self, tmp_path):
+        scenario = tmp_path / "valid.yaml"
+        scenario.write_text("""\
+name: valid-test
+steps:
+  - shell: |
+      echo hello
+  - verify: search box is visible
+""")
+        diags = check_schema_validation(scenario, str(scenario))
+        assert diags == []
+
+    def test_invalid_scenario_fails_schema_validation(self, tmp_path):
+        scenario = tmp_path / "invalid.yaml"
+        scenario.write_text("""\
+name: invalid-test
+steps:
+  - label: some step
+    verify_not: something bad
+    verify_timeout: 15
+    retries: 2
+""")
+        diags = _warns(check_schema_validation(scenario, str(scenario)))
+        assert len(diags) == 1
+        assert "schema-validation" in diags[0].rule
