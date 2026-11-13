@@ -153,8 +153,8 @@ for grabbing an ad-hoc screenshot without authoring a full assertion).
 
 ## Platform notes
 
-- **Windows targets**: build directly on the target VM over SSH now (no Wine
-  dependency on the mosdat host). If a Windows build fails with an error naming
+- **Windows targets**: build directly on the target VM over SSH. The mosdat
+  host does not need Wine. If a Windows build fails with an error naming
   `engines.node` or a version mismatch, the VM's Node.js is too old for the repo
   being built — that's a VM environment issue to flag to the user, not a code
   problem, and not something to silently "fix" by upgrading system software on
@@ -171,10 +171,11 @@ for grabbing an ad-hoc screenshot without authoring a full assertion).
   a specific code change actually made it into the build under test — pass a
   string that should appear in the built app if (and only if) the PR's change is
   present, when the user wants proof beyond "the PR number matched."
-- **`mosdat_server_provision` needs Docker running on the mosdat host** (not a
-  VM) — `ok: false` with an error naming the Docker daemon means Docker Desktop
-  itself isn't running there, not a problem with the `ref`. The tool now starts
-  Docker Desktop itself (up to 120 s). A release tag that is not on GHCR falls
+- **`mosdat_server_provision` runs the server in Docker on the mosdat host**
+  (not a VM). The tool starts Docker Desktop itself and waits up to 120 s.
+  `ok: false` with an error that names the Docker daemon means Docker Desktop
+  did not come up on the host. It is not a problem with the `ref`. A release
+  tag that is not on GHCR falls
   back to Docker Hub. A PR `ref` with no published image (e.g. a fork PR) fails
   by name — that's the correct, final answer for that PR. The server has 2FA
   off, so login does not stop at an email code. `state: "starting"` after the
@@ -185,7 +186,7 @@ for grabbing an ad-hoc screenshot without authoring a full assertion).
   `localize` (describe the grey rocket speech-bubble, "not the shield") or UIA
   by name, never fixed coordinates — and open the saved PNG before relaying
   any cause a step's failure suggests.
-- **Windows toast clicks.** On 2026-10-14 a VNC `click_at` on a toast logged
-  `Notification dismissed`; on 2026-10-23 both a VNC and a native click on a
-  CDP-raised toast logged an activation. If a toast click shows no activation,
-  retry with `click_at: {x, y, native: true}` (real Win32 input in session 1).
+- **Windows toast clicks.** A VNC `click_at` on a toast can register as a
+  dismiss (`Notification dismissed`) instead of an activation. If a toast click
+  shows no activation, retry with `click_at: {x, y, native: true}` (real Win32
+  input in session 1).
